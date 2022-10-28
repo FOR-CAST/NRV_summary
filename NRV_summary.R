@@ -13,6 +13,7 @@ defineModule(sim, list(
   citation = list("citation.bib"),
   documentation = list("README.md", "NRV_summary.Rmd"), ## same file
   reqdPkgs = list("data.table", "dplyr", "fs", "ggplot2", "googledrive", "landscapemetrics",
+                  "PredictiveEcology/LandWebUtils@development",
                   "raster", "sf",
                   "PredictiveEcology/SpaDES.core@development (>=1.1.0.9001)"),
   parameters = bindrows(
