@@ -96,7 +96,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
   <tr>
    <td style="text-align:left;"> ageClasses </td>
    <td style="text-align:left;"> character </td>
-   <td style="text-align:left;"> LandWebU.... </td>
+   <td style="text-align:left;"> Young, I.... </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> descriptions/labels for age classes (seral stages) </td>
@@ -104,7 +104,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
   <tr>
    <td style="text-align:left;"> ageClassCutOffs </td>
    <td style="text-align:left;"> integer </td>
-   <td style="text-align:left;"> LandWebU.... </td>
+   <td style="text-align:left;"> 0, 40, 8.... </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> defines the age boundaries between age classes </td>

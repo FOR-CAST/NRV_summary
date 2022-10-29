@@ -76,6 +76,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
     eventType,
     init = {
       sim <- Init(sim)
+      sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess", .last())
 
       if (isTRUE(P(sim)$upload)) {
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "upload", .last())
@@ -91,7 +92,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       # do stuff for this event
 
       sim <- landscapeMetrics(sim)
-      sim <- patchMetrics(sim)
+      #sim <- patchMetrics(sim) ## TODO: fix standAge maps @!!!!
 
       # ! ----- STOP EDITING ----- ! #
     },
@@ -125,7 +126,8 @@ Init <- function(sim) {
 
   mod$allouts <- fs::dir_ls(outputPath(sim), regexp = "vegType|TimeSince", recurse = 1, type = "file") %>%
     grep("gri|png|txt|xml", ., value = TRUE, invert = TRUE)
-  mod$allouts2 <- grep(paste(paste0("year", paddedFloatToChar(P(sim)$timeSeriesTimes, padL = padL)), collapse = "|"),
+  mod$allouts2 <- grep(paste(paste0("year", paddedFloatToChar(
+    setdiff(P(sim)$timeSeriesTimes, mod$analysesOutputsTimes), padL = padL)), collapse = "|"),
                        mod$allouts, value = TRUE, invert = TRUE)
 
   ## TODO: inventory all files to ensure correct dir structure? compare against expected files?
@@ -161,9 +163,10 @@ Init <- function(sim) {
 
 ## build landscape metrics tables from vegetation type maps (VTMs)
 landscapeMetrics <- function(sim) {
-  browser()
-  vtmReps <- as.integer(substr(basename(dirname(mod$vtm)), 4, 5)) ## keep as integer for calculations
-  vtmTimes <- as.numeric(substr(basename(mod$vtm), 16, 19))
+  #vtmReps <- as.integer(substr(basename(dirname(mod$vtm)), 4, 5)) ## keep as integer for calculations
+  vtmReps <- as.integer(sapply(P(sim)$reps, rep.int, times = length(mod$analysesOutputsTimes)))
+  #vtmTimes <- as.numeric(substr(basename(mod$vtm), 16, 19))
+  vtmTimes <- rep.int(mod$analysesOutputsTimes, times = length(P(sim)$reps))
   vtmList <- lapply(mod$vtm, function(f) {
     r <- raster::raster(f)
     rc <- raster::crop(r, studyArea(sim$ml, 2))
@@ -178,17 +181,18 @@ landscapeMetrics <- function(sim) {
                   "lsm_l_iji")
   names(funList) <- funList
 
+  ## TODO: use parallel
   mod$fragStats <- lapply(funList, function(f) {
     fun <- get(f)
 
     frag_stat_df <- fun(vtmList) ## TODO: use non-default values?
     frag_stat_df <- mutate(frag_stat_df, rep = vtmReps, time = vtmTimes)
-    frag_stat_summary_df <- frag_stat_df %>%
+    frag_stat_df %>%
       group_by(time) %>%
       summarise(N = length(value), mn = mean(value), sd = sd(value),
                 se = sd / sqrt(N), ci = se * qt(0.975, N - 1))
   })
-  names(sim$fragStats) <- funList
+  names(mod$fragStats) <- names(funList)
 
   return(invisible(sim))
 }
@@ -198,12 +202,14 @@ patchMetrics <- function(sim) {
   ## TODO: identify problem with tsf maps -- all show tsf >> 600 years and same garbled values
   ## -- standAgeMaps all identical;
   ## -- ageMap completely garbled
-  tsfReps <- as.integer(substr(basename(dirname(mod$tsf)), 4, 5)) ## keep as integer for calculations
-  tsfTimes <- as.numeric(substr(basename(mod$tsf), 22, 25))
-  tsfList <- lapply(tsf, function(f) {
+  #tsfReps <- as.integer(substr(basename(dirname(mod$tsf)), 4, 5)) ## keep as integer for calculations
+  tsfReps <- as.integer(sapply(P(sim)$reps, rep.int, times = length(mod$analysesOutputsTimes)))
+  #tsfTimes <- as.numeric(substr(basename(mod$tsf), 22, 25))
+  tsfTimes <- rep.int(mod$analysesOutputsTimes, times = length(P(sim)$reps))
+  tsfList <- lapply(mod$tsf, function(f) {
     r <- raster::raster(f)
-    rc <- raster::crop(r, studyArea(ml, 2))
-    rcm <- raster::mask(r, studyArea(ml, 2))
+    rc <- raster::crop(r, studyArea(sim$ml, 2))
+    rcm <- raster::mask(r, studyArea(sim$ml, 2))
     rcm
   })
 
@@ -215,13 +221,14 @@ patchMetrics <- function(sim) {
     raster::plot(studyArea(ml, 2), add = TRUE)
   }
 
-  allReps <- seq(startRep, length.out = nReps)
-  lrgPtchs <- lapply(allReps, function(rep) {
-    rbindlist(lapply(analysesOutputsTimes, function(year) {
-      ids_tsf <- which(grepl(sprintf("rep%02d/rstTimeSinceFire_year%04d", rep, year), tsf))
-      ids_vtm <- which(grepl(sprintf("rep%02d/vegTypeMap_year%04d", rep, year), vtm))
-      ldt <- LargePatches(tsf[ids_tsf], vtm[ids_vtm], poly = studyArea(ml, 2), labelColumn = "shinyLabel",
-                          id = rep, ageClassCutOffs, ageClasses, sppEquivCol, sppEquiv)
+  ## TODO: use parallel
+  lrgPtchs <- lapply(P(sim)$reps, function(rep) {
+    rbindlist(lapply(mod$analysesOutputsTimes, function(year) {
+      ids_tsf <- which(grepl(sprintf("rep%02d/rstTimeSinceFire_year%04d", rep, year), mod$tsf))
+      ids_vtm <- which(grepl(sprintf("rep%02d/vegTypeMap_year%04d", rep, year), mod$vtm))
+      ldt <- LargePatches(mod$tsf[ids_tsf], mod$vtm[ids_vtm], poly = studyArea(sim$ml, 2),
+                          labelColumn = "shinyLabel", id = rep,
+                          P(sim)$ageClassCutOffs, P(sim)$ageClasses, P(sim)$sppEquivCol, sim$sppEquiv)
       ldt[, time := year]
     }))
   })
@@ -259,10 +266,10 @@ plot_ptch_ages <- function(summary_df) {
 }
 
 plotFun <- function(sim) {
-  lapply(names(sim$fragStats), function(f) {
+  lapply(names(mod$fragStats), function(f) {
     ## TODO: use Plots
-    #Plots(sim$fragStats[[f]], fn = plot_over_time, ylabel = substr(f, 7, nchar(f))) ## ??
-    gg <- plot_over_time(sim$fragStats[[f]], substr(f, 7, nchar(f)))
+    #Plots(mod$fragStats[[f]], fn = plot_over_time, ylabel = substr(f, 7, nchar(f))) ## ??
+    gg <- plot_over_time(mod$fragStats[[f]], substr(f, 7, nchar(f)))
     ggsave(file.path(outputPath(sim), "figures", paste0(f, ".png")), gg)
   })
 
