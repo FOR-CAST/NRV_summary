@@ -12,9 +12,10 @@ defineModule(sim, list(
   timeunit = "year",
   citation = list("citation.bib"),
   documentation = list("README.md", "NRV_summary.Rmd"), ## same file
-  reqdPkgs = list("data.table", "dplyr", "fs", "ggplot2", "googledrive", "landscapemetrics",
+  reqdPkgs = list("data.table", "dplyr", "fs", "future.apply", "ggplot2", "googledrive",
+                  "landscapemetrics",
                   "PredictiveEcology/LandWebUtils@development",
-                  "raster", "sf",
+                  "purrr", "raster", "sf",
                   "PredictiveEcology/SpaDES.core@development (>=1.1.0.9001)"),
   parameters = bindrows(
     defineParameter("ageClasses", "character", LandWebUtils:::.ageClasses, NA, NA, ## TODO: using 20 yr inc.
@@ -27,6 +28,8 @@ defineModule(sim, list(
                     paste("number of replicates/runs per study area.")),
     defineParameter("sppEquivCol", "character", "EN_generic_short", NA, NA,
                     "The column in `sim$sppEquiv` data.table to use as a naming convention"),
+    defineParameter("studyAreaNamesCol", "character", NA, NA, NA,
+                    "column name used to identify names of subpolygons (features) the study area polygon."),
     defineParameter("summaryInterval", "integer", 100L, NA, NA,
                     "simulation time interval at which to take 'snapshots' used for summary analyses"),
     defineParameter("summaryPeriod", "integer", c(700L, 1000L), NA, NA,
@@ -163,16 +166,38 @@ Init <- function(sim) {
 
 ## build landscape metrics tables from vegetation type maps (VTMs)
 landscapeMetrics <- function(sim) {
-  #vtmReps <- as.integer(substr(basename(dirname(mod$vtm)), 4, 5)) ## keep as integer for calculations
-  vtmReps <- as.integer(sapply(P(sim)$reps, rep.int, times = length(mod$analysesOutputsTimes)))
-  #vtmTimes <- as.numeric(substr(basename(mod$vtm), 16, 19))
-  vtmTimes <- rep.int(mod$analysesOutputsTimes, times = length(P(sim)$reps))
-  vtmList <- lapply(mod$vtm, function(f) {
-    r <- raster::raster(f)
-    rc <- raster::crop(r, studyArea(sim$ml, 2))
-    rcm <- raster::mask(r, studyArea(sim$ml, 2))
-    rcm
+  sA <- studyArea(sim$ml, 2)
+  polyNames <- unique(studyArea(sim$ml, 2)[[P(sim)$studyAreaNamesCol]])
+
+  .ncores <- pemisc::optimalClusterNum(5000, maxNumClusters = min(parallel::detectCores() / 2, 32L)) ## TODO: use module param
+  options(future.availableCores.fallback = .ncores)
+
+  vtmListByPoly <- future_lapply(mod$vtm, function(f) {
+    byPoly <- lapply(polyNames, function(polyName) {
+      poly <- sA[sA[[P(sim)$studyAreaNamesCol]] == polyName,]
+      r <- raster::raster(f)
+      rc <- raster::crop(r, poly)
+      rcm <- raster::mask(r, poly)
+      rcm
+    })
+    names(byPoly) <- paste(tools::file_path_sans_ext(basename(f)), polyNames , sep = "_") ## vegTypeMap_yearXXXX_polyName
+
+    byPoly
   })
+  names(vtmListByPoly) <- basename(dirname(mod$vtm)) ## repXX
+  vtmListByPoly <- unlist(vtmListByPoly, recursive = FALSE, use.names = TRUE)
+
+  labels <- purrr::transpose(strsplit(names(vtmListByPoly), "[.]"))
+  labels1 <- unlist(labels[[1]])
+  labels2 <- gsub("vegTypeMap_", "", unlist(labels[[2]]))
+  labels2a <- purrr::transpose(strsplit(labels2, "_{1}"))
+  labels2a1 <- unlist(labels2a[[1]])
+  labels2a2 <- unlist(labels2a[[2]])
+
+  vtmReps <- as.integer(gsub("rep", "", labels1))
+  vtmTimes <- as.integer(gsub("year", "", labels2a1))
+  vtmStudyAreas <- labels2a2
+
   funList <- list("lsm_l_area_mn",
                   "lsm_l_cohesion",
                   "lsm_l_condent",
@@ -181,18 +206,22 @@ landscapeMetrics <- function(sim) {
                   "lsm_l_iji")
   names(funList) <- funList
 
-  ## TODO: use parallel
-  mod$fragStats <- lapply(funList, function(f) {
+  opt <- options(future.globals.maxSize = 5*1024^3) ## 5 GiB
+  mod$fragStats <- future_lapply(funList, function(f) {
     fun <- get(f)
 
-    frag_stat_df <- fun(vtmList) ## TODO: use non-default values?
-    frag_stat_df <- mutate(frag_stat_df, rep = vtmReps, time = vtmTimes)
+    frag_stat_df <- fun(vtmListByPoly) ## TODO: use non-default values?
+    frag_stat_df <- mutate(frag_stat_df,
+                           rep = vtmReps,
+                           time = vtmTimes,
+                           studyArea = vtmStudyAreas)
     frag_stat_df %>%
-      group_by(time) %>%
+      group_by(time, studyArea) %>%
       summarise(N = length(value), mn = mean(value), sd = sd(value),
                 se = sd / sqrt(N), ci = se * qt(0.975, N - 1))
-  })
+  }, future.packages = "landscapemetrics")
   names(mod$fragStats) <- names(funList)
+  options(opt)
 
   return(invisible(sim))
 }
@@ -202,16 +231,38 @@ patchMetrics <- function(sim) {
   ## TODO: identify problem with tsf maps -- all show tsf >> 600 years and same garbled values
   ## -- standAgeMaps all identical;
   ## -- ageMap completely garbled
-  #tsfReps <- as.integer(substr(basename(dirname(mod$tsf)), 4, 5)) ## keep as integer for calculations
-  tsfReps <- as.integer(sapply(P(sim)$reps, rep.int, times = length(mod$analysesOutputsTimes)))
-  #tsfTimes <- as.numeric(substr(basename(mod$tsf), 22, 25))
-  tsfTimes <- rep.int(mod$analysesOutputsTimes, times = length(P(sim)$reps))
-  tsfList <- lapply(mod$tsf, function(f) {
-    r <- raster::raster(f)
-    rc <- raster::crop(r, studyArea(sim$ml, 2))
-    rcm <- raster::mask(r, studyArea(sim$ml, 2))
-    rcm
+
+  sA <- studyArea(sim$ml, 2)
+  polyNames <- unique(studyArea(sim$ml, 2)[[P(sim)$studyAreaNamesCol]])
+
+  .ncores <- pemisc::optimalClusterNum(5000, maxNumClusters = min(parallel::detectCores() / 2, 32L)) ## TODO: use module param
+  options(future.availableCores.fallback = .ncores)
+
+  tsfListByPoly <- future_lapply(mod$tsf, function(f) {
+    byPoly <- lapply(polyNames, function(polyName) {
+      poly <- sA[sA[[P(sim)$studyAreaNamesCol]] == polyName,]
+      r <- raster::raster(f)
+      rc <- raster::crop(r, poly)
+      rcm <- raster::mask(r, poly)
+      rcm
+    })
+    names(byPoly) <- paste(tools::file_path_sans_ext(basename(f)), polyNames , sep = "_") ## vegTypeMap_yearXXXX_polyName
+
+    byPoly
   })
+  names(tsfListByPoly) <- basename(dirname(mod$tsf)) ## repXX
+  tsfListByPoly <- unlist(tsfListByPoly, recursive = FALSE, use.names = TRUE)
+
+  labels <- purrr::transpose(strsplit(names(tsfListByPoly), "[.]"))
+  labels1 <- unlist(labels[[1]])
+  labels2 <- gsub("vegTypeMap_", "", unlist(labels[[2]]))
+  labels2a <- purrr::transpose(strsplit(labels2, "_{1}"))
+  labels2a1 <- unlist(labels2a[[1]])
+  labels2a2 <- unlist(labels2a[[2]])
+
+  tsfReps <- as.integer(gsub("rep", "", labels1))
+  tsfTimes <- as.integer(gsub("year", "", labels2a1))
+  tsfStudyAreas <- labels2a2
 
   if (FALSE) {
     # TODO: very few fires in studyAreaReporting!!
@@ -221,6 +272,7 @@ patchMetrics <- function(sim) {
     raster::plot(studyArea(ml, 2), add = TRUE)
   }
 
+  ## TODO: rework below to summarize for all landscape units
   ## TODO: use parallel
   lrgPtchs <- lapply(P(sim)$reps, function(rep) {
     rbindlist(lapply(mod$analysesOutputsTimes, function(year) {
@@ -249,7 +301,8 @@ patchMetrics <- function(sim) {
 
 ### plotting
 plot_over_time <- function(summary_df, ylabel) {
-  ggplot(summary_df, aes(x = time, y = mn)) +
+  ## TODO: each study area on separate facet or plot
+  ggplot(summary_df, aes(x = time, y = mn, col = studyArea)) +
     geom_point() +
     geom_line() +
     geom_errorbar(aes(ymin = mn - sd, ymax = mn + sd), width = 0.5) +
@@ -257,7 +310,7 @@ plot_over_time <- function(summary_df, ylabel) {
 }
 
 plot_ptch_ages <- function(summary_df) {
-  ggplot(summary_df, aes(x = time, y = mn)) +
+  ggplot(summary_df, aes(x = time, y = mn, col = studyArea)) +
     geom_point() +
     geom_line() +
     geom_errorbar(aes(ymin = mn - sd, ymax = mn + sd), width = 0.5) +
@@ -269,8 +322,11 @@ plotFun <- function(sim) {
   lapply(names(mod$fragStats), function(f) {
     ## TODO: use Plots
     #Plots(mod$fragStats[[f]], fn = plot_over_time, ylabel = substr(f, 7, nchar(f))) ## ??
-    gg <- plot_over_time(mod$fragStats[[f]], substr(f, 7, nchar(f)))
-    ggsave(file.path(outputPath(sim), "figures", paste0(f, ".png")), gg)
+    gg1 <- plot_over_time(mod$fragStats[[f]], substr(f, 7, nchar(f)))
+    ggsave(file.path(outputPath(sim), "figures", paste0(f, ".png")), gg1)
+
+    gg2 <- gg1 + facet_wrap(~studyArea)
+    ggsave(file.path(outputPath(sim), "figures", paste0(f, "_facet.png")), gg2)
   })
 
   lapply(names(mod$patchAges), function(type) {
