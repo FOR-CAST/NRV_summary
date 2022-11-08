@@ -34,6 +34,8 @@ defineModule(sim, list(
                     "simulation time interval at which to take 'snapshots' used for summary analyses"),
     defineParameter("summaryPeriod", "integer", c(700L, 1000L), NA, NA,
                     "lower and upper end of the range of simulation times used for summary analyses"),
+    defineParameter("timeSeriesTimes", "numeric", 601:650, NA, NA,
+                    "simulation times for which to build time steries animations."),
     defineParameter("upload", "logical", FALSE, NA, NA,
                     "if TRUE, uses the `googledrive` package to upload figures."),
     defineParameter("uploadTo", "character", NA, NA, NA,
@@ -80,7 +82,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
     init = {
       sim <- Init(sim)
       sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess", .last())
-
+      #sim <- scheduleEvent(sim, P(sim)$.plotInitialTime, "HSI_PineMarten", "plot", .last())
       if (isTRUE(P(sim)$upload)) {
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "upload", .last())
       }
@@ -167,7 +169,7 @@ Init <- function(sim) {
 ## build landscape metrics tables from vegetation type maps (VTMs)
 landscapeMetrics <- function(sim) {
   sA <- studyArea(sim$ml, 2)
-  polyNames <- unique(studyArea(sim$ml, 2)[[P(sim)$studyAreaNamesCol]])
+  polyNames <- unique(sA[[P(sim)$studyAreaNamesCol]])
 
   .ncores <- pemisc::optimalClusterNum(5000, maxNumClusters = min(parallel::detectCores() / 2, 32L)) ## TODO: use module param
   options(future.availableCores.fallback = .ncores)
@@ -233,7 +235,7 @@ patchMetrics <- function(sim) {
   ## -- ageMap completely garbled
 
   sA <- studyArea(sim$ml, 2)
-  polyNames <- unique(studyArea(sim$ml, 2)[[P(sim)$studyAreaNamesCol]])
+  polyNames <- unique(sA[[P(sim)$studyAreaNamesCol]])
 
   .ncores <- pemisc::optimalClusterNum(5000, maxNumClusters = min(parallel::detectCores() / 2, 32L)) ## TODO: use module param
   options(future.availableCores.fallback = .ncores)
