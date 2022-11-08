@@ -82,7 +82,8 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
     init = {
       sim <- Init(sim)
       sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess", .last())
-      #sim <- scheduleEvent(sim, P(sim)$.plotInitialTime, "HSI_PineMarten", "plot", .last())
+      sim <- scheduleEvent(sim, end(sim), "NRV_summary", "plot", .last())
+
       if (isTRUE(P(sim)$upload)) {
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "upload", .last())
       }
@@ -168,7 +169,8 @@ Init <- function(sim) {
 
 ## build landscape metrics tables from vegetation type maps (VTMs)
 landscapeMetrics <- function(sim) {
-  sA <- studyArea(sim$ml, 2)
+  #sA <- studyArea(sim$ml, 2) ## TODO: ml from loadSimList isn't working -- all NULL
+  sA <- sim$ml[[grep("studyAreaReporting", names(sim$ml), value = TRUE)]] %>% st_as_sf()
   polyNames <- unique(sA[[P(sim)$studyAreaNamesCol]])
 
   .ncores <- pemisc::optimalClusterNum(5000, maxNumClusters = min(parallel::detectCores() / 2, 32L)) ## TODO: use module param
@@ -179,13 +181,13 @@ landscapeMetrics <- function(sim) {
       poly <- sA[sA[[P(sim)$studyAreaNamesCol]] == polyName,]
       r <- raster::raster(f)
       rc <- raster::crop(r, poly)
-      rcm <- raster::mask(r, poly)
+      rcm <- raster::mask(rc, poly)
       rcm
     })
     names(byPoly) <- paste(tools::file_path_sans_ext(basename(f)), polyNames , sep = "_") ## vegTypeMap_yearXXXX_polyName
 
     byPoly
-  })
+  }, future.packages = c("raster", "sp", "sf"))
   names(vtmListByPoly) <- basename(dirname(mod$vtm)) ## repXX
   vtmListByPoly <- unlist(vtmListByPoly, recursive = FALSE, use.names = TRUE)
 
@@ -245,13 +247,13 @@ patchMetrics <- function(sim) {
       poly <- sA[sA[[P(sim)$studyAreaNamesCol]] == polyName,]
       r <- raster::raster(f)
       rc <- raster::crop(r, poly)
-      rcm <- raster::mask(r, poly)
+      rcm <- raster::mask(rc, poly)
       rcm
     })
     names(byPoly) <- paste(tools::file_path_sans_ext(basename(f)), polyNames , sep = "_") ## vegTypeMap_yearXXXX_polyName
 
     byPoly
-  })
+  }, future.packages = c("raster", "sp", "sf"))
   names(tsfListByPoly) <- basename(dirname(mod$tsf)) ## repXX
   tsfListByPoly <- unlist(tsfListByPoly, recursive = FALSE, use.names = TRUE)
 
@@ -285,7 +287,7 @@ patchMetrics <- function(sim) {
                           P(sim)$ageClassCutOffs, P(sim)$ageClasses, P(sim)$sppEquivCol, sim$sppEquiv)
       ldt[, time := year]
     }))
-  })
+  }, future.packages = c("LandWebUtils", "map"))
   lrgPtchs_dt <- rbindlist(lrgPtchs)
   mod$vegTypes <- sort(unique(lrgPtchs_dt$vegCover))
 
@@ -322,6 +324,8 @@ plot_ptch_ages <- function(summary_df) {
 
 plotFun <- function(sim) {
   lapply(names(mod$fragStats), function(f) {
+    # ! ----- EDIT BELOW ----- ! #
+
     ## TODO: use Plots
     #Plots(mod$fragStats[[f]], fn = plot_over_time, ylabel = substr(f, 7, nchar(f))) ## ??
     gg1 <- plot_over_time(mod$fragStats[[f]], substr(f, 7, nchar(f)))
