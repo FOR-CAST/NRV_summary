@@ -167,17 +167,16 @@ Init <- function(sim) {
   return(invisible(sim))
 }
 
-## build landscape metrics tables from vegetation type maps (VTMs)
-landscapeMetrics <- function(sim) {
-  #sA <- studyArea(sim$ml, 2) ## TODO: ml from loadSimList isn't working -- all NULL
-  sA <- sim$ml[[grep("studyAreaReporting", names(sim$ml), value = TRUE)]] %>% st_as_sf()
-  polyNames <- unique(sA[[P(sim)$studyAreaNamesCol]])
+calculateLandscapeMetrics <- function(summaryPolys, polyCol) {
+  if (!is(summaryPolys, "sf"))
+    summaryPolys <- sf::st_as_sf(summaryPolys)
 
-  .ncores <- pemisc::optimalClusterNum(5000, maxNumClusters = min(parallel::detectCores() / 2, 32L)) ## TODO: use module param
-  options(future.availableCores.fallback = .ncores)
+  polyNames <- unique(summaryPolys[[polyCol]])
 
+  ## vegetation type maps
+  message("|_ loading vegetation type maps...")
   vtmListByPoly <- rasterListByPoly(files = mod$vtm, poly = summaryPolys, names = polyNames,
-                                    col = polyCol, filter = "vegTypeMap_")
+                                    col = polyCol, filter = "vegTypeMap_") ## TODO:cache this
   vtmReps <- attr(vtmListByPoly, "reps")
   vtmTimes <- attr(vtmListByPoly, "times")
   vtmStudyAreas <- attr(vtmListByPoly, "polyNames")
@@ -191,21 +190,41 @@ landscapeMetrics <- function(sim) {
   names(funList) <- funList
 
   opt <- options(future.globals.maxSize = 5*1024^3) ## 5 GiB
-  mod$fragStats <- future_lapply(funList, function(f) {
+  fragStats <- future_lapply(funList, function(f) {
     fun <- get(f)
 
     frag_stat_df <- fun(vtmListByPoly) ## TODO: use non-default values?
     frag_stat_df <- mutate(frag_stat_df,
                            rep = vtmReps,
                            time = vtmTimes,
-                           studyArea = vtmStudyAreas)
+                           area = vtmStudyAreas)
     frag_stat_df %>%
-      group_by(time, studyArea) %>%
+      group_by(time, area) %>%
       summarise(N = length(value), mn = mean(value), sd = sd(value),
                 se = sd / sqrt(N), ci = se * qt(0.975, N - 1))
   }, future.packages = "landscapemetrics")
-  names(mod$fragStats) <- names(funList)
+  names(fragStats) <- names(funList)
   options(opt)
+
+  return(fragStats)
+}
+
+## build landscape metrics tables from vegetation type maps (VTMs)
+landscapeMetrics <- function(sim) {
+  #sAR <- studyArea(sim$ml, 2) ## TODO: ml from loadSimList isn't working -- all NULL
+  sAR <- sim$ml[[grep("studyAreaReporting", names(sim$ml), value = TRUE)]] %>% st_as_sf()
+  polyNames <- unique(sAR[[P(sim)$studyAreaNamesCol]])
+
+  .ncores <- pemisc::optimalClusterNum(5000, maxNumClusters = min(parallel::detectCores() / 2, 32L)) ## TODO: use module param
+  options(future.availableCores.fallback = .ncores)
+
+  ## by landscape unit
+  mod$lm_LU <- calculateLandscapeMetrics(summaryPolys = sAR, polyCol = P(sim)$studyAreaNamesCol)
+
+  ## TODO: by BEC zone -- but don't hardcode here; use map to add analyses
+  becZones <- postProcess(sim$ml[["becZones"]], studyArea = sAR)
+  becZones <- sf::st_collection_extract(becZones) ## st_cast(becZones, "MULTIPOLYGON")
+  mod$lm_BEC <- calculateLandscapeMetrics(summaryPolys = becZones, polyCol = "ZONE")
 
   return(invisible(sim))
 }
@@ -216,8 +235,10 @@ patchMetrics <- function(sim) {
   ## -- standAgeMaps all identical;
   ## -- ageMap completely garbled
 
-  sA <- studyArea(sim$ml, 2)
-  polyNames <- unique(sA[[P(sim)$studyAreaNamesCol]])
+  #sAR <- studyArea(sim$ml, 2) ## TODO: ml from loadSimList isn't working -- all NULL
+  sAR <- sim$ml[[grep("studyAreaReporting", names(sim$ml), value = TRUE)]] %>% st_as_sf()
+  polyNames <- unique(sAR[[P(sim)$studyAreaNamesCol]])
+  summaryPolys <- sAR
 
   .ncores <- pemisc::optimalClusterNum(5000, maxNumClusters = min(parallel::detectCores() / 2, 32L)) ## TODO: use module param
   options(future.availableCores.fallback = .ncores)
@@ -228,7 +249,7 @@ patchMetrics <- function(sim) {
   tsfTimes <- attr(tsfListByPoly, "times")
   tsfStudyAreas <- attr(tsfListByPoly, "polyNames")
   tsfListByPoly <- lapply(tsfListByPoly, function(x) {
-    x[] <- pmin(P(sim)$ageClassMaxAge, x[])
+    x[] <- as.integer(pmin(P(sim)$ageClassMaxAge, x[]))
     x
   })
 
@@ -270,7 +291,7 @@ patchMetrics <- function(sim) {
 ### plotting
 plot_over_time <- function(summary_df, ylabel) {
   ## TODO: each study area on separate facet or plot
-  ggplot(summary_df, aes(x = time, y = mn, col = studyArea)) +
+  ggplot(summary_df, aes(x = time, y = mn, col = area)) +
     geom_point() +
     geom_line() +
     geom_errorbar(aes(ymin = mn - sd, ymax = mn + sd), width = 0.5) +
@@ -278,7 +299,7 @@ plot_over_time <- function(summary_df, ylabel) {
 }
 
 plot_ptch_ages <- function(summary_df) {
-  ggplot(summary_df, aes(x = time, y = mn, col = studyArea)) +
+  ggplot(summary_df, aes(x = time, y = mn, col = area)) +
     geom_point() +
     geom_line() +
     geom_errorbar(aes(ymin = mn - sd, ymax = mn + sd), width = 0.5) +
@@ -287,24 +308,34 @@ plot_ptch_ages <- function(summary_df) {
 }
 
 plotFun <- function(sim) {
-  lapply(names(mod$fragStats), function(f) {
     # ! ----- EDIT BELOW ----- ! #
 
+  lapply(names(mod$lm_LU), function(f) {
     ## TODO: use Plots
-    #Plots(mod$fragStats[[f]], fn = plot_over_time, ylabel = substr(f, 7, nchar(f))) ## ??
-    gg1 <- plot_over_time(mod$fragStats[[f]], substr(f, 7, nchar(f)))
-    ggsave(file.path(outputPath(sim), "figures", paste0(f, ".png")), gg1)
+    #Plots(mod$lm_LU[[f]], fn = plot_over_time, ylabel = substr(f, 7, nchar(f))) ## ??
+    gg1 <- plot_over_time(mod$lm_LU[[f]], substr(f, 7, nchar(f)))
+    ggsave(file.path(outputPath(sim), "figures", paste0(f, "_by_LU.png")), gg1)
 
-    gg2 <- gg1 + facet_wrap(~studyArea)
-    ggsave(file.path(outputPath(sim), "figures", paste0(f, "_facet.png")), gg2)
+    gg2 <- gg1 + facet_wrap(~area)
+    ggsave(file.path(outputPath(sim), "figures", paste0(f, "_facet_by_LU.png")), gg2)
   })
 
-  lapply(names(mod$patchAges), function(type) {
+  lapply(names(mod$lm_BEC), function(f) {
     ## TODO: use Plots
-    #Plots(mod$patchAges[[type]], fn = plot_ptch_ages) ## ??
-    gg <- plot_ptch_ages(mod$patchAges[[type]])
-    ggsave(file.path(outputPath(sim), "figures", paste0(type, ".png")), gg)
+    #Plots(mod$lm_BEC[[f]], fn = plot_over_time, ylabel = substr(f, 7, nchar(f))) ## ??
+    gg1 <- plot_over_time(mod$lm_BEC[[f]], substr(f, 7, nchar(f)))
+    ggsave(file.path(outputPath(sim), "figures", paste0(f, "_by_BEC.png")), gg1)
+
+    gg2 <- gg1 + facet_wrap(~area)
+    ggsave(file.path(outputPath(sim), "figures", paste0(f, "_facet_by_BEC.png")), gg2)
   })
+
+  # lapply(names(mod$patchAges), function(type) {
+  #   ## TODO: use Plots
+  #   #Plots(mod$patchAges[[type]], fn = plot_ptch_ages) ## ??
+  #   gg <- plot_ptch_ages(mod$patchAges[[type]])
+  #   ggsave(file.path(outputPath(sim), "figures", paste0(type, ".png")), gg)
+  # })
 
   # ! ----- STOP EDITING ----- ! #
   return(invisible(sim))
