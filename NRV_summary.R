@@ -12,10 +12,10 @@ defineModule(sim, list(
   timeunit = "year",
   citation = list("citation.bib"),
   documentation = list("README.md", "NRV_summary.Rmd"), ## same file
-  reqdPkgs = list("data.table", "dplyr", "fs", "future.apply", "ggplot2", "googledrive",
+  reqdPkgs = list("data.table", "dplyr", "fs", "future.apply", "future.callr", "ggplot2", "googledrive",
                   "landscapemetrics",
-                  "PredictiveEcology/LandWebUtils@development",
-                  "purrr", "raster", "sf",
+                  "PredictiveEcology/LandWebUtils@development (>= 0.1.5)",
+                  "raster", "sf", "sp",
                   "PredictiveEcology/SpaDES.core@development (>=1.1.0.9001)"),
   parameters = bindrows(
     defineParameter("ageClasses", "character", LandWebUtils:::.ageClasses, NA, NA, ## TODO: using 20 yr inc.
@@ -176,31 +176,11 @@ landscapeMetrics <- function(sim) {
   .ncores <- pemisc::optimalClusterNum(5000, maxNumClusters = min(parallel::detectCores() / 2, 32L)) ## TODO: use module param
   options(future.availableCores.fallback = .ncores)
 
-  vtmListByPoly <- future_lapply(mod$vtm, function(f) {
-    byPoly <- lapply(polyNames, function(polyName) {
-      poly <- sA[sA[[P(sim)$studyAreaNamesCol]] == polyName,]
-      r <- raster::raster(f)
-      rc <- raster::crop(r, poly)
-      rcm <- raster::mask(rc, poly)
-      rcm
-    })
-    names(byPoly) <- paste(tools::file_path_sans_ext(basename(f)), polyNames , sep = "_") ## vegTypeMap_yearXXXX_polyName
-
-    byPoly
-  }, future.packages = c("raster", "sp", "sf"))
-  names(vtmListByPoly) <- basename(dirname(mod$vtm)) ## repXX
-  vtmListByPoly <- unlist(vtmListByPoly, recursive = FALSE, use.names = TRUE)
-
-  labels <- purrr::transpose(strsplit(names(vtmListByPoly), "[.]"))
-  labels1 <- unlist(labels[[1]])
-  labels2 <- gsub("vegTypeMap_", "", unlist(labels[[2]]))
-  labels2a <- purrr::transpose(strsplit(labels2, "_{1}"))
-  labels2a1 <- unlist(labels2a[[1]])
-  labels2a2 <- unlist(labels2a[[2]])
-
-  vtmReps <- as.integer(gsub("rep", "", labels1))
-  vtmTimes <- as.integer(gsub("year", "", labels2a1))
-  vtmStudyAreas <- labels2a2
+  vtmListByPoly <- rasterListByPoly(files = mod$vtm, poly = summaryPolys, names = polyNames,
+                                    col = polyCol, filter = "vegTypeMap_")
+  vtmReps <- attr(vtmListByPoly, "reps")
+  vtmTimes <- attr(vtmListByPoly, "times")
+  vtmStudyAreas <- attr(vtmListByPoly, "polyNames")
 
   funList <- list("lsm_l_area_mn",
                   "lsm_l_cohesion",
@@ -242,31 +222,15 @@ patchMetrics <- function(sim) {
   .ncores <- pemisc::optimalClusterNum(5000, maxNumClusters = min(parallel::detectCores() / 2, 32L)) ## TODO: use module param
   options(future.availableCores.fallback = .ncores)
 
-  tsfListByPoly <- future_lapply(mod$tsf, function(f) {
-    byPoly <- lapply(polyNames, function(polyName) {
-      poly <- sA[sA[[P(sim)$studyAreaNamesCol]] == polyName,]
-      r <- raster::raster(f)
-      rc <- raster::crop(r, poly)
-      rcm <- raster::mask(rc, poly)
-      rcm
-    })
-    names(byPoly) <- paste(tools::file_path_sans_ext(basename(f)), polyNames , sep = "_") ## vegTypeMap_yearXXXX_polyName
-
-    byPoly
-  }, future.packages = c("raster", "sp", "sf"))
-  names(tsfListByPoly) <- basename(dirname(mod$tsf)) ## repXX
-  tsfListByPoly <- unlist(tsfListByPoly, recursive = FALSE, use.names = TRUE)
-
-  labels <- purrr::transpose(strsplit(names(tsfListByPoly), "[.]"))
-  labels1 <- unlist(labels[[1]])
-  labels2 <- gsub("vegTypeMap_", "", unlist(labels[[2]]))
-  labels2a <- purrr::transpose(strsplit(labels2, "_{1}"))
-  labels2a1 <- unlist(labels2a[[1]])
-  labels2a2 <- unlist(labels2a[[2]])
-
-  tsfReps <- as.integer(gsub("rep", "", labels1))
-  tsfTimes <- as.integer(gsub("year", "", labels2a1))
-  tsfStudyAreas <- labels2a2
+  tsfListByPoly <- rasterListByPoly(files = mod$tsf, poly = summaryPolys, names = polyNames,
+                                    col = polyCol, filter = "rstTimeSinceFire_")
+  tsfReps <- attr(tsfListByPoly, "reps")
+  tsfTimes <- attr(tsfListByPoly, "times")
+  tsfStudyAreas <- attr(tsfListByPoly, "polyNames")
+  tsfListByPoly <- lapply(tsfListByPoly, function(x) {
+    x[] <- pmin(P(sim)$ageClassMaxAge, x[])
+    x
+  })
 
   if (FALSE) {
     # TODO: very few fires in studyAreaReporting!!
