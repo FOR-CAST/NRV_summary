@@ -28,8 +28,8 @@ defineModule(sim, list(
                     paste("number of replicates/runs per study area.")),
     defineParameter("sppEquivCol", "character", "EN_generic_short", NA, NA,
                     "The column in `sim$sppEquiv` data.table to use as a naming convention"),
-    defineParameter("studyAreaNamesCol", "character", NA, NA, NA,
-                    "column name used to identify names of subpolygons (features) the study area polygon."),
+    defineParameter("sppEquivCol", "character", "LandR", NA, NA,
+                    "The column in `sim$sppEquiv` data.table to use as a naming convention"),
     defineParameter("summaryInterval", "integer", 100L, NA, NA,
                     "simulation time interval at which to take 'snapshots' used for summary analyses"),
     defineParameter("summaryPeriod", "integer", c(700L, 1000L), NA, NA,
@@ -40,6 +40,8 @@ defineModule(sim, list(
                     "if TRUE, uses the `googledrive` package to upload figures."),
     defineParameter("uploadTo", "character", NA, NA, NA,
                     paste("if `upload = TRUE`, a Google Drive folder id corresponding to `.studyAreaName`.")),
+    defineParameter("vegLeadingProportion", "numeric", 0.8, 0.0, 1.0,
+                    "a number that defines whether a species is leading for a given pixel"),
     defineParameter(".plots", "character", "screen", NA, NA,
                     "Used by Plots function, which can be optionally used here"),
     defineParameter(".plotInitialTime", "numeric", start(sim), NA, NA,
@@ -61,6 +63,8 @@ defineModule(sim, list(
   inputObjects = bindrows(
     expectsInput("ml", "map",
                  desc = "map list object from preamble module (e.g., LandWeb_preamble)."),
+    expectsInput("speciesLayers", "RasterStack",
+                 desc = "initial percent cover raster layers used for simulation."),
     expectsInput("sppColorVect", "character",
                  desc = paste("A named vector of colors to use for plotting.",
                               "The names must be in `sim$sppEquiv[[P(sim)$sppEquivCol]]`,",
@@ -89,16 +93,14 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       }
     },
     plot = {
-      plotFun(sim) # example of a plotting function
-
-      # ! ----- STOP EDITING ----- ! #
+      plotFun(sim)
     },
     postprocess = {
       # ! ----- EDIT BELOW ----- ! #
       # do stuff for this event
 
       sim <- landscapeMetrics(sim)
-      #sim <- patchMetrics(sim) ## TODO: fix standAge maps @!!!!
+      sim <- patchMetrics(sim)
 
       # ! ----- STOP EDITING ----- ! #
     },
@@ -133,8 +135,8 @@ Init <- function(sim) {
   mod$allouts <- fs::dir_ls(outputPath(sim), regexp = "vegType|TimeSince", recurse = 1, type = "file") %>%
     grep("gri|png|txt|xml", ., value = TRUE, invert = TRUE)
   mod$allouts2 <- grep(paste(paste0("year", paddedFloatToChar(
-    setdiff(P(sim)$timeSeriesTimes, mod$analysesOutputsTimes), padL = padL)), collapse = "|"),
-                       mod$allouts, value = TRUE, invert = TRUE)
+    setdiff(c(0, P(sim)$timeSeriesTimes), mod$analysesOutputsTimes), padL = padL)), collapse = "|"),
+    mod$allouts, value = TRUE, invert = TRUE)
 
   ## TODO: inventory all files to ensure correct dir structure? compare against expected files?
   #filesUserHas <- fs::dir_ls(P(sim)$simOutputPath, recurse = TRUE, type = "file", glob = "*.qs")
@@ -167,7 +169,7 @@ Init <- function(sim) {
   return(invisible(sim))
 }
 
-calculateLandscapeMetrics <- function(summaryPolys, polyCol) {
+calculateLandscapeMetrics <- function(summaryPolys, polyCol, vtm) {
   if (!is(summaryPolys, "sf"))
     summaryPolys <- sf::st_as_sf(summaryPolys)
 
@@ -175,7 +177,7 @@ calculateLandscapeMetrics <- function(summaryPolys, polyCol) {
 
   ## vegetation type maps
   message("|_ loading vegetation type maps...")
-  vtmListByPoly <- rasterListByPoly(files = mod$vtm, poly = summaryPolys, names = polyNames,
+  vtmListByPoly <- rasterListByPoly(files = vtm, poly = summaryPolys, names = polyNames,
                                     col = polyCol, filter = "vegTypeMap_") ## TODO:cache this
   vtmReps <- attr(vtmListByPoly, "reps")
   vtmTimes <- attr(vtmListByPoly, "times")
@@ -200,8 +202,8 @@ calculateLandscapeMetrics <- function(summaryPolys, polyCol) {
                            area = vtmStudyAreas)
     frag_stat_df %>%
       group_by(time, area) %>%
-      summarise(N = length(value), mn = mean(value), sd = sd(value),
-                se = sd / sqrt(N), ci = se * qt(0.975, N - 1))
+      summarise(N = length(value), mm = min(value), mn = mean(value), mx = max(value),
+                sd = sd(value), se = sd / sqrt(N), ci = se * qt(0.975, N - 1))
   }, future.packages = "landscapemetrics")
   names(fragStats) <- names(funList)
   options(opt)
@@ -211,131 +213,205 @@ calculateLandscapeMetrics <- function(summaryPolys, polyCol) {
 
 ## build landscape metrics tables from vegetation type maps (VTMs)
 landscapeMetrics <- function(sim) {
-  #sAR <- studyArea(sim$ml, 2) ## TODO: ml from loadSimList isn't working -- all NULL
-  sAR <- sim$ml[[grep("studyAreaReporting", names(sim$ml), value = TRUE)]] %>% st_as_sf()
-  polyNames <- unique(sAR[[P(sim)$studyAreaNamesCol]])
-
   .ncores <- pemisc::optimalClusterNum(5000, maxNumClusters = min(parallel::detectCores() / 2, 32L)) ## TODO: use module param
   options(future.availableCores.fallback = .ncores)
 
-  ## by landscape unit
-  mod$lm_LU <- calculateLandscapeMetrics(summaryPolys = sAR, polyCol = P(sim)$studyAreaNamesCol)
+  ## current conditions
+  vtmCC <- Cache(vegTypeMapGenerator,
+                 x = sim$speciesLayers,
+                 vegLeadingProportion = P(sim)$vegLeadingProportion,
+                 mixedType = 2,
+                 sppEquiv = sim$sppEquiv,
+                 sppEquivCol = P(sim)$sppEquivCol,
+                 colors = sim$sppColorVect,
+                 doAssertion = FALSE)
+  fname1 <- file.path(outputPath(sim), "vegTypeMap_year0000.grd")
+  raster::writeRaster(vtmCC, fname1, datatype = "INT1U", overwrite = TRUE)
 
-  ## TODO: by BEC zone -- but don't hardcode here; use map to add analyses
-  becZones <- postProcess(sim$ml[["becZones"]], studyArea = sAR)
-  becZones <- sf::st_collection_extract(becZones) ## st_cast(becZones, "MULTIPOLYGON")
-  mod$lm_BEC <- calculateLandscapeMetrics(summaryPolys = becZones, polyCol = "ZONE")
+  ## apply analysis to each of the reporting polygons
+  md <- sim$ml@metadata
+  rowIDs <- which(md == currentModule(sim), arr.ind = TRUE)[, "row"]
+  mod$rptPolyNames <- md[["layerName"]][rowIDs]
+  lapply(mod$rptPolyNames, function(p) {
+    rptPoly <- sim$ml[[p]]
+
+    if (is(rptPoly, "Spatial")) {
+      rptPoly <- st_as_sf(rptPoly)
+    } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
+      rptPoly <- st_collection_extract(rptPoly, "POLYGON")
+    }
+    rptPolyCol <- md[layerName == p, ][["columnNameForLabels"]]
+    refCode <- paste0("lm_", md[layerName == p, ][["shortName"]])
+    refCodeCC <- paste0(refCode, "_CC")
+
+    mod[[refCodeCC]] <- suppressWarnings({
+      calculateLandscapeMetrics(summaryPolys = rptPoly, polyCol = rptPolyCol, vtm = fname1)
+    })
+    mod[[refCode]] <- calculateLandscapeMetrics(summaryPolys = rptPoly, polyCol = rptPolyCol, vtm = mod$vtm)
+  })
 
   return(invisible(sim))
 }
 
 patchMetrics <- function(sim) {
-  browser()
-  ## TODO: identify problem with tsf maps -- all show tsf >> 600 years and same garbled values
-  ## -- standAgeMaps all identical;
-  ## -- ageMap completely garbled
-
-  #sAR <- studyArea(sim$ml, 2) ## TODO: ml from loadSimList isn't working -- all NULL
-  sAR <- sim$ml[[grep("studyAreaReporting", names(sim$ml), value = TRUE)]] %>% st_as_sf()
-  polyNames <- unique(sAR[[P(sim)$studyAreaNamesCol]])
-  summaryPolys <- sAR
-
   .ncores <- pemisc::optimalClusterNum(5000, maxNumClusters = min(parallel::detectCores() / 2, 32L)) ## TODO: use module param
   options(future.availableCores.fallback = .ncores)
 
-  tsfListByPoly <- rasterListByPoly(files = mod$tsf, poly = summaryPolys, names = polyNames,
-                                    col = polyCol, filter = "rstTimeSinceFire_")
-  tsfReps <- attr(tsfListByPoly, "reps")
-  tsfTimes <- attr(tsfListByPoly, "times")
-  tsfStudyAreas <- attr(tsfListByPoly, "polyNames")
-  tsfListByPoly <- lapply(tsfListByPoly, function(x) {
-    x[] <- as.integer(pmin(P(sim)$ageClassMaxAge, x[]))
-    x
+  ## current conditions
+  fname2 <- file.path(outputPath(sim), "rstTimeSinceFire_year0000.tif")
+  fname1 <- paste0(tools::file_path_sans_ext(gsub("rstTimeSinceFire", "vegTypeMap", fname2)), ".grd")
+  tsfCC <- sim$ml[["CC TSF"]]
+  raster::writeRaster(tsfCC, fname2, datatype = "INT1U", overwrite = TRUE)
+
+  ## apply analysis to each of the reporting polygons
+  md <- sim$ml@metadata
+  rowIDs <- which(md == currentModule(sim), arr.ind = TRUE)[, "row"]
+  mod$rptPolyNames <- md[["layerName"]][rowIDs]
+  foo <- lapply(mod$rptPolyNames, function(p) {
+    rptPoly <- sim$ml[[p]]
+
+    if (is(rptPoly, "Spatial")) {
+      rptPoly <- st_as_sf(rptPoly)
+    } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
+      rptPoly <- st_collection_extract(rptPoly, "POLYGON")
+    }
+    rptPolyCol <- md[layerName == p, ][["columnNameForLabels"]]
+    refCode <- paste0("patchAges_", md[layerName == p, ][["shortName"]])
+    refCodeCC <- paste0(refCode, "_CC")
+
+    ## -- BEGIN: to-rework
+    ## TODO: rework below to summarize for all landscape units
+    ## TODO: summarive current conditons
+    ## TODO: use parallel
+
+    subPolyNames <- unique(rptPoly[[rptPolyCol]])
+    tsfListByPoly <- rasterListByPoly(files = mod$tsf, poly = rptPoly, names = subPolyNames,
+                                      col = rptPolyCol, filter = "rstTimeSinceFire_")
+    tsfReps <- attr(tsfListByPoly, "reps")
+    tsfTimes <- attr(tsfListByPoly, "times")
+    tsfStudyAreas <- attr(tsfListByPoly, "polyNames")
+    tsfListByPoly <- lapply(tsfListByPoly, function(x) {
+      x[] <- as.integer(pmin(P(sim)$ageClassMaxAge, x[]))
+      x
+    })
+
+    ## CC
+    sppEquivCol <- P(sim)$sppEquivCol
+    age_veg <- CJ(ageClass = factor(P(sim)$ageClasses, levels = P(sim)$ageClasses), ## correct order
+                  vegCover = unique(sim$sppEquiv[, ..sppEquivCol][[1]]))
+    lrgPtchsCC_dt <- LargePatches(fname2, fname1, poly = sf::as_Spatial(rptPoly),
+                                  labelColumn = rptPolyCol, id = rep,
+                                  P(sim)$ageClassCutOffs, P(sim)$ageClasses, P(sim)$sppEquivCol, sim$sppEquiv)
+    lrgPtchsCC_dt[, time := 0]
+    lrgPtchsCC_dt[, ageClass := factor(ageClass, levels = P(sim)$ageClasses)] ## keep correct ageClass order
+    vegTypesCC <- sort(unique(lrgPtchsCC_dt$vegCover))
+
+    mod[[refCodeCC]] <- lapply(vegTypesCC, function(type) {
+      lrgPtchsCC_dt[vegCover == type, ] %>%
+        group_by(time, ageClass) %>%
+        summarise(N = length(sizeInHa), mm = min(sizeInHa), mn = mean(sizeInHa), mx = max(sizeInHa),
+                  sd = sd(sizeInHa), se = sd / sqrt(N), ci = se * qt(0.975, N - 1), .groups = "keep")
+    })
+    names(mod[[refCodeCC]]) <- vegTypesCC
+
+    ## simulation results
+    lrgPtchs <- lapply(P(sim)$reps, function(rep) {
+      rbindlist(future_lapply(mod$analysesOutputsTimes, function(year) {
+        ids_tsf <- which(grepl(sprintf("rep%02d/rstTimeSinceFire_year%04d", rep, year), mod$tsf))
+        ids_vtm <- which(grepl(sprintf("rep%02d/vegTypeMap_year%04d", rep, year), mod$vtm))
+        ldt <- LargePatches(mod$tsf[ids_tsf], mod$vtm[ids_vtm], poly = sf::as_Spatial(rptPoly),
+                            labelColumn = rptPolyCol, id = rep,
+                            P(sim)$ageClassCutOffs, P(sim)$ageClasses, P(sim)$sppEquivCol, sim$sppEquiv)
+        ldt[, time := year]
+      }, future.packages = c("LandWebUtils", "map"), future.seed = TRUE))
+    }) ## TODO: currently quite slow...
+    lrgPtchs_dt <- rbindlist(lrgPtchs)
+    lrgPtchs_dt[, ageClass := factor(ageClass, levels = P(sim)$ageClasses)] ## keep correct ageClass order
+    vegTypes <- sort(unique(lrgPtchs_dt$vegCover))
+
+    mod[[refCode]] <- lapply(vegTypes, function(type) {
+      lrgPtchs_dt[vegCover == type, ] %>%
+        group_by(time, ageClass) %>%
+        summarise(N = length(sizeInHa), mm = min(sizeInHa), mn = mean(sizeInHa), mx = max(sizeInHa),
+                  sd = sd(sizeInHa), se = sd / sqrt(N), ci = se * qt(0.975, N - 1), .groups = "keep")
+    })
+    names(mod[[refCode]]) <- vegTypes
+
+    ## -- END: to-rework
   })
-
-  if (FALSE) {
-    # TODO: very few fires in studyAreaReporting!!
-    sims <- file.path(unique(dirname(tsf)), "mySimOut_1000.qs")
-    tmp_sim <- loadSimList(sims[1])
-    raster::plot(tmp_sim$burnMap)
-    raster::plot(studyArea(ml, 2), add = TRUE)
-  }
-
-  ## TODO: rework below to summarize for all landscape units
-  ## TODO: use parallel
-  lrgPtchs <- lapply(P(sim)$reps, function(rep) {
-    rbindlist(lapply(mod$analysesOutputsTimes, function(year) {
-      ids_tsf <- which(grepl(sprintf("rep%02d/rstTimeSinceFire_year%04d", rep, year), mod$tsf))
-      ids_vtm <- which(grepl(sprintf("rep%02d/vegTypeMap_year%04d", rep, year), mod$vtm))
-      ldt <- LargePatches(mod$tsf[ids_tsf], mod$vtm[ids_vtm], poly = studyArea(sim$ml, 2),
-                          labelColumn = "shinyLabel", id = rep,
-                          P(sim)$ageClassCutOffs, P(sim)$ageClasses, P(sim)$sppEquivCol, sim$sppEquiv)
-      ldt[, time := year]
-    }))
-  }, future.packages = c("LandWebUtils", "map"))
-  lrgPtchs_dt <- rbindlist(lrgPtchs)
-  mod$vegTypes <- sort(unique(lrgPtchs_dt$vegCover))
-
-  mod$patchAges <- lapply(mod$vegTypes, function(type) {
-    lrgPtchs_dt[vegCover == type, ] %>%
-      group_by(time, ageClass) %>%
-      summarise(N = length(sizeInHa), mn = mean(sizeInHa), sd = sd(sizeInHa),
-                se = sd / sqrt(N), ci = se * qt(0.975, N - 1),
-                .groups = "keep")
-  })
-  names(mod$patchAges) <- mod$vegTypes
 
   return(invisible(sim))
 }
 
 ### plotting
 plot_over_time <- function(summary_df, ylabel) {
-  ## TODO: each study area on separate facet or plot
-  ggplot(summary_df, aes(x = time, y = mn, col = area)) +
+  ggplot(summary_df, aes(x = time, y = mn)) +
+    facet_wrap(~area) +
+    # geom_rect(aes(xmin = min(time), xmax = max(time), ymin = min(mm), ymax = max(mx)),
+    #           fill = "grey", alpha = 0.1) + ## faceted plot already zoomed to range of data
     geom_point() +
     geom_line() +
     geom_errorbar(aes(ymin = mn - sd, ymax = mn + sd), width = 0.5) +
+    theme_bw() +
     ylab(ylabel)
 }
 
 plot_ptch_ages <- function(summary_df) {
-  ggplot(summary_df, aes(x = time, y = mn, col = area)) +
+  ggplot(summary_df, aes(x = time, y = mn)) +
+    facet_wrap(~ageClass, ncol = 1) +
+    # geom_rect(aes(xmin = min(time), xmax = max(time), ymin = min(mm), ymax = max(mx)),
+    #           fill = "grey", alpha = 0.1) + ## faceted plot already zoomed to range of data
     geom_point() +
     geom_line() +
     geom_errorbar(aes(ymin = mn - sd, ymax = mn + sd), width = 0.5) +
-    ylab("Mean patch size (ha)") +
-    facet_wrap(~ageClass, ncol = 1)
+    theme_bw() +
+    ylab("Mean patch size (ha)")
 }
 
 plotFun <- function(sim) {
-    # ! ----- EDIT BELOW ----- ! #
+  # ! ----- EDIT BELOW ----- ! #
 
-  lapply(names(mod$lm_LU), function(f) {
-    ## TODO: use Plots
-    #Plots(mod$lm_LU[[f]], fn = plot_over_time, ylabel = substr(f, 7, nchar(f))) ## ??
-    gg1 <- plot_over_time(mod$lm_LU[[f]], substr(f, 7, nchar(f)))
-    ggsave(file.path(outputPath(sim), "figures", paste0(f, "_by_LU.png")), gg1)
+  pngs1 <- lapply(mod$rptPolyNames, function(p) {
+    rptPoly <- sim$ml[[p]]
 
-    gg2 <- gg1 + facet_wrap(~area)
-    ggsave(file.path(outputPath(sim), "figures", paste0(f, "_facet_by_LU.png")), gg2)
+    if (is(rptPoly, "Spatial")) {
+      rptPoly <- st_as_sf(rptPoly)
+    } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
+      rptPoly <- st_collection_extract(rptPoly, "POLYGON")
+    }
+    rptPolyCol <- sim$ml@metadata[layerName == p, ][["columnNameForLabels"]]
+    refCode <- paste0("lm_", sim$ml@metadata[layerName == p, ][["shortName"]])
+    refCodeCC <- paste0(refCode, "_CC")
+
+    lapply(names(mod[[refCode]]), function(f) {
+      ## TODO: use Plots
+      gg <- plot_over_time(mod[[refCode]][[f]], substr(f, 7, nchar(f))) +
+        geom_hline(data = mod[[refCodeCC]][[f]], aes(yintercept = mn), col = "red", linetype = 2)
+      ggsave(file.path(outputPath(sim), "figures", paste0(f, "_facet_by_", refCode, ".png")), gg)
+    })
   })
 
-  lapply(names(mod$lm_BEC), function(f) {
-    ## TODO: use Plots
-    #Plots(mod$lm_BEC[[f]], fn = plot_over_time, ylabel = substr(f, 7, nchar(f))) ## ??
-    gg1 <- plot_over_time(mod$lm_BEC[[f]], substr(f, 7, nchar(f)))
-    ggsave(file.path(outputPath(sim), "figures", paste0(f, "_by_BEC.png")), gg1)
+  pngs2 <- lapply(mod$rptPolyNames, function(p) {
+    rptPoly <- sim$ml[[p]]
 
-    gg2 <- gg1 + facet_wrap(~area)
-    ggsave(file.path(outputPath(sim), "figures", paste0(f, "_facet_by_BEC.png")), gg2)
+    if (is(rptPoly, "Spatial")) {
+      rptPoly <- st_as_sf(rptPoly)
+    } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
+      rptPoly <- st_collection_extract(rptPoly, "POLYGON")
+    }
+    rptPolyCol <- sim$ml@metadata[layerName == p, ][["columnNameForLabels"]]
+    refCode <- paste0("lm_", sim$ml@metadata[layerName == p, ][["shortName"]])
+    refCodeCC <- paste0(refCode, "_CC")
+
+    lapply(names(mod[[refCode]]),  function(spp) {
+      ## TODO: use Plots
+      gg <- plot_ptch_ages(mod[[refCode]][[spp]]) +
+        geom_hline(data = mod[[refCodeCC]][[spp]], aes(yintercept = mn), col = "red", linetype = 2) ## TODO
+      ggsave(file.path(outputPath(sim), "figures", paste0(refCode, "_", spp, ".png")), gg)
+    })
   })
 
-  # lapply(names(mod$patchAges), function(type) {
-  #   ## TODO: use Plots
-  #   #Plots(mod$patchAges[[type]], fn = plot_ptch_ages) ## ??
-  #   gg <- plot_ptch_ages(mod$patchAges[[type]])
-  #   ggsave(file.path(outputPath(sim), "figures", paste0(type, ".png")), gg)
-  # })
+  mod$files2upload <- c(unlist(pngs1), unlist(pngs2)) ## TODO: append these to sim outputs
 
   # ! ----- STOP EDITING ----- ! #
   return(invisible(sim))
