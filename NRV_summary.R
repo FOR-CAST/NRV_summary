@@ -400,7 +400,7 @@ plotFun <- function(sim) {
       rptPoly <- st_collection_extract(rptPoly, "POLYGON")
     }
     rptPolyCol <- sim$ml@metadata[layerName == p, ][["columnNameForLabels"]]
-    refCode <- paste0("patchAges_", md[layerName == p, ][["shortName"]])
+    refCode <- paste0("patchAges_", sim$ml@metadata[layerName == p, ][["shortName"]])
     refCodeCC <- paste0(refCode, "_CC")
 
     lapply(names(mod[[refCode]]),  function(spp) {
