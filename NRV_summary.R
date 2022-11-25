@@ -400,13 +400,13 @@ plotFun <- function(sim) {
       rptPoly <- st_collection_extract(rptPoly, "POLYGON")
     }
     rptPolyCol <- sim$ml@metadata[layerName == p, ][["columnNameForLabels"]]
-    refCode <- paste0("lm_", sim$ml@metadata[layerName == p, ][["shortName"]])
+    refCode <- paste0("patchAges_", md[layerName == p, ][["shortName"]])
     refCodeCC <- paste0(refCode, "_CC")
 
     lapply(names(mod[[refCode]]),  function(spp) {
       ## TODO: use Plots
       gg <- plot_ptch_ages(mod[[refCode]][[spp]]) +
-        geom_hline(data = mod[[refCodeCC]][[spp]], aes(yintercept = mn), col = "red", linetype = 2) ## TODO
+        geom_hline(data = mod[[refCodeCC]][[spp]], aes(yintercept = mn), col = "red", linetype = 2)
       ggsave(file.path(outputPath(sim), "figures", paste0(refCode, "_", spp, ".png")), gg)
     })
   })
