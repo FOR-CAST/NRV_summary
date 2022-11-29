@@ -138,17 +138,22 @@ Init <- function(sim) {
     setdiff(c(0, P(sim)$timeSeriesTimes), mod$analysesOutputsTimes), padL = padL)), collapse = "|"),
     mod$allouts, value = TRUE, invert = TRUE)
 
-  ## TODO: inventory all files to ensure correct dir structure? compare against expected files?
-  #filesUserHas <- fs::dir_ls(P(sim)$simOutputPath, recurse = TRUE, type = "file", glob = "*.qs")
+  filesUserHas <- mod$allouts2
 
-  # filesNeeded <- data.table(file = mod$allouts2, exists = TRUE) ## TODO
+  dirsExpected <- file.path(outputPath(sim), sprintf("rep%02d", P(sim)$reps))
+  filesExpected <- as.character(sapply(dirsExpected, function(d) {
+    c(
+      file.path(d, sprintf("rstTimeSinceFire_year%04d.tif", mod$analysesOutputsTimes)),
+      file.path(d, sprintf("vegTypeMap_year%04d.grd", mod$analysesOutputsTimes))
+    )
+  }))
 
-  # if (!all(filesNeeded$exists)) {
-  #   missing <- filesNeeded[exists == FALSE, ]$file
-  #   stop("Some simulation files missing:\n", paste(missing, collapse = "\n"))
-  # }
+  filesNeeded <- data.frame(file = filesExpected, exists = filesExpected %in% filesUserHas)
 
-  stopifnot(length(mod$allouts2) == 2 * length(P(sim)$reps) * length(mod$analysesOutputsTimes))
+  if (!all(filesNeeded$exists)) {
+    missing <- filesNeeded[filesNeeded$exists == FALSE, ]$file
+    stop(sum(!filesNeeded$exists), " simulation files appear to be missing:\n", paste(missing, collapse = "\n"))
+  }
 
   mod$layerName <- gsub(mod$allouts2, pattern = paste0(".*", outputPath(sim)), replacement = "")
   mod$layerName <- gsub(mod$layerName, pattern = "[/\\]", replacement = "_")
