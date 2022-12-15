@@ -196,7 +196,6 @@ calculateLandscapeMetrics <- function(summaryPolys, polyCol, vtm) {
                   "lsm_l_iji")
   names(funList) <- funList
 
-  opt <- options(future.globals.maxSize = 5*1024^3) ## 5 GiB
   fragStats <- future_lapply(funList, function(f) {
     fun <- get(f)
 
@@ -204,14 +203,13 @@ calculateLandscapeMetrics <- function(summaryPolys, polyCol, vtm) {
     frag_stat_df <- mutate(frag_stat_df,
                            rep = vtmReps,
                            time = vtmTimes,
-                           area = vtmStudyAreas)
+                           poly = vtmStudyAreas)
     frag_stat_df %>%
-      group_by(time, area) %>%
+      group_by(time, poly) %>%
       summarise(N = length(value), mm = min(value), mn = mean(value), mx = max(value),
                 sd = sd(value), se = sd / sqrt(N), ci = se * qt(0.975, N - 1))
   }, future.packages = "landscapemetrics")
   names(fragStats) <- names(funList)
-  options(opt)
 
   return(fragStats)
 }
@@ -219,7 +217,9 @@ calculateLandscapeMetrics <- function(summaryPolys, polyCol, vtm) {
 ## build landscape metrics tables from vegetation type maps (VTMs)
 landscapeMetrics <- function(sim) {
   .ncores <- pemisc::optimalClusterNum(5000, maxNumClusters = min(parallel::detectCores() / 2, 32L)) ## TODO: use module param
-  options(future.availableCores.fallback = .ncores)
+  opt <- options(future.availableCores.fallback = .ncores,
+                 future.globals.maxSize = 0.26*length(P(sim)$reps)*1024^3) ## 50 reps needs ~13 GB
+  on.exit({options(opt)}, add = TRUE)
 
   ## current conditions
   vtmCC <- Cache(vegTypeMapGenerator,
@@ -351,13 +351,14 @@ patchMetrics <- function(sim) {
 ### plotting
 plot_over_time <- function(summary_df, ylabel) {
   ggplot(summary_df, aes(x = time, y = mn)) +
-    facet_wrap(~area) +
+    facet_wrap(~poly) +
     # geom_rect(aes(xmin = min(time), xmax = max(time), ymin = min(mm), ymax = max(mx)),
     #           fill = "grey", alpha = 0.1) + ## faceted plot already zoomed to range of data
     geom_point() +
     geom_line() +
     geom_errorbar(aes(ymin = mn - sd, ymax = mn + sd), width = 0.5) +
     theme_bw() +
+    theme(legend.position = "none") +
     ylab(ylabel)
 }
 
@@ -370,6 +371,7 @@ plot_ptch_ages <- function(summary_df) {
     geom_line() +
     geom_errorbar(aes(ymin = mn - sd, ymax = mn + sd), width = 0.5) +
     theme_bw() +
+    theme(legend.position = "none") +
     ylab("Mean patch size (ha)")
 }
 
