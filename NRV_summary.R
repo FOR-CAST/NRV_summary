@@ -180,14 +180,6 @@ calculateLandscapeMetrics <- function(summaryPolys, polyCol, vtm) {
 
   polyNames <- unique(summaryPolys[[polyCol]])
 
-  ## vegetation type maps
-  message("|_ loading vegetation type maps...")
-  vtmListByPoly <- rasterListByPoly(files = vtm, poly = summaryPolys, names = polyNames,
-                                    col = polyCol, filter = "vegTypeMap_") ## TODO:cache this
-  vtmReps <- attr(vtmListByPoly, "reps")
-  vtmTimes <- attr(vtmListByPoly, "times")
-  vtmStudyAreas <- attr(vtmListByPoly, "polyNames")
-
   funList <- list("lsm_l_area_mn",
                   "lsm_l_cohesion",
                   "lsm_l_condent",
@@ -196,31 +188,59 @@ calculateLandscapeMetrics <- function(summaryPolys, polyCol, vtm) {
                   "lsm_l_iji")
   names(funList) <- funList
 
-  fragStats <- future_lapply(funList, function(f) {
-    fun <- get(f)
+  fragStats <- future.apply::future_lapply(vtm, function(f) {
+    r <- raster::raster(f)
+    byPoly <- lapply(polyNames, function(polyName) {
+      subpoly <- summaryPolys[summaryPolys[[polyCol]] == polyName, ]
+      rc <- raster::crop(r, subpoly)
+      rcm <- raster::mask(rc, subpoly)
+      rcm
 
-    frag_stat_df <- fun(vtmListByPoly) ## TODO: use non-default values?
-    frag_stat_df <- mutate(frag_stat_df,
-                           rep = vtmReps,
-                           time = vtmTimes,
-                           poly = vtmStudyAreas)
-    frag_stat_df %>%
+      out <- lapply(funList, function(fun) {
+        fn <- get(fun)
+
+        fn(rcm)
+      })
+      names(out) <- funList
+      out
+    })
+    names(byPoly) <- paste(tools::file_path_sans_ext(basename(f)), polyNames , sep = "_") ## vegTypeMap_yearXXXX_polyName
+
+    byPoly
+  }, future.packages = c("landscapemetrics", "raster", "sp", "sf"))
+  names(fragStats) <- basename(dirname(vtm)) ## repXX
+
+  fragStats <- purrr::transpose(lapply(fragStats, purrr::transpose)) ## puts fun names as outer list elements
+
+  stopifnot(all(funList == names(fragStats)))
+
+  frag_stat_df <- lapply(fragStats, function(x) {
+    x <- unlist(x, recursive = FALSE, use.names = TRUE)
+
+    labels <- purrr::transpose(strsplit(names(x), "[.]"))
+    labels1 <- unlist(labels[[1]])
+    labels2 <- gsub("vegTypeMap", "", unlist(labels[[2]]))
+    labels2a <- purrr::transpose(strsplit(labels2, "_{1}"))
+    labels2a2 <- unlist(labels2a[[2]]) ## year
+    labels2a3 <- unlist(labels2a[[3]]) ## subpoly
+
+    vtmReps <- as.integer(gsub("rep", "", labels1))
+    vtmTimes <- as.integer(gsub("year", "", labels2a2))
+    vtmStudyAreas <- labels2a3
+
+    df <- do.call(rbind, x) %>%
+      mutate(rep = vtmReps, time = vtmTimes, poly = vtmStudyAreas) %>%
       group_by(time, poly) %>%
-      summarise(N = length(value), mm = min(value), mn = mean(value), mx = max(value),
+      summarise(N = length(value), mm = min(value), mn = mean(value, na.rm = TRUE), mx = max(value),
                 sd = sd(value), se = sd / sqrt(N), ci = se * qt(0.975, N - 1))
-  }, future.packages = "landscapemetrics")
-  names(fragStats) <- names(funList)
+  })
+  names(frag_stat_df) <- funList
 
-  return(fragStats)
+  return(frag_stat_df)
 }
 
 ## build landscape metrics tables from vegetation type maps (VTMs)
 landscapeMetrics <- function(sim) {
-  .ncores <- pemisc::optimalClusterNum(5000, maxNumClusters = min(parallel::detectCores() / 2, 32L)) ## TODO: use module param
-  opt <- options(future.availableCores.fallback = .ncores,
-                 future.globals.maxSize = 0.26*length(P(sim)$reps)*1024^3) ## 50 reps needs ~13 GB
-  on.exit({options(opt)}, add = TRUE)
-
   ## current conditions
   vtmCC <- Cache(vegTypeMapGenerator,
                  x = sim$speciesLayers,
@@ -238,6 +258,8 @@ landscapeMetrics <- function(sim) {
   rowIDs <- which(md == currentModule(sim), arr.ind = TRUE)[, "row"]
   mod$rptPolyNames <- md[["layerName"]][rowIDs]
   lapply(mod$rptPolyNames, function(p) {
+    message(crayon::magenta("Calculating landscape metrics for", p, "..."))
+
     rptPoly <- sim$ml[[p]]
 
     if (is(rptPoly, "Spatial")) {
@@ -249,30 +271,158 @@ landscapeMetrics <- function(sim) {
     refCode <- paste0("lm_", md[layerName == p, ][["shortName"]])
     refCodeCC <- paste0(refCode, "_CC")
 
+    vtm <- mod$vtm
+    fileInfo <- file.info(vtm)[, c("size", "mtime")]
     mod[[refCodeCC]] <- suppressWarnings({
-      calculateLandscapeMetrics(summaryPolys = rptPoly, polyCol = rptPolyCol, vtm = fname1)
+      Cache(calculateLandscapeMetrics, summaryPolys = rptPoly, polyCol = rptPolyCol, vtm = fname1,
+            .cacheExtra = file.info(fname1)[, c("size", "mtime")])
     })
-    mod[[refCode]] <- calculateLandscapeMetrics(summaryPolys = rptPoly, polyCol = rptPolyCol, vtm = mod$vtm)
+    mod[[refCode]] <- Cache(calculateLandscapeMetrics, summaryPolys = rptPoly, polyCol = rptPolyCol, vtm = vtm,
+                            .cacheExtra = fileInfo)
   })
 
   return(invisible(sim))
 }
 
-patchMetrics <- function(sim) {
-  .ncores <- pemisc::optimalClusterNum(5000, maxNumClusters = min(parallel::detectCores() / 2, 32L)) ## TODO: use module param
-  options(future.availableCores.fallback = .ncores)
+## calculate areas for each patch (per species)
+patchAreas <- function(vtm) {
+  areas <- landscapemetrics::lsm_p_area(vtm)
+  areas <- areas[areas$class != 0, ] ## class 0 has no forested vegetation (e.g., recently disturbed)
+  spp <- raster::levels(vtm)[[1]]
+  sppNames <- spp[match(areas$class, spp[["ID"]]), ][["VALUE"]]
 
+  areas <- mutate(areas, class = sppNames)
+
+  return(areas)
+}
+
+## calculate median time since fire for each patch (per species)
+patchAges <- function(vtm, tsf) {
+  ptchs <- landscapemetrics::get_patches(vtm)[[1]] ## identify patches for each species (class)
+  ptchs$class_0 <- NULL ## class 0 has no forested vegetation (e.g., recently disturbed)
+  spp <- raster::levels(vtm)[[1]]
+  spp$class <- paste0("class_", spp[["ID"]])
+  names(ptchs) <- spp[match(names(ptchs), spp[["class"]]), ][["VALUE"]]
+
+  df <- rbindlist(lapply(names(ptchs), function(p) {
+    ids <- which(!is.na(ptchs[[p]][]))
+    data.frame(layer = 1L, level = "patch", class = p, id = ptchs[[p]][ids], metric = "tsf_mdn", tsf = tsf[ids]) %>%
+      group_by(layer, level, class, id, metric) %>%
+      summarise(value = median(tsf, na.rm = TRUE))
+  }))
+
+  return(df)
+}
+
+patchStats <- function(vtm, tsf, polyNames, summaryPolys, polyCol, funList) {
+  t <- raster::raster(tsf)
+  v <- raster::raster(vtm)
+  byPoly <- lapply(polyNames, function(polyName) {
+    subpoly <- summaryPolys[summaryPolys[[polyCol]] == polyName, ]
+
+    tc <- raster::crop(t, subpoly)
+    tcm <- raster::mask(tc, subpoly)
+    tcm
+
+    vc <- raster::crop(v, subpoly)
+    vcm <- raster::mask(vc, subpoly)
+    vcm
+
+    out <- lapply(funList, function(fun) {
+      fn <- get(fun)
+
+      if (fun %in% c("patchAges")) {
+        fn(vcm, tcm)
+      } else {
+        fn(vcm)
+      }
+    })
+    names(out) <- funList
+    out
+  })
+  names(byPoly) <- paste(tools::file_path_sans_ext(basename(vtm)), polyNames , sep = "_") ## vegTypeMap_yearXXXX_polyName
+
+  byPoly
+}
+
+calculatePatchMetrics <- function(summaryPolys, polyCol, vtm, tsf) {
+  if (!is(summaryPolys, "sf"))
+    summaryPolys <- sf::st_as_sf(summaryPolys)
+
+  polyNames <- unique(summaryPolys[[polyCol]])
+
+  funList <- list("patchAreas",
+                  "patchAges")
+  names(funList) <- funList
+
+  patchStats <- future.apply::future_mapply(patchStats, vtm = vtm, tsf = tsf,
+                                            MoreArgs = list(
+                                              polyCol = polyCol,
+                                              polyNames = polyNames,
+                                              summaryPolys = summaryPolys,
+                                              funList = funList
+                                            ),
+                                            SIMPLIFY = FALSE,
+                                            future.globals = funList,
+                                            future.packages = c("dplyr", "landscapemetrics", "raster", "sp", "sf"))
+  names(patchStats) <- basename(dirname(vtm)) ## repXX
+
+  patchStats <- purrr::transpose(lapply(patchStats, purrr::transpose)) ## puts fun names as outer list elements
+
+  stopifnot(all(funList == names(patchStats)))
+
+  ptch_stat_df <- lapply(patchStats, function(x) {
+    x <- unlist(x, recursive = FALSE, use.names = TRUE)
+
+    labels <- purrr::transpose(strsplit(names(x), "[.]"))
+    labels1 <- unlist(labels[[1]])
+    labels2 <- gsub("vegTypeMap", "", unlist(labels[[2]]))
+    labels2a <- purrr::transpose(strsplit(labels2, "_{1}"))
+    labels2a2 <- unlist(labels2a[[2]]) ## year
+    labels2a3 <- unlist(labels2a[[3]]) ## subpoly
+
+    vtmReps <- as.integer(gsub("rep", "", labels1))
+    vtmTimes <- as.integer(gsub("year", "", labels2a2))
+    vtmStudyAreas <- labels2a3
+
+
+
+    df <- do.call(rbind, lapply(seq_along(x), function(i) {
+      mutate(x[[i]], rep = vtmReps[i], time = vtmTimes[i], poly = vtmStudyAreas[i]) %>%
+        group_by(class, time, poly, metric) %>%
+        summarise(N = length(value), mm = min(value), mn = mean(value, na.rm = TRUE), mx = max(value),
+                  sd = sd(value), se = sd / sqrt(N), ci = se * qt(0.975, N - 1))
+    }))
+  })
+  names(ptch_stat_df) <- funList
+
+  return(ptch_stat_df)
+}
+
+patchMetrics <- function(sim) {
   ## current conditions
-  fname2 <- file.path(outputPath(sim), "rstTimeSinceFire_year0000.tif")
-  fname1 <- paste0(tools::file_path_sans_ext(gsub("rstTimeSinceFire", "vegTypeMap", fname2)), ".grd")
+  vtmCC <- Cache(vegTypeMapGenerator,
+                 x = sim$speciesLayers,
+                 vegLeadingProportion = P(sim)$vegLeadingProportion,
+                 mixedType = 2,
+                 sppEquiv = sim$sppEquiv,
+                 sppEquivCol = P(sim)$sppEquivCol,
+                 colors = sim$sppColorVect,
+                 doAssertion = FALSE)
+  fname1 <- file.path(outputPath(sim), "vegTypeMap_year0000.grd")
+  raster::writeRaster(vtmCC, fname1, datatype = "INT1U", overwrite = TRUE)
+
   tsfCC <- sim$ml[["CC TSF"]]
+  fname2 <- file.path(outputPath(sim), "rstTimeSinceFire_year0000.tif")
   raster::writeRaster(tsfCC, fname2, datatype = "INT1U", overwrite = TRUE)
 
   ## apply analysis to each of the reporting polygons
   md <- sim$ml@metadata
   rowIDs <- which(md == currentModule(sim), arr.ind = TRUE)[, "row"]
   mod$rptPolyNames <- md[["layerName"]][rowIDs]
-  foo <- lapply(mod$rptPolyNames, function(p) {
+  lapply(mod$rptPolyNames, function(p) {
+    message(crayon::magenta("Calculating patch metrics for", p, "..."))
+
     rptPoly <- sim$ml[[p]]
 
     if (is(rptPoly, "Spatial")) {
@@ -280,69 +430,24 @@ patchMetrics <- function(sim) {
     } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
       rptPoly <- st_collection_extract(rptPoly, "POLYGON")
     }
+    rptPoly <- sf::as_Spatial(rptPoly)
     rptPolyCol <- md[layerName == p, ][["columnNameForLabels"]]
-    refCode <- paste0("patchAges_", md[layerName == p, ][["shortName"]])
+    refCode <- paste0("pm_", md[layerName == p, ][["shortName"]])
     refCodeCC <- paste0(refCode, "_CC")
 
-    ## -- BEGIN: to-rework
-    ## TODO: rework below to summarize for all landscape units
-    ## TODO: summarive current conditons
-    ## TODO: use parallel
-
-    subPolyNames <- unique(rptPoly[[rptPolyCol]])
-    tsfListByPoly <- rasterListByPoly(files = mod$tsf, poly = rptPoly, names = subPolyNames,
-                                      col = rptPolyCol, filter = "rstTimeSinceFire_")
-    tsfReps <- attr(tsfListByPoly, "reps")
-    tsfTimes <- attr(tsfListByPoly, "times")
-    tsfStudyAreas <- attr(tsfListByPoly, "polyNames")
-    tsfListByPoly <- lapply(tsfListByPoly, function(x) {
-      x[] <- as.integer(pmin(P(sim)$ageClassMaxAge, x[]))
-      x
-    })
-
     ## CC
-    sppEquivCol <- P(sim)$sppEquivCol
-    age_veg <- CJ(ageClass = factor(P(sim)$ageClasses, levels = P(sim)$ageClasses), ## correct order
-                  vegCover = unique(sim$sppEquiv[, ..sppEquivCol][[1]]))
-    lrgPtchsCC_dt <- LargePatches(fname2, fname1, poly = sf::as_Spatial(rptPoly),
-                                  labelColumn = rptPolyCol, id = rep,
-                                  P(sim)$ageClassCutOffs, P(sim)$ageClasses, P(sim)$sppEquivCol, sim$sppEquiv)
-    lrgPtchsCC_dt[, time := 0]
-    lrgPtchsCC_dt[, ageClass := factor(ageClass, levels = P(sim)$ageClasses)] ## keep correct ageClass order
-    vegTypesCC <- sort(unique(lrgPtchsCC_dt$vegCover))
-
-    mod[[refCodeCC]] <- lapply(vegTypesCC, function(type) {
-      lrgPtchsCC_dt[vegCover == type, ] %>%
-        group_by(time, ageClass) %>%
-        summarise(N = length(sizeInHa), mm = min(sizeInHa), mn = mean(sizeInHa), mx = max(sizeInHa),
-                  sd = sd(sizeInHa), se = sd / sqrt(N), ci = se * qt(0.975, N - 1), .groups = "keep")
-    })
-    names(mod[[refCodeCC]]) <- vegTypesCC
+    fileInfo <- file.info(fname1, fname2)[, c("size", "mtime")]
+    mod[[refCodeCC]] <- Cache(calculatePatchMetrics, tsf = fname2, vtm = fname1,
+                              summaryPoly = rptPoly, polyCol = rptPolyCol,
+                              .cacheExtra = fileInfo)
 
     ## simulation results
-    lrgPtchs <- lapply(P(sim)$reps, function(rep) {
-      rbindlist(future_lapply(mod$analysesOutputsTimes, function(year) {
-        ids_tsf <- which(grepl(sprintf("rep%02d/rstTimeSinceFire_year%04d", rep, year), mod$tsf))
-        ids_vtm <- which(grepl(sprintf("rep%02d/vegTypeMap_year%04d", rep, year), mod$vtm))
-        ldt <- LargePatches(mod$tsf[ids_tsf], mod$vtm[ids_vtm], poly = sf::as_Spatial(rptPoly),
-                            labelColumn = rptPolyCol, id = rep,
-                            P(sim)$ageClassCutOffs, P(sim)$ageClasses, P(sim)$sppEquivCol, sim$sppEquiv)
-        ldt[, time := year]
-      }, future.packages = c("LandWebUtils", "map"), future.seed = TRUE))
-    }) ## TODO: currently quite slow...
-    lrgPtchs_dt <- rbindlist(lrgPtchs)
-    lrgPtchs_dt[, ageClass := factor(ageClass, levels = P(sim)$ageClasses)] ## keep correct ageClass order
-    vegTypes <- sort(unique(lrgPtchs_dt$vegCover))
+    fileInfo <- file.info(mod$tsf, mod$vtm)[, c("size", "mtime")]
+    mod[[refCode]] <- Cache(calculatePatchMetrics, tsf = mod$tsf, vtm = mod$vtm,
+                            summaryPoly = rptPoly, polyCol = rptPolyCol,
+                            .cacheExtra = fileInfo)
 
-    mod[[refCode]] <- lapply(vegTypes, function(type) {
-      lrgPtchs_dt[vegCover == type, ] %>%
-        group_by(time, ageClass) %>%
-        summarise(N = length(sizeInHa), mm = min(sizeInHa), mn = mean(sizeInHa), mx = max(sizeInHa),
-                  sd = sd(sizeInHa), se = sd / sqrt(N), ci = se * qt(0.975, N - 1), .groups = "keep")
-    })
-    names(mod[[refCode]]) <- vegTypes
-
-    ## -- END: to-rework
+    return(invisible(NULL))
   })
 
   return(invisible(sim))
@@ -362,17 +467,14 @@ plot_over_time <- function(summary_df, ylabel) {
     ylab(ylabel)
 }
 
-plot_ptch_ages <- function(summary_df) {
-  ggplot(summary_df, aes(x = time, y = mn)) +
-    facet_wrap(~ageClass, ncol = 1) +
-    # geom_rect(aes(xmin = min(time), xmax = max(time), ymin = min(mm), ymax = max(mx)),
-    #           fill = "grey", alpha = 0.1) + ## faceted plot already zoomed to range of data
-    geom_point() +
-    geom_line() +
-    geom_errorbar(aes(ymin = mn - sd, ymax = mn + sd), width = 0.5) +
+plot_by_species <- function(summary_df) {
+  ggplot(summary_df, aes(x = poly, y = mn, col = poly)) +
+    facet_wrap(~class) +
+    geom_boxplot(outlier.colour = "grey4", outlier.shape = 21, outlier.size = 1.0) +
+    scale_color_brewer(palette = "Dark2") +
     theme_bw() +
-    theme(legend.position = "none") +
-    ylab("Mean patch size (ha)")
+    theme(strip.text.x = element_text(size = 14)) +
+    ylab(summary_df$metric)
 }
 
 plotFun <- function(sim) {
@@ -393,8 +495,9 @@ plotFun <- function(sim) {
     lapply(names(mod[[refCode]]), function(f) {
       ## TODO: use Plots
       gg <- plot_over_time(mod[[refCode]][[f]], substr(f, 7, nchar(f))) +
-        geom_hline(data = mod[[refCodeCC]][[f]], aes(yintercept = mn), col = "red", linetype = 2)
-      ggsave(file.path(outputPath(sim), "figures", paste0(f, "_facet_by_", refCode, ".png")), gg)
+        geom_hline(data = mod[[refCodeCC]][[f]], aes(yintercept = mn), col = "darkred", linetype = 2)
+      ggsave(file.path(outputPath(sim), "figures", paste0(f, "_facet_by_", refCode, ".png")), gg,
+             height = 8, width = 12)
     })
   })
 
@@ -407,14 +510,15 @@ plotFun <- function(sim) {
       rptPoly <- st_collection_extract(rptPoly, "POLYGON")
     }
     rptPolyCol <- sim$ml@metadata[layerName == p, ][["columnNameForLabels"]]
-    refCode <- paste0("patchAges_", sim$ml@metadata[layerName == p, ][["shortName"]])
+    refCode <- paste0("pm_", sim$ml@metadata[layerName == p, ][["shortName"]])
     refCodeCC <- paste0(refCode, "_CC")
 
-    lapply(names(mod[[refCode]]),  function(spp) {
+    lapply(names(mod[[refCode]]), function(f) {
       ## TODO: use Plots
-      gg <- plot_ptch_ages(mod[[refCode]][[spp]]) +
-        geom_hline(data = mod[[refCodeCC]][[spp]], aes(yintercept = mn), col = "red", linetype = 2)
-      ggsave(file.path(outputPath(sim), "figures", paste0(refCode, "_", spp, ".png")), gg)
+      gg <- plot_by_species(mod[[refCode]][[f]]) +
+        geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
+      ggsave(file.path(outputPath(sim), "figures", paste0(f, "_facet_by_", refCode, ".png")), gg,
+             height = 8, width = 12)
     })
   })
 
