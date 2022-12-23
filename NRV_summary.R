@@ -351,8 +351,7 @@ calculatePatchMetrics <- function(summaryPolys, polyCol, vtm, tsf) {
 
   polyNames <- unique(summaryPolys[[polyCol]])
 
-  funList <- list("patchAreas",
-                  "patchAges")
+  funList <- list("patchAges", "patchAreas")
   names(funList) <- funList
 
   patchStats <- future.apply::future_mapply(patchStats, vtm = vtm, tsf = tsf,
@@ -385,9 +384,12 @@ calculatePatchMetrics <- function(summaryPolys, polyCol, vtm, tsf) {
     vtmTimes <- as.integer(gsub("year", "", labels2a2))
     vtmStudyAreas <- labels2a3
 
-
-
     df <- do.call(rbind, lapply(seq_along(x), function(i) {
+      if (nrow(x[[i]]) == 0) {
+        x[[i]] <- data.frame(layer = integer(0), level = character(0), class = character(0),
+                             id = integer(0), metric = character(0), value = numeric(0))
+      }
+
       mutate(x[[i]], rep = vtmReps[i], time = vtmTimes[i], poly = vtmStudyAreas[i]) %>%
         group_by(class, time, poly, metric) %>%
         summarise(N = length(value), mm = min(value), mn = mean(value, na.rm = TRUE), mx = max(value),
