@@ -470,10 +470,10 @@ plot_over_time <- function(summary_df, ylabel) {
 }
 
 plot_by_species <- function(summary_df) {
-  ggplot(summary_df, aes(x = poly, y = mn, col = poly)) +
+  ggplot(summary_df, aes(x = poly, y = mn)) +
     facet_wrap(~class) +
     geom_boxplot(outlier.colour = "grey4", outlier.shape = 21, outlier.size = 1.0) +
-    scale_color_brewer(palette = "Dark2") +
+    scale_x_discrete(guide = guide_axis(angle = 90)) +
     theme_bw() +
     theme(strip.text.x = element_text(size = 14)) +
     ylab(summary_df$metric)
@@ -499,7 +499,7 @@ plotFun <- function(sim) {
       gg <- plot_over_time(mod[[refCode]][[f]], substr(f, 7, nchar(f))) +
         geom_hline(data = mod[[refCodeCC]][[f]], aes(yintercept = mn), col = "darkred", linetype = 2)
       ggsave(file.path(outputPath(sim), "figures", paste0(f, "_facet_by_", refCode, ".png")), gg,
-             height = 8, width = 12)
+             height = 10, width = 16)
     })
   })
 
@@ -520,7 +520,7 @@ plotFun <- function(sim) {
       gg <- plot_by_species(mod[[refCode]][[f]]) +
         geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
       ggsave(file.path(outputPath(sim), "figures", paste0(f, "_facet_by_", refCode, ".png")), gg,
-             height = 8, width = 12)
+             height = 10, width = 16)
     })
   })
 
