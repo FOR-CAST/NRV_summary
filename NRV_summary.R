@@ -189,8 +189,9 @@ calculateLandscapeMetrics <- function(summaryPolys, polyCol, vtm) {
                   "lsm_l_iji")
   names(funList) <- funList
 
-  opt <- options(parallelly.availableCores.system = pemisc::optimalClusterNum(5000, length(vtm)))
-  on.exit(options(opt), add = TRUE)
+  oldPlan <- plan(tweak(plan(), workers = pemisc::optimalClusterNum(5000, length(vtm))))
+  on.exit(plan(oldPlan), add = TRUE)
+
   fragStats <- future.apply::future_lapply(vtm, function(f) {
     r <- raster::raster(f)
     byPoly <- lapply(polyNames, function(polyName) {
@@ -361,8 +362,9 @@ calculatePatchMetrics <- function(summaryPolys, polyCol, vtm, tsf) {
   funList <- list("patchAges", "patchAreas")
   names(funList) <- funList
 
-  opt <- options(parallelly.availableCores.system = pemisc::optimalClusterNum(5000, length(vtm)))
-  on.exit(options(opt), add = TRUE)
+  oldPlan <- plan(tweak(plan(), workers = pemisc::optimalClusterNum(5000, length(vtm))))
+  on.exit(plan(oldPlan), add = TRUE)
+
   ptch_stats <- future.apply::future_mapply(patchStats, vtm = vtm, tsf = tsf,
                                              MoreArgs = list(
                                                polyCol = polyCol,
