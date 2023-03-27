@@ -12,11 +12,12 @@ defineModule(sim, list(
   timeunit = "year",
   citation = list("citation.bib"),
   documentation = list("README.md", "NRV_summary.Rmd"), ## same file
-  reqdPkgs = list("data.table", "dplyr", "fs", "future.apply", "future.callr", "ggplot2", "googledrive",
+  reqdPkgs = list("data.table", "dplyr", "fs", "future.apply", "future.callr",
+                  "ggforce", "ggplot2", "googledrive",
                   "landscapemetrics",
                   "PredictiveEcology/LandWebUtils@development (>= 0.1.5)",
                   "raster", "sf", "sp",
-                  "PredictiveEcology/SpaDES.core@development (>=1.1.0.9001)"),
+                  "PredictiveEcology/SpaDES.core@development (>= 1.1.1)"),
   parameters = bindrows(
     defineParameter("ageClasses", "character", LandWebUtils:::.ageClasses, NA, NA, ## TODO: using 20 yr inc.
                     "descriptions/labels for age classes (seral stages)"),
@@ -188,6 +189,8 @@ calculateLandscapeMetrics <- function(summaryPolys, polyCol, vtm) {
                   "lsm_l_iji")
   names(funList) <- funList
 
+  opt <- options(parallelly.availableCores.system = pemisc::optimalClusterNum(5000, length(vtm)))
+  on.exit(options(opt), add = TRUE)
   fragStats <- future.apply::future_lapply(vtm, function(f) {
     r <- raster::raster(f)
     byPoly <- lapply(polyNames, function(polyName) {
@@ -318,6 +321,8 @@ patchStats <- function(vtm, tsf, polyNames, summaryPolys, polyCol, funList) {
   t <- raster::raster(tsf)
   v <- raster::raster(vtm)
   byPoly <- lapply(polyNames, function(polyName) {
+    message(paste("  vtm:", basename(vtm), "\n",
+                  "  tsf:", basename(tsf)))
     subpoly <- summaryPolys[summaryPolys[[polyCol]] == polyName, ]
 
     tc <- raster::crop(t, subpoly)
@@ -329,6 +334,8 @@ patchStats <- function(vtm, tsf, polyNames, summaryPolys, polyCol, funList) {
     vcm
 
     out <- lapply(funList, function(fun) {
+      message(paste("    ... running", fun, "for", polyName))
+
       fn <- get(fun)
 
       if (fun %in% c("patchAges")) {
@@ -354,23 +361,25 @@ calculatePatchMetrics <- function(summaryPolys, polyCol, vtm, tsf) {
   funList <- list("patchAges", "patchAreas")
   names(funList) <- funList
 
-  patchStats <- future.apply::future_mapply(patchStats, vtm = vtm, tsf = tsf,
-                                            MoreArgs = list(
-                                              polyCol = polyCol,
-                                              polyNames = polyNames,
-                                              summaryPolys = summaryPolys,
-                                              funList = funList
-                                            ),
-                                            SIMPLIFY = FALSE,
-                                            future.globals = funList,
-                                            future.packages = c("dplyr", "landscapemetrics", "raster", "sp", "sf"))
-  names(patchStats) <- basename(dirname(vtm)) ## repXX
+  opt <- options(parallelly.availableCores.system = pemisc::optimalClusterNum(5000, length(vtm)))
+  on.exit(options(opt), add = TRUE)
+  ptch_stats <- future.apply::future_mapply(patchStats, vtm = vtm, tsf = tsf,
+                                             MoreArgs = list(
+                                               polyCol = polyCol,
+                                               polyNames = polyNames,
+                                               summaryPolys = summaryPolys,
+                                               funList = funList
+                                             ),
+                                             SIMPLIFY = FALSE,
+                                             future.globals = funList,
+                                             future.packages = c("dplyr", "landscapemetrics", "raster", "sp", "sf"))
+  names(ptch_stats) <- basename(dirname(vtm)) ## repXX
 
-  patchStats <- purrr::transpose(lapply(patchStats, purrr::transpose)) ## puts fun names as outer list elements
+  ptch_stats <- purrr::transpose(lapply(ptch_stats, purrr::transpose)) ## puts fun names as outer list elements
 
-  stopifnot(all(funList == names(patchStats)))
+  stopifnot(all(funList == names(ptch_stats)))
 
-  ptch_stat_df <- lapply(patchStats, function(x) {
+  ptch_stat_df <- lapply(ptch_stats, function(x) {
     x <- unlist(x, recursive = FALSE, use.names = TRUE)
 
     labels <- purrr::transpose(strsplit(names(x), "[.]"))
@@ -456,9 +465,9 @@ patchMetrics <- function(sim) {
 }
 
 ### plotting
-plot_over_time <- function(summary_df, ylabel) {
+plot_over_time <- function(summary_df, ylabel, page = 1) {
   ggplot(summary_df, aes(x = time, y = mn)) +
-    facet_wrap(~poly) +
+    facet_wrap_paginate(~poly, ncol = 4, nrow = 3, page = page) +
     # geom_rect(aes(xmin = min(time), xmax = max(time), ymin = min(mm), ymax = max(mx)),
     #           fill = "grey", alpha = 0.1) + ## faceted plot already zoomed to range of data
     geom_point() +
@@ -496,10 +505,15 @@ plotFun <- function(sim) {
 
     lapply(names(mod[[refCode]]), function(f) {
       ## TODO: use Plots
-      gg <- plot_over_time(mod[[refCode]][[f]], substr(f, 7, nchar(f))) +
+      gg1 <- plot_over_time(mod[[refCode]][[f]], substr(f, 7, nchar(f))) +
         geom_hline(data = mod[[refCodeCC]][[f]], aes(yintercept = mn), col = "darkred", linetype = 2)
-      ggsave(file.path(outputPath(sim), "figures", paste0(f, "_facet_by_", refCode, ".png")), gg,
-             height = 10, width = 16)
+      nPages <- n_pages(gg1)
+      lapply(seq_len(nPages), function(pg) {
+        gg <- plot_over_time(mod[[refCode]][[f]], substr(f, 7, nchar(f)), page = pg) +
+          geom_hline(data = mod[[refCodeCC]][[f]], aes(yintercept = mn), col = "darkred", linetype = 2)
+        ggsave(file.path(outputPath(sim), "figures", paste0(f, "_facet_by_", refCode, "_p", pg, ".png")), gg,
+               height = 10, width = 16)
+      })
     })
   })
 
