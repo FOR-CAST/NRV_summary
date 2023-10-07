@@ -64,7 +64,7 @@ defineModule(sim, list(
   inputObjects = bindrows(
     expectsInput("ml", "map",
                  desc = "map list object from preamble module (e.g., LandWeb_preamble)."),
-    expectsInput("speciesLayers", "RasterStack",
+    expectsInput("speciesLayers", "SpatRaster",
                  desc = "initial percent cover raster layers used for simulation."),
     expectsInput("sppColorVect", "character",
                  desc = paste("A named vector of colors to use for plotting.",
@@ -133,8 +133,8 @@ Init <- function(sim) {
 
   mod$analysesOutputsTimes <- analysesOutputsTimes(P(sim)$summaryPeriod, P(sim)$summaryInterval)
 
-  mod$allouts <- fs::dir_ls(outputPath(sim), regexp = "vegType|TimeSince", recurse = 1, type = "file") %>%
-    grep("gri|png|txt|xml", ., value = TRUE, invert = TRUE)
+  mod$allouts <- fs::dir_ls(outputPath(sim), regexp = "vegType|TimeSince", recurse = 1, type = "file") |>
+    grep("gri|png|txt|xml", x = _, value = TRUE, invert = TRUE)
   mod$allouts2 <- grep(paste(paste0("year", paddedFloatToChar(
     setdiff(c(0, P(sim)$timeSeriesTimes), mod$analysesOutputsTimes), padL = padL)), collapse = "|"),
     mod$allouts, value = TRUE, invert = TRUE)
@@ -145,7 +145,7 @@ Init <- function(sim) {
   filesExpected <- as.character(sapply(dirsExpected, function(d) {
     c(
       file.path(d, sprintf("rstTimeSinceFire_year%04d.tif", mod$analysesOutputsTimes)),
-      file.path(d, sprintf("vegTypeMap_year%04d.grd", mod$analysesOutputsTimes))
+      file.path(d, sprintf("vegTypeMap_year%04d.tif", mod$analysesOutputsTimes))
     )
   }))
 
@@ -160,15 +160,15 @@ Init <- function(sim) {
   mod$layerName <- gsub(mod$layerName, pattern = "[/\\]", replacement = "_")
   mod$layerName <- gsub(mod$layerName, pattern = "^_", replacement = "")
 
-  mod$tsf <- gsub(".*vegTypeMap.*", NA, mod$allouts2) %>%
-    grep(paste(mod$analysesOutputsTimes, collapse = "|"), ., value = TRUE)
-  mod$vtm <- gsub(".*TimeSinceFire.*", NA, mod$allouts2) %>%
-    grep(paste(mod$analysesOutputsTimes, collapse = "|"), ., value = TRUE)
+  mod$tsf <- gsub(".*vegTypeMap.*", NA, mod$allouts2) |>
+    grep(paste(mod$analysesOutputsTimes, collapse = "|"), x = _, value = TRUE)
+  mod$vtm <- gsub(".*TimeSinceFire.*", NA, mod$allouts2) |>
+    grep(paste(mod$analysesOutputsTimes, collapse = "|"), x = _, value = TRUE)
 
-  mod$tsfTimeSeries <- gsub(".*vegTypeMap.*", NA, mod$allouts) %>%
-    grep(paste(P(sim)$timeSeriesTimes, collapse = "|"), ., value = TRUE)
-  mod$vtmTimeSeries <- gsub(".*TimeSinceFire.*", NA, mod$allouts) %>%
-    grep(paste(P(sim)$timeSeriesTimes, collapse = "|"), ., value = TRUE)
+  mod$tsfTimeSeries <- gsub(".*vegTypeMap.*", NA, mod$allouts) |>
+    grep(paste(P(sim)$timeSeriesTimes, collapse = "|"), x = _, value = TRUE)
+  mod$vtmTimeSeries <- gsub(".*TimeSinceFire.*", NA, mod$allouts) |>
+    grep(paste(P(sim)$timeSeriesTimes, collapse = "|"), x = _, value = TRUE)
 
   # ! ----- STOP EDITING ----- ! #
 
@@ -193,11 +193,11 @@ calculateLandscapeMetrics <- function(summaryPolys, polyCol, vtm) {
   on.exit(plan(oldPlan), add = TRUE)
 
   fragStats <- future.apply::future_lapply(vtm, function(f) {
-    r <- raster::raster(f)
+    r <- terra::rast(f)
     byPoly <- lapply(polyNames, function(polyName) {
       subpoly <- summaryPolys[summaryPolys[[polyCol]] == polyName, ]
-      rc <- raster::crop(r, subpoly)
-      rcm <- raster::mask(rc, subpoly)
+      rc <- terra::crop(r, subpoly)
+      rcm <- terra::mask(rc, subpoly)
       rcm
 
       out <- lapply(funList, function(fun) {
@@ -211,7 +211,7 @@ calculateLandscapeMetrics <- function(summaryPolys, polyCol, vtm) {
     names(byPoly) <- paste(tools::file_path_sans_ext(basename(f)), polyNames , sep = "_") ## vegTypeMap_yearXXXX_polyName
 
     byPoly
-  }, future.packages = c("landscapemetrics", "raster", "sp", "sf"))
+  }, future.packages = c("landscapemetrics", "sf", "terra"))
   names(fragStats) <- basename(dirname(vtm)) ## repXX
 
   fragStats <- purrr::transpose(lapply(fragStats, purrr::transpose)) ## puts fun names as outer list elements
@@ -232,9 +232,9 @@ calculateLandscapeMetrics <- function(summaryPolys, polyCol, vtm) {
     vtmTimes <- as.integer(gsub("year", "", labels2a2))
     vtmStudyAreas <- labels2a3
 
-    df <- do.call(rbind, x) %>%
-      mutate(rep = vtmReps, time = vtmTimes, poly = vtmStudyAreas) %>%
-      group_by(time, poly) %>%
+    df <- do.call(rbind, x) |>
+      mutate(rep = vtmReps, time = vtmTimes, poly = vtmStudyAreas) |>
+      group_by(time, poly) |>
       summarise(N = length(value), mm = min(value), mn = mean(value, na.rm = TRUE), mx = max(value),
                 sd = sd(value), se = sd / sqrt(N), ci = se * qt(0.975, N - 1))
   })
@@ -254,12 +254,13 @@ landscapeMetrics <- function(sim) {
                  sppEquivCol = P(sim)$sppEquivCol,
                  colors = sim$sppColorVect,
                  doAssertion = FALSE)
-  fname1 <- file.path(outputPath(sim), "vegTypeMap_year0000.grd")
-  raster::writeRaster(vtmCC, fname1, datatype = "INT1U", overwrite = TRUE)
+  fname1 <- file.path(outputPath(sim), "vegTypeMap_year0000.tif")
+  writeRaster(vtmCC, fname1, datatype = "INT1U", overwrite = TRUE)
 
   ## apply analysis to each of the reporting polygons
   md <- sim$ml@metadata
-  rowIDs <- which(md == currentModule(sim), arr.ind = TRUE)[, "row"]
+  cols <- which(grepl("analysisGroup", colnames(md)))
+  rowIDs <- which(md[, ..cols] == currentModule(sim), arr.ind = TRUE)[, "row"]
   mod$rptPolyNames <- md[["layerName"]][rowIDs]
   lapply(mod$rptPolyNames, function(p) {
     message(crayon::magenta("Calculating landscape metrics for", p, "..."))
@@ -271,6 +272,8 @@ landscapeMetrics <- function(sim) {
     } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
       rptPoly <- st_collection_extract(rptPoly, "POLYGON")
     }
+    rptPoly <- st_crop(rptPoly, studyArea(sim$ml, 3)) ## ensure cropped to studyArea
+
     rptPolyCol <- md[layerName == p, ][["columnNameForLabels"]]
     refCode <- paste0("lm_", md[layerName == p, ][["shortName"]])
     refCodeCC <- paste0(refCode, "_CC")
@@ -292,7 +295,7 @@ landscapeMetrics <- function(sim) {
 patchAreas <- function(vtm) {
   areas <- landscapemetrics::lsm_p_area(vtm)
   areas <- areas[areas$class != 0, ] ## class 0 has no forested vegetation (e.g., recently disturbed)
-  spp <- raster::levels(vtm)[[1]]
+  spp <- terra::levels(vtm)[[1]]
   sppNames <- spp[match(areas$class, spp[["ID"]]), ][["VALUE"]]
 
   areas <- mutate(areas, class = sppNames)
@@ -304,14 +307,14 @@ patchAreas <- function(vtm) {
 patchAges <- function(vtm, tsf) {
   ptchs <- landscapemetrics::get_patches(vtm)[[1]] ## identify patches for each species (class)
   ptchs$class_0 <- NULL ## class 0 has no forested vegetation (e.g., recently disturbed)
-  spp <- raster::levels(vtm)[[1]]
+  spp <- terra::levels(vtm)[[1]]
   spp$class <- paste0("class_", spp[["ID"]])
   names(ptchs) <- spp[match(names(ptchs), spp[["class"]]), ][["VALUE"]]
 
   df <- rbindlist(lapply(names(ptchs), function(p) {
     ids <- which(!is.na(ptchs[[p]][]))
-    data.frame(layer = 1L, level = "patch", class = p, id = ptchs[[p]][ids], metric = "tsf_mdn", tsf = tsf[ids]) %>%
-      group_by(layer, level, class, id, metric) %>%
+    data.frame(layer = 1L, level = "patch", class = p, id = ptchs[[p]][ids], metric = "tsf_mdn", tsf = tsf[ids]) |>
+      group_by(layer, level, class, id, metric) |>
       summarise(value = median(tsf, na.rm = TRUE))
   }))
 
@@ -365,16 +368,18 @@ calculatePatchMetrics <- function(summaryPolys, polyCol, vtm, tsf) {
   oldPlan <- plan(tweak(plan(), workers = pemisc::optimalClusterNum(5000, length(vtm))))
   on.exit(plan(oldPlan), add = TRUE)
 
-  ptch_stats <- future.apply::future_mapply(patchStats, vtm = vtm, tsf = tsf,
-                                             MoreArgs = list(
-                                               polyCol = polyCol,
-                                               polyNames = polyNames,
-                                               summaryPolys = summaryPolys,
-                                               funList = funList
-                                             ),
-                                             SIMPLIFY = FALSE,
-                                             future.globals = funList,
-                                             future.packages = c("dplyr", "landscapemetrics", "raster", "sp", "sf"))
+  ptch_stats <- future.apply::future_mapply(
+    patchStats, vtm = vtm, tsf = tsf,
+    MoreArgs = list(
+     polyCol = polyCol,
+     polyNames = polyNames,
+     summaryPolys = summaryPolys,
+     funList = funList
+   ),
+   SIMPLIFY = FALSE,
+   future.globals = funList,
+   future.packages = c("dplyr", "landscapemetrics", "sf", "terra")
+  )
   names(ptch_stats) <- basename(dirname(vtm)) ## repXX
 
   ptch_stats <- purrr::transpose(lapply(ptch_stats, purrr::transpose)) ## puts fun names as outer list elements
@@ -401,8 +406,8 @@ calculatePatchMetrics <- function(summaryPolys, polyCol, vtm, tsf) {
                              id = integer(0), metric = character(0), value = numeric(0))
       }
 
-      mutate(x[[i]], rep = vtmReps[i], time = vtmTimes[i], poly = vtmStudyAreas[i]) %>%
-        group_by(class, time, poly, metric) %>%
+      mutate(x[[i]], rep = vtmReps[i], time = vtmTimes[i], poly = vtmStudyAreas[i]) |>
+        group_by(class, time, poly, metric) |>
         summarise(N = length(value), mm = min(value), mn = mean(value, na.rm = TRUE), mx = max(value),
                   sd = sd(value), se = sd / sqrt(N), ci = se * qt(0.975, N - 1))
     }))
@@ -422,7 +427,7 @@ patchMetrics <- function(sim) {
                  sppEquivCol = P(sim)$sppEquivCol,
                  colors = sim$sppColorVect,
                  doAssertion = FALSE)
-  fname1 <- file.path(outputPath(sim), "vegTypeMap_year0000.grd")
+  fname1 <- file.path(outputPath(sim), "vegTypeMap_year0000.tif")
   raster::writeRaster(vtmCC, fname1, datatype = "INT1U", overwrite = TRUE)
 
   tsfCC <- sim$ml[["CC TSF"]]
@@ -443,7 +448,7 @@ patchMetrics <- function(sim) {
     } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
       rptPoly <- st_collection_extract(rptPoly, "POLYGON")
     }
-    rptPoly <- sf::as_Spatial(rptPoly)
+    rptPoly <- st_crop(rptPoly, studyArea(sim$ml, 3)) ## ensure cropped to studyArea
     rptPolyCol <- md[layerName == p, ][["columnNameForLabels"]]
     refCode <- paste0("pm_", md[layerName == p, ][["shortName"]])
     refCodeCC <- paste0(refCode, "_CC")
@@ -470,8 +475,6 @@ patchMetrics <- function(sim) {
 plot_over_time <- function(summary_df, ylabel, page = 1) {
   ggplot(summary_df, aes(x = time, y = mn)) +
     facet_wrap_paginate(~poly, ncol = 4, nrow = 3, page = page) +
-    # geom_rect(aes(xmin = min(time), xmax = max(time), ymin = min(mm), ymax = max(mx)),
-    #           fill = "grey", alpha = 0.1) + ## faceted plot already zoomed to range of data
     geom_point() +
     geom_line() +
     geom_errorbar(aes(ymin = mn - sd, ymax = mn + sd), width = 0.5) +
@@ -480,10 +483,13 @@ plot_over_time <- function(summary_df, ylabel, page = 1) {
     ylab(ylabel)
 }
 
-plot_by_species <- function(summary_df) {
-  ggplot(summary_df, aes(x = poly, y = mn)) +
-    facet_wrap(~class) +
-    geom_boxplot(outlier.colour = "grey4", outlier.shape = 21, outlier.size = 1.0) +
+plot_by_species <- function(summary_df, type = c("box", "violin"), page = 1) {
+  ggplot(summary_df, aes(x = class, y = mn)) +
+    facet_wrap_paginate(~poly, ncol = 4, nrow = 3, page = page) +
+    switch(type,
+           box = geom_boxplot(outlier.colour = "grey4", outlier.shape = 21, outlier.size = 1.0),
+           violin = geom_violin(outlier.colour = "grey4", outlier.shape = 21, outlier.size = 1.0)
+    ) +
     scale_x_discrete(guide = guide_axis(angle = 90)) +
     theme_bw() +
     theme(strip.text.x = element_text(size = 14)) +
@@ -513,7 +519,7 @@ plotFun <- function(sim) {
       lapply(seq_len(nPages), function(pg) {
         gg <- plot_over_time(mod[[refCode]][[f]], substr(f, 7, nchar(f)), page = pg) +
           geom_hline(data = mod[[refCodeCC]][[f]], aes(yintercept = mn), col = "darkred", linetype = 2)
-        ggsave(file.path(outputPath(sim), "figures", paste0(f, "_facet_by_", refCode, "_p", pg, ".png")), gg,
+        ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_p", pg, ".png")), gg,
                height = 10, width = 16)
       })
     })
@@ -531,13 +537,23 @@ plotFun <- function(sim) {
     refCode <- paste0("pm_", sim$ml@metadata[layerName == p, ][["shortName"]])
     refCodeCC <- paste0(refCode, "_CC")
 
-    lapply(names(mod[[refCode]]), function(f) {
+    pngs2a <- lapply(names(mod[[refCode]]), function(f) {
       ## TODO: use Plots
-      gg <- plot_by_species(mod[[refCode]][[f]]) +
+      ggbox <- plot_by_species(mod[[refCode]][[f]], "box") +
         geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
-      ggsave(file.path(outputPath(sim), "figures", paste0(f, "_facet_by_", refCode, ".png")), gg,
+      ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_box_plot.png")), ggbox,
              height = 10, width = 16)
     })
+
+    pngs2b <- lapply(names(mod[[refCode]]), function(f) {
+      ## TODO: use Plots
+      ggvio <- plot_by_species(mod[[refCode]][[f]], "violin") +
+        geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
+      ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_box_plot.png")), ggvio,
+             height = 10, width = 16)
+    })
+
+    append(pngs2a, pngs2b)
   })
 
   mod$files2upload <- c(unlist(pngs1), unlist(pngs2)) ## TODO: append these to sim outputs
@@ -552,8 +568,11 @@ plotFun <- function(sim) {
   message(currentModule(sim), ": using dataPath '", dPath, "'.")
 
   # ! ----- EDIT BELOW ----- ! #
-
-  tmp <- loadSimList(file.path(outputPath(sim), paste0("simOutPreamble_", P(sim)$.studyAreaName, ".qs")))
+  fsim <- file.path(outputPath(sim), paste0("simOutPreamble_", P(sim)$.studyAreaName, ".qs"))
+  if (!file.exists(fsim)) {
+    fsim <- file.path(tools::file_path_sans_ext(fsim), ".rds") ## fallback to rds if qs not used
+  }
+  tmp <- loadSimList(fsim)
 
   if (!suppliedElsewhere("ml", sim)) {
     sim$ml <- tmp$ml ## TODO: can't load ml objects from qs file !!
@@ -567,4 +586,10 @@ plotFun <- function(sim) {
   return(invisible(sim))
 }
 
-### add additional events as needed by copy/pasting from above
+## older version of SpaDES.core used here doesn't have this function
+if (packageVersion("SpaDES.core") < "2.0.2.9001") {
+  figurePath <- function(sim) {
+    file.path(outputPath(sim), "figures", current(sim)[["moduleName"]]) |>
+      checkPath(create = TRUE)
+  }
+}
