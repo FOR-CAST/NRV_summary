@@ -62,6 +62,8 @@ defineModule(sim, list(
                     "Should caching of events or module be used?")
   ),
   inputObjects = bindrows(
+    expectsInput("flammableMap", "SpatRaster",
+                 desc = "binary flammability map. Required in single mode."),
     expectsInput("ml", "map",
                  desc = "map list object from preamble module (e.g., LandWeb_preamble)."),
     expectsInput("speciesLayers", "SpatRaster",
@@ -321,7 +323,7 @@ patchAges <- function(vtm, tsf) {
   return(df)
 }
 
-patchStats <- function(vtm, tsf, polyNames, summaryPolys, polyCol, funList) {
+patchStats <- function(vtm, tsf, flm, polyNames, summaryPolys, polyCol, funList) {
   t <- raster::raster(tsf)
   v <- raster::raster(vtm)
   byPoly <- lapply(polyNames, function(polyName) {
@@ -329,13 +331,14 @@ patchStats <- function(vtm, tsf, polyNames, summaryPolys, polyCol, funList) {
                   "  tsf:", basename(tsf)))
     subpoly <- summaryPolys[summaryPolys[[polyCol]] == polyName, ]
 
+    fc <- raster::crop(flm, subpoly)
+
     tc <- raster::crop(t, subpoly)
     tcm <- raster::mask(tc, subpoly)
-    tcm
+    tcm <- raster::mask(tc, fc, maskvalue = 0) ## mask non-flammable pixels
 
     vc <- raster::crop(v, subpoly)
     vcm <- raster::mask(vc, subpoly)
-    vcm
 
     out <- lapply(funList, function(fun) {
       message(paste("    ... running", fun, "for", polyName))
@@ -356,7 +359,7 @@ patchStats <- function(vtm, tsf, polyNames, summaryPolys, polyCol, funList) {
   byPoly
 }
 
-calculatePatchMetrics <- function(summaryPolys, polyCol, vtm, tsf) {
+calculatePatchMetrics <- function(summaryPolys, polyCol, flm, vtm, tsf) {
   if (!is(summaryPolys, "sf"))
     summaryPolys <- sf::st_as_sf(summaryPolys)
 
@@ -371,6 +374,7 @@ calculatePatchMetrics <- function(summaryPolys, polyCol, vtm, tsf) {
   ptch_stats <- future.apply::future_mapply(
     patchStats, vtm = vtm, tsf = tsf,
     MoreArgs = list(
+     flm = flm,
      polyCol = polyCol,
      polyNames = polyNames,
      summaryPolys = summaryPolys,
@@ -464,15 +468,17 @@ patchMetrics <- function(sim) {
     refCode <- paste0("pm_", md[layerName == p, ][["shortName"]])
     refCodeCC <- paste0(refCode, "_CC")
 
+    flm <- deepcopy(sim$flammableMap)
+
     ## CC
     fileInfo <- file.info(fname1, fname2)[, c("size", "mtime")]
-    mod[[refCodeCC]] <- Cache(calculatePatchMetrics, tsf = fname2, vtm = fname1,
+    mod[[refCodeCC]] <- Cache(calculatePatchMetrics, tsf = fname2, vtm = fname1, flm = flm,
                               summaryPoly = rptPoly, polyCol = rptPolyCol,
                               .cacheExtra = fileInfo)
 
     ## simulation results
     fileInfo <- file.info(mod$tsf, mod$vtm)[, c("size", "mtime")]
-    mod[[refCode]] <- Cache(calculatePatchMetrics, tsf = mod$tsf, vtm = mod$vtm,
+    mod[[refCode]] <- Cache(calculatePatchMetrics, tsf = mod$tsf, vtm = mod$vtm, flm = flm,
                             summaryPoly = rptPoly, polyCol = rptPolyCol,
                             .cacheExtra = fileInfo)
 
