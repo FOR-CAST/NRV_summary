@@ -295,8 +295,8 @@ landscapeMetrics <- function(sim) {
 patchAreas <- function(vtm) {
   areas <- landscapemetrics::lsm_p_area(vtm)
   areas <- areas[areas$class != 0, ] ## class 0 has no forested vegetation (e.g., recently disturbed)
-  spp <- terra::levels(vtm)[[1]]
-  sppNames <- spp[match(areas$class, spp[["ID"]]), ][["VALUE"]]
+  spp <- raster::levels(vtm)[[1]]
+  sppNames <- spp[match(areas$class, spp[["ID"]]), ][["values"]]
 
   areas <- mutate(areas, class = sppNames)
 
@@ -307,9 +307,9 @@ patchAreas <- function(vtm) {
 patchAges <- function(vtm, tsf) {
   ptchs <- landscapemetrics::get_patches(vtm)[[1]] ## identify patches for each species (class)
   ptchs$class_0 <- NULL ## class 0 has no forested vegetation (e.g., recently disturbed)
-  spp <- terra::levels(vtm)[[1]]
+  spp <- raster::levels(vtm)[[1]]
   spp$class <- paste0("class_", spp[["ID"]])
-  names(ptchs) <- spp[match(names(ptchs), spp[["class"]]), ][["VALUE"]]
+  names(ptchs) <- spp[match(names(ptchs), spp[["class"]]), ][["values"]]
 
   df <- rbindlist(lapply(names(ptchs), function(p) {
     ids <- which(!is.na(ptchs[[p]][]))
@@ -378,7 +378,7 @@ calculatePatchMetrics <- function(summaryPolys, polyCol, vtm, tsf) {
    ),
    SIMPLIFY = FALSE,
    future.globals = funList,
-   future.packages = c("dplyr", "landscapemetrics", "sf", "terra")
+   future.packages = c("dplyr", "landscapemetrics", "raster", "sf") ## "terra"
   )
   names(ptch_stats) <- basename(dirname(vtm)) ## repXX
 
@@ -404,12 +404,19 @@ calculatePatchMetrics <- function(summaryPolys, polyCol, vtm, tsf) {
       if (nrow(x[[i]]) == 0) {
         x[[i]] <- data.frame(layer = integer(0), level = character(0), class = character(0),
                              id = integer(0), metric = character(0), value = numeric(0))
-      }
 
+      }
       mutate(x[[i]], rep = vtmReps[i], time = vtmTimes[i], poly = vtmStudyAreas[i]) |>
         group_by(class, time, poly, metric) |>
-        summarise(N = length(value), mm = min(value), mn = mean(value, na.rm = TRUE), mx = max(value),
-                  sd = sd(value), se = sd / sqrt(N), ci = se * qt(0.975, N - 1))
+        summarise(
+          N = length(value),
+          mm = min(value, na.rm = TRUE),
+          mn = mean(value, na.rm = TRUE),
+          mx = max(value, na.rm = TRUE),
+          sd = sd(value),
+          se = sd / sqrt(N),
+          ci = se * qt(0.975, N - 1)
+        )
     }))
   })
   names(ptch_stat_df) <- funList
@@ -428,15 +435,19 @@ patchMetrics <- function(sim) {
                  colors = sim$sppColorVect,
                  doAssertion = FALSE)
   fname1 <- file.path(outputPath(sim), "vegTypeMap_year0000.tif")
-  raster::writeRaster(vtmCC, fname1, datatype = "INT1U", overwrite = TRUE)
+  writeRaster(vtmCC, fname1, datatype = "INT1U", overwrite = TRUE)
 
   tsfCC <- sim$ml[["CC TSF"]]
+  if (is(tsfCC, "PackedSpatRaster")) {
+    tsfCC <- unwrap(tsfCC) ## TODO: why is this necessary???
+  }
   fname2 <- file.path(outputPath(sim), "rstTimeSinceFire_year0000.tif")
-  raster::writeRaster(tsfCC, fname2, datatype = "INT1U", overwrite = TRUE)
+  writeRaster(tsfCC, fname2, datatype = "INT1U", overwrite = TRUE)
 
   ## apply analysis to each of the reporting polygons
   md <- sim$ml@metadata
-  rowIDs <- which(md == currentModule(sim), arr.ind = TRUE)[, "row"]
+  cols <- which(grepl("analysisGroup", colnames(md)))
+  rowIDs <- which(md[, ..cols] == currentModule(sim), arr.ind = TRUE)[, "row"]
   mod$rptPolyNames <- md[["layerName"]][rowIDs]
   lapply(mod$rptPolyNames, function(p) {
     message(crayon::magenta("Calculating patch metrics for", p, "..."))
@@ -488,7 +499,7 @@ plot_by_species <- function(summary_df, type = c("box", "violin"), page = 1) {
     facet_wrap_paginate(~poly, ncol = 4, nrow = 3, page = page) +
     switch(type,
            box = geom_boxplot(outlier.colour = "grey4", outlier.shape = 21, outlier.size = 1.0),
-           violin = geom_violin(outlier.colour = "grey4", outlier.shape = 21, outlier.size = 1.0)
+           violin = geom_violin(outlier.colour = "grey4")
     ) +
     scale_x_discrete(guide = guide_axis(angle = 90)) +
     theme_bw() +
@@ -549,7 +560,7 @@ plotFun <- function(sim) {
       ## TODO: use Plots
       ggvio <- plot_by_species(mod[[refCode]][[f]], "violin") +
         geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
-      ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_box_plot.png")), ggvio,
+      ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_via_plot.png")), ggvio,
              height = 10, width = 16)
     })
 
