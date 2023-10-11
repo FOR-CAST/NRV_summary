@@ -577,7 +577,7 @@ plotFun <- function(sim) {
       lapply(seq_len(nPages), function(pg) {
         ggvio <- plot_by_species(mod[[refCode]][[f]], "violin", page = pg) +
           geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
-        ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_via_plot", "_p", pg, ".png")), ggvio,
+        ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_vio_plot", "_p", pg, ".png")), ggvio,
                height = 10, width = 16)
       })
     })
