@@ -172,6 +172,9 @@ Init <- function(sim) {
   mod$vtmTimeSeries <- gsub(".*TimeSinceFire.*", NA, mod$allouts) |>
     grep(paste(P(sim)$timeSeriesTimes, collapse = "|"), x = _, value = TRUE)
 
+  mod$flm <- file.path(outputPath(sim), "rstFlammable.tif")
+  writeRaster(sim$flammableMap, mod$flm, overwrite = TRUE)
+
   # ! ----- STOP EDITING ----- ! #
 
   return(invisible(sim))
@@ -324,6 +327,7 @@ patchAges <- function(vtm, tsf) {
 }
 
 patchStats <- function(vtm, tsf, flm, polyNames, summaryPolys, polyCol, funList) {
+  f <- raster::raster(flm)
   t <- raster::raster(tsf)
   v <- raster::raster(vtm)
   byPoly <- lapply(polyNames, function(polyName) {
@@ -331,7 +335,7 @@ patchStats <- function(vtm, tsf, flm, polyNames, summaryPolys, polyCol, funList)
                   "  tsf:", basename(tsf)))
     subpoly <- summaryPolys[summaryPolys[[polyCol]] == polyName, ]
 
-    fc <- raster::crop(flm, subpoly)
+    fc <- raster::crop(f, subpoly)
 
     tc <- raster::crop(t, subpoly)
     tcm <- raster::mask(tc, subpoly)
@@ -374,15 +378,15 @@ calculatePatchMetrics <- function(summaryPolys, polyCol, flm, vtm, tsf) {
   ptch_stats <- future.apply::future_mapply(
     patchStats, vtm = vtm, tsf = tsf,
     MoreArgs = list(
-     flm = flm,
-     polyCol = polyCol,
-     polyNames = polyNames,
-     summaryPolys = summaryPolys,
-     funList = funList
-   ),
-   SIMPLIFY = FALSE,
-   future.globals = funList,
-   future.packages = c("dplyr", "landscapemetrics", "raster", "sf") ## "terra"
+      flm = flm,
+      polyCol = polyCol,
+      polyNames = polyNames,
+      summaryPolys = summaryPolys,
+      funList = funList
+    ),
+    SIMPLIFY = FALSE,
+    future.globals = funList,
+    future.packages = c("dplyr", "landscapemetrics", "raster", "sf") ## "terra"
   )
   names(ptch_stats) <- basename(dirname(vtm)) ## repXX
 
@@ -468,17 +472,15 @@ patchMetrics <- function(sim) {
     refCode <- paste0("pm_", md[layerName == p, ][["shortName"]])
     refCodeCC <- paste0(refCode, "_CC")
 
-    flm <- deepcopy(sim$flammableMap)
-
     ## CC
     fileInfo <- file.info(fname1, fname2)[, c("size", "mtime")]
-    mod[[refCodeCC]] <- Cache(calculatePatchMetrics, tsf = fname2, vtm = fname1, flm = flm,
+    mod[[refCodeCC]] <- Cache(calculatePatchMetrics, tsf = fname2, vtm = fname1, flm = mod$flm,
                               summaryPoly = rptPoly, polyCol = rptPolyCol,
                               .cacheExtra = fileInfo)
 
     ## simulation results
     fileInfo <- file.info(mod$tsf, mod$vtm)[, c("size", "mtime")]
-    mod[[refCode]] <- Cache(calculatePatchMetrics, tsf = mod$tsf, vtm = mod$vtm, flm = flm,
+    mod[[refCode]] <- Cache(calculatePatchMetrics, tsf = mod$tsf, vtm = mod$vtm, flm = mod$flm,
                             summaryPoly = rptPoly, polyCol = rptPolyCol,
                             .cacheExtra = fileInfo)
 
