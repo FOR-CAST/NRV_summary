@@ -17,8 +17,10 @@ defineModule(sim, list(
                   "landscapemetrics",
                   "PredictiveEcology/LandR@development (>= 1.1.0.9072)",
                   "PredictiveEcology/LandWebUtils@development (>= 0.1.5)",
+                  "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
                   "raster", "sf", "sp",
-                  "PredictiveEcology/SpaDES.core@development (>= 1.1.1)"),
+                  "PredictiveEcology/SpaDES.core@development (>= 1.1.1)",
+                  "terra"),
   parameters = bindrows(
     defineParameter("ageClasses", "character", LandWebUtils:::.ageClasses, NA, NA, ## TODO: using 20 yr inc.
                     "descriptions/labels for age classes (seral stages)"),
@@ -336,7 +338,14 @@ patchAges <- function(vtm, sam) {
 
   df <- rbindlist(lapply(names(ptchs), function(p) {
     ids <- which(!is.na(ptchs[[p]][]))
-    data.frame(layer = 1L, level = "patch", class = p, id = ptchs[[p]][ids], metric = "sam_mdn", sam = sam[ids]) |>
+    data.frame(
+      layer = 1L,
+      level = "patch",
+      class = p,
+      id = values(ptchs[[p]], mat = FALSE)[ids],
+      metric = "sam_mdn",
+      sam = sam[ids]
+    ) |>
       group_by(layer, level, class, id, metric) |>
       summarise(value = median(sam, na.rm = TRUE))
   }))
@@ -623,8 +632,7 @@ plotFun <- function(sim) {
 }
 
 .inputObjects <- function(sim) {
-  #cacheTags <- c(currentModule(sim), "function:.inputObjects") ## uncomment this if Cache is being used
-  dPath <- asPath(getOption("reproducible.destinationPath", dataPath(sim)), 1)
+  dPath <- asPath(getOption("reproducible.destinationPath", inputPath(sim)), 1)
   message(currentModule(sim), ": using dataPath '", dPath, "'.")
 
   # ! ----- EDIT BELOW ----- ! #
