@@ -632,7 +632,7 @@ plotFun <- function(sim) {
 }
 
 .inputObjects <- function(sim) {
-  dPath <- asPath(getOption("reproducible.destinationPath", inputPath(sim)), 1)
+  dPath <- asPath(inputPath(sim), 1)
   message(currentModule(sim), ": using dataPath '", dPath, "'.")
 
   # ! ----- EDIT BELOW ----- ! #
