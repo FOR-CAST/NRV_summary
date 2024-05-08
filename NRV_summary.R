@@ -471,7 +471,52 @@ plotFun <- function(sim) {
     append(pngs2a, pngs2b)
   })
 
-  mod$files2upload <- c(unlist(pngs1), unlist(pngs2)) ## TODO: append these to sim outputs
+  pngs3 <- lapply(mod$rptPolyNames, function(p) {
+    rptPoly <- sim$ml[[p]]
+
+    if (is(rptPoly, "Spatial")) {
+      rptPoly <- st_as_sf(rptPoly)
+    } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
+      rptPoly <- st_collection_extract(rptPoly, "POLYGON")
+    }
+    rptPolyCol <- sim$ml@metadata[layerName == p, ][["columnNameForLabels"]]
+    refCode <- paste0("sspm_", sim$ml@metadata[layerName == p, ][["shortName"]])
+    refCodeCC <- paste0(refCode, "_CC")
+
+    pngs3a <- lapply(names(mod[[refCode]]), function(f) {
+      write.csv(mod[[refCode]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")))
+      write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")))
+
+      ## TODO: use Plots
+      ggbox1 <- plot_by_species(mod[[refCode]][[f]], "box") +
+        geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
+      nPages <- n_pages(ggbox1)
+      lapply(seq_len(nPages), function(pg) {
+        ggbox <- plot_by_species(mod[[refCode]][[f]], "box", page = pg) +
+          geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
+        ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_box_plot", "_p", pg, ".png")), ggbox,
+               height = 10, width = 16)
+      })
+    })
+
+    pngs3b <- lapply(names(mod[[refCode]]), function(f) {
+      ## TODO: use Plots
+      ggvio1 <- plot_by_species(mod[[refCode]][[f]], "violin") +
+        geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
+      nPages <- n_pages(ggvio1)
+      lapply(seq_len(nPages), function(pg) {
+        ggvio <- plot_by_species(mod[[refCode]][[f]], "violin", page = pg) +
+          geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
+        ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_vio_plot", "_p", pg, ".png")), ggvio,
+               height = 10, width = 16)
+      })
+    })
+
+    append(pngs3a, pngs3b)
+  })
+
+
+  mod$files2upload <- c(unlist(pngs1), unlist(pngs2), unlist(pngs3)) ## TODO: append these to sim outputs
 
   # ! ----- STOP EDITING ----- ! #
   return(invisible(sim))
