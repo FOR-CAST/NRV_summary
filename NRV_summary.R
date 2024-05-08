@@ -267,7 +267,7 @@ patchMetrics <- function(sim) {
   fname1 <- file.path(outputPath(sim), "vegTypeMap_year0000.tif")
   writeRaster(vtmCC, fname1, datatype = "INT1U", overwrite = TRUE)
 
-  samCC <- sim$ml[["CC TSF"]] ## TODO: needs to be renamed in preamble
+  samCC <- if (is.null(sim$ml[["CC SAM"]])) sim$ml[["CC TSF"]] else sim$ml[["CC SAM"]]
   if (is(samCC, "PackedSpatRaster")) {
     samCC <- unwrap(samCC) ## TODO: why is this necessary???
   }
