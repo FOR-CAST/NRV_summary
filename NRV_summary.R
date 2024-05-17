@@ -15,9 +15,9 @@ defineModule(sim, list(
   reqdPkgs = list("data.table", "dplyr", "fs", "future.apply", "future.callr",
                   "ggforce", "ggplot2", "googledrive",
                   "landscapemetrics",
-                  "PredictiveEcology/LandR@development (>= 1.1.0.9072)",
+                  "PredictiveEcology/LandR@development (>= 1.1.1)",
                   "PredictiveEcology/LandWebUtils@development (>= 0.1.5)",
-                  "FOR-CAST/nrvtools (>= 0.0.5)",
+                  "FOR-CAST/nrvtools (>= 0.0.7)",
                   "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
                   "raster", "sf", "sp",
                   "PredictiveEcology/SpaDES.core@development (>= 1.1.1)",
@@ -29,6 +29,13 @@ defineModule(sim, list(
                     "defines the age boundaries between age classes"),
     defineParameter("ageClassMaxAge", "integer", 400L, NA, NA,
                     "maximum possible age"),
+    defineParameter("postprocessEvents", "character", c("lm", "pm"), NA, NA,
+                    paste("Specify which subset of postprocessing events to run.",
+                          "At least one of:",
+                          "'lm' for default landscape metrics;",
+                          "'pm' for default patch metrics;",
+                          "'bc' for BC seral stage patch metrics;",
+                          "'on' for ON patch metrics.")),
     defineParameter("reps", "integer", 1L:10L, 1L, NA_integer_,
                     paste("number of replicates/runs per study area.")),
     defineParameter("sppEquivCol", "character", "EN_generic_short", NA, NA,
@@ -92,6 +99,23 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
     eventType,
     init = {
       sim <- Init(sim)
+
+      if ("lm" %in% tolower(P(sim)$postprocessEvents)) {
+        sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_lm", .last())
+      }
+
+      if ("pm" %in% tolower(P(sim)$postprocessEvents)) {
+        sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_pm", .last())
+      }
+
+      if ("bc" %in% tolower(P(sim)$postprocessEvents)) {
+        sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_bc", .last())
+      }
+
+      if ("on" %in% tolower(P(sim)$postprocessEvents)) {
+        sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_on", .last())
+      }
+
       sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess", .last())
       sim <- scheduleEvent(sim, end(sim), "NRV_summary", "plot", .last())
 
@@ -102,19 +126,22 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
     plot = {
       plotFun(sim)
     },
-    postprocess = {
-      # ! ----- EDIT BELOW ----- ! #
-      # do stuff for this event
-
-      sim <- landscapeMetrics(sim)
+    postprocess_lm = {
+      sim <- landscapeMetrics(sim) ## TODO: warning: Number of classes must be >= 3, IJI = NA.
+    },
+    postprocess_pm = {
       sim <- patchMetrics(sim)
-      sim <- patchMetricsSeral(sim) ## TODO: only run in BC
-
-      # ! ----- STOP EDITING ----- ! #
+    },
+    postprocess_bc = {
+      sim <- patchMetricsSeral(sim)
+    },
+    postprocess_on = {
+      ## TODO finalize implementation
+      message("Ontario NRV metrics are not yet fully implemented.")
     },
     upload = {
       # ! ----- EDIT BELOW ----- ! #
-      browser() ## TODO
+      browser() ## TODO: split uploads based on P(sim)$postprocessEvent + test
       mod$files2upload <- set_names(mod$files2upload, basename(mod$files2upload))
 
       gid <- as_id(sim$uploadTo[[P(sim)$.studyAreaName]])
@@ -220,7 +247,7 @@ landscapeMetrics <- function(sim) {
     "lsm_l_core_cv",
     "lsm_l_ed",
     "lsm_l_iji"
-  )
+  ) ## TODO: pass this further up via parameter funList_lm
 
   lapply(mod$rptPolyNames, function(p) {
     message(crayon::magenta("Calculating landscape metrics for", p, "..."))
@@ -269,14 +296,14 @@ patchMetrics <- function(sim) {
 
   samCC <- if (is.null(sim$ml[["CC SAM"]])) sim$ml[["CC TSF"]] else sim$ml[["CC SAM"]]
   if (is(samCC, "PackedSpatRaster")) {
-    samCC <- unwrap(samCC) ## TODO: why is this necessary???
+    samCC <- unwrap(samCC) ## TODO: why is this necessary? saveSimList wraps Spat* objects
   }
   fname2 <- file.path(outputPath(sim), "standAgeMap_year0000.tif")
   writeRaster(samCC, fname2, datatype = "INT1U", overwrite = TRUE)
 
   md <- sim$ml@metadata
 
-  funList <- list("patchAges", "patchAreas")
+  funList <- list("patchAges", "patchAreas") ## TODO: pass this further up via parameter funList_pm
 
   lapply(mod$rptPolyNames, function(p) {
     message(crayon::magenta("Calculating patch metrics for", p, "..."))
@@ -357,7 +384,7 @@ patchMetricsSeral <- function(sim) {
 
   md <- sim$ml@metadata
 
-  funList <- list("patchAges", "patchAreas")
+  # funList <- list("patchAreasSeral") ## TODO: pass further up via parameter funList_bc
 
   lapply(mod$rptPolyNames, function(p) {
     message(crayon::magenta("Calculating seral stage patch metrics for", p, "..."))
@@ -378,14 +405,14 @@ patchMetricsSeral <- function(sim) {
     fileInfo <- file.info(fssm)[, c("size", "mtime")]
     mod[[refCodeCC]] <- Cache(calculatePatchMetricsSeral, ssm = fssm0, flm = mod$flm,
                               summaryPoly = rptPoly, polyCol = rptPolyCol,
-                              funList = funList,
+                              # funList = funList, ## TODO: allow passing funList
                               .cacheExtra = fileInfo)
 
     ## simulation results
     fileInfo <- file.info(mod$ssm)[, c("size", "mtime")]
     mod[[refCode]] <- Cache(calculatePatchMetricsSeral, ssm = mod$ssm, flm = mod$flm,
                             summaryPoly = rptPoly, polyCol = rptPolyCol,
-                            funList = funList,
+                            # funList = funList, ## TODO: allow passing funList
                             .cacheExtra = fileInfo)
 
     return(invisible(NULL))
@@ -398,80 +425,86 @@ patchMetricsSeral <- function(sim) {
 plotFun <- function(sim) {
   # ! ----- EDIT BELOW ----- ! #
 
-  pngs1 <- lapply(mod$rptPolyNames, function(p) {
-    rptPoly <- sim$ml[[p]]
+  pngs_lm <- pngs_pm <- pngs_bc <- pngs_on <- list()
 
-    if (is(rptPoly, "Spatial")) {
-      rptPoly <- st_as_sf(rptPoly)
-    } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
-      rptPoly <- st_collection_extract(rptPoly, "POLYGON")
-    }
-    rptPolyCol <- sim$ml@metadata[layerName == p, ][["columnNameForLabels"]]
-    refCode <- paste0("lm_", sim$ml@metadata[layerName == p, ][["shortName"]])
-    refCodeCC <- paste0(refCode, "_CC")
+  if ("lm" %in% tolower(P(sim)$postprocessEvents)) {
+    pngs_lm <- lapply(mod$rptPolyNames, function(p) {
+      rptPoly <- sim$ml[[p]]
 
-    lapply(names(mod[[refCode]]), function(f) {
-      write.csv(mod[[refCode]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")))
-      write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")))
+      if (is(rptPoly, "Spatial")) {
+        rptPoly <- st_as_sf(rptPoly)
+      } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
+        rptPoly <- st_collection_extract(rptPoly, "POLYGON")
+      }
+      rptPolyCol <- sim$ml@metadata[layerName == p, ][["columnNameForLabels"]]
+      refCode <- paste0("lm_", sim$ml@metadata[layerName == p, ][["shortName"]])
+      refCodeCC <- paste0(refCode, "_CC")
 
-      ## TODO: use Plots
-      gg1 <- plot_over_time(mod[[refCode]][[f]], substr(f, 7, nchar(f))) +
-        geom_hline(data = mod[[refCodeCC]][[f]], aes(yintercept = mn), col = "darkred", linetype = 2)
-      nPages <- n_pages(gg1)
-      lapply(seq_len(nPages), function(pg) {
-        gg <- plot_over_time(mod[[refCode]][[f]], substr(f, 7, nchar(f)), page = pg) +
+      lapply(names(mod[[refCode]]), function(f) {
+        write.csv(mod[[refCode]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")))
+        write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")))
+
+        ## TODO: use Plots
+        gg1 <- plot_over_time(mod[[refCode]][[f]], substr(f, 7, nchar(f))) +
           geom_hline(data = mod[[refCodeCC]][[f]], aes(yintercept = mn), col = "darkred", linetype = 2)
-        ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_p", pg, ".png")), gg,
-               height = 10, width = 16)
+        nPages <- n_pages(gg1)
+        lapply(seq_len(nPages), function(pg) {
+          gg <- plot_over_time(mod[[refCode]][[f]], substr(f, 7, nchar(f)), page = pg) +
+            geom_hline(data = mod[[refCodeCC]][[f]], aes(yintercept = mn), col = "darkred", linetype = 2)
+          ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_p", pg, ".png")), gg,
+                 height = 10, width = 16)
+        })
       })
     })
-  })
+  }
 
-  pngs2 <- lapply(mod$rptPolyNames, function(p) {
-    rptPoly <- sim$ml[[p]]
+  if ("pm" %in% tolower(P(sim)$postprocessEvents)) {
+    pngs_pm <- lapply(mod$rptPolyNames, function(p) {
+      rptPoly <- sim$ml[[p]]
 
-    if (is(rptPoly, "Spatial")) {
-      rptPoly <- st_as_sf(rptPoly)
-    } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
-      rptPoly <- st_collection_extract(rptPoly, "POLYGON")
-    }
-    rptPolyCol <- sim$ml@metadata[layerName == p, ][["columnNameForLabels"]]
-    refCode <- paste0("pm_", sim$ml@metadata[layerName == p, ][["shortName"]])
-    refCodeCC <- paste0(refCode, "_CC")
+      if (is(rptPoly, "Spatial")) {
+        rptPoly <- st_as_sf(rptPoly)
+      } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
+        rptPoly <- st_collection_extract(rptPoly, "POLYGON")
+      }
+      rptPolyCol <- sim$ml@metadata[layerName == p, ][["columnNameForLabels"]]
+      refCode <- paste0("pm_", sim$ml@metadata[layerName == p, ][["shortName"]])
+      refCodeCC <- paste0(refCode, "_CC")
 
-    pngs2a <- lapply(names(mod[[refCode]]), function(f) {
-      write.csv(mod[[refCode]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")))
-      write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")))
+      pngs_pm_a <- lapply(names(mod[[refCode]]), function(f) {
+        write.csv(mod[[refCode]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")))
+        write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")))
 
-      ## TODO: use Plots
-      ggbox1 <- plot_by_species(mod[[refCode]][[f]], "box") +
-        geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
-      nPages <- n_pages(ggbox1)
-      lapply(seq_len(nPages), function(pg) {
-        ggbox <- plot_by_species(mod[[refCode]][[f]], "box", page = pg) +
+        ## TODO: use Plots
+        ggbox1 <- plot_by_species(mod[[refCode]][[f]], "box") +
           geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
-        ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_box_plot", "_p", pg, ".png")), ggbox,
-               height = 10, width = 16)
+        nPages <- n_pages(ggbox1)
+        lapply(seq_len(nPages), function(pg) {
+          ggbox <- plot_by_species(mod[[refCode]][[f]], "box", page = pg) +
+            geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
+          ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_box_plot", "_p", pg, ".png")), ggbox,
+                 height = 10, width = 16)
+        })
       })
-    })
 
-    pngs2b <- lapply(names(mod[[refCode]]), function(f) {
-      ## TODO: use Plots
-      ggvio1 <- plot_by_species(mod[[refCode]][[f]], "violin") +
-        geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
-      nPages <- n_pages(ggvio1)
-      lapply(seq_len(nPages), function(pg) {
-        ggvio <- plot_by_species(mod[[refCode]][[f]], "violin", page = pg) +
+      pngs_pm_b <- lapply(names(mod[[refCode]]), function(f) {
+        ## TODO: use Plots
+        ggvio1 <- plot_by_species(mod[[refCode]][[f]], "violin") +
           geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
-        ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_vio_plot", "_p", pg, ".png")), ggvio,
-               height = 10, width = 16)
+        nPages <- n_pages(ggvio1)
+        lapply(seq_len(nPages), function(pg) {
+          ggvio <- plot_by_species(mod[[refCode]][[f]], "violin", page = pg) +
+            geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
+          ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_vio_plot", "_p", pg, ".png")), ggvio,
+                 height = 10, width = 16)
+        })
       })
+
+      append(png_pm_2a, pngs_pm_b)
     })
+  }
 
-    append(pngs2a, pngs2b)
-  })
-
-  pngs3 <- lapply(mod$rptPolyNames, function(p) {
+  pngs_bc <- lapply(mod$rptPolyNames, function(p) {
     rptPoly <- sim$ml[[p]]
 
     if (is(rptPoly, "Spatial")) {
@@ -483,7 +516,7 @@ plotFun <- function(sim) {
     refCode <- paste0("sspm_", sim$ml@metadata[layerName == p, ][["shortName"]])
     refCodeCC <- paste0(refCode, "_CC")
 
-    pngs3a <- lapply(names(mod[[refCode]]), function(f) {
+    pngs_bc_a <- lapply(names(mod[[refCode]]), function(f) {
       write.csv(mod[[refCode]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")))
       write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")))
 
@@ -499,7 +532,7 @@ plotFun <- function(sim) {
       })
     })
 
-    pngs3b <- lapply(names(mod[[refCode]]), function(f) {
+    pngs_bc_b <- lapply(names(mod[[refCode]]), function(f) {
       ## TODO: use Plots
       ggvio1 <- plot_by_species(mod[[refCode]][[f]], "violin") +
         geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
@@ -512,11 +545,19 @@ plotFun <- function(sim) {
       })
     })
 
-    append(pngs3a, pngs3b)
+    append(pngs_bc_a, pngs_bc_b)
   })
 
+  if ("on" %in% tolower(P(sim)$postprocessEvents)) {
+    ## TODO
+  }
 
-  mod$files2upload <- c(unlist(pngs1), unlist(pngs2), unlist(pngs3)) ## TODO: append these to sim outputs
+  mod$files2upload <- c(
+    unlist(pngs_lm),
+    unlist(pngs_pm),
+    unlist(pngs_bc),
+    unlist(pngs_on)
+  ) ## TODO: append these to sim outputs
 
   # ! ----- STOP EDITING ----- ! #
   return(invisible(sim))
