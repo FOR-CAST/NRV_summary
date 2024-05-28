@@ -13,19 +13,18 @@ defineModule(sim, list(
   citation = list("citation.bib"),
   documentation = list("README.md", "NRV_summary.Rmd"), ## same file
   reqdPkgs = list("data.table", "dplyr", "fs", "future.apply", "future.callr",
-                  "ggforce", "ggplot2", "googledrive",
-                  "landscapemetrics",
+                  "ggforce", "ggplot2", "googledrive", "landscapemetrics",
                   "PredictiveEcology/LandR@development (>= 1.1.1)",
                   "PredictiveEcology/LandWebUtils@development (>= 0.1.5)",
-                  "FOR-CAST/nrvtools (>= 0.0.7)",
+                  "FOR-CAST/nrvtools (>= 0.0.15)",
                   "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
                   "raster", "sf", "sp",
                   "PredictiveEcology/SpaDES.core@development (>= 1.1.1)",
                   "terra"),
   parameters = bindrows(
-    defineParameter("ageClasses", "character", LandWebUtils:::.ageClasses, NA, NA, ## TODO: using 20 yr inc.
+    defineParameter("ageClasses", "character", LandWebUtils:::.ageClasses, NA, NA,
                     "descriptions/labels for age classes (seral stages)"),
-    defineParameter("ageClassCutOffs", "integer", LandWebUtils:::.ageClassCutOffs, NA, NA,  ## TODO: using 20 yr inc.
+    defineParameter("ageClassCutOffs", "integer", LandWebUtils:::.ageClassCutOffs, NA, NA,
                     "defines the age boundaries between age classes"),
     defineParameter("ageClassMaxAge", "integer", 400L, NA, NA,
                     "maximum possible age"),
@@ -133,7 +132,8 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       sim <- patchMetrics(sim)
     },
     postprocess_bc = {
-      sim <- patchMetricsSeral(sim)
+      sim <- makeSeralStageMapsBC(sim)
+      sim <- patchMetricsSeralBC(sim)
     },
     postprocess_on = {
       ## TODO finalize implementation
@@ -235,48 +235,50 @@ landscapeMetrics <- function(sim) {
                  sppEquivCol = P(sim)$sppEquivCol,
                  colors = sim$sppColorVect,
                  doAssertion = FALSE)
-  fname1 <- file.path(outputPath(sim), "vegTypeMap_year0000.tif")
-  writeRaster(vtmCC, fname1, datatype = "INT1U", overwrite = TRUE)
+  vtm0 <- file.path(outputPath(sim), "vegTypeMap_year0000.tif")
+  writeRaster(vtmCC, vtm0, datatype = "INT1U", overwrite = TRUE)
 
   md <- sim$ml@metadata
 
-  funList <- list(
-    "lsm_l_area_mn",
-    "lsm_l_cohesion",
-    "lsm_l_condent",
-    "lsm_l_core_cv",
-    "lsm_l_ed",
-    "lsm_l_iji"
-  ) ## TODO: pass this further up via parameter funList_lm
+  ## sim$ml[[grep("\\(studyArea\\)", names(sim$ml), value = TRUE)]]
+  studyArea3 <- map::studyArea(sim$ml, 3)
 
-  lapply(mod$rptPolyNames, function(p) {
+  funList <- default_landscape_metrics() ## TODO: pass this further up via parameter funList_lm
+
+  oldPlan <- future::plan() |>
+    tweak(workers = pemisc::optimalClusterNum(5000, length(sim$vtm))) |>
+    future::plan()
+  on.exit(future::plan(oldPlan), add = TRUE)
+
+  lapply(mod$rptPolyNames, function(p, reportingPolygons, studyArea) {
     message(crayon::magenta("Calculating landscape metrics for", p, "..."))
 
-    rptPoly <- sim$ml[[p]]
+    rptPoly <- reportingPolygons[[p]]
 
     if (is(rptPoly, "Spatial")) {
       rptPoly <- st_as_sf(rptPoly)
     } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
       rptPoly <- st_collection_extract(rptPoly, "POLYGON")
     }
-    rptPoly <- st_crop(rptPoly, studyArea(sim$ml, 3)) ## ensure cropped to studyArea
+    rptPoly <- st_crop(rptPoly, studyArea) ## ensure cropped to studyArea
 
     rptPolyCol <- md[layerName == p, ][["columnNameForLabels"]]
     refCode <- paste0("lm_", md[layerName == p, ][["shortName"]])
     refCodeCC <- paste0(refCode, "_CC")
 
     vtm <- mod$vtm
-    fileInfo <- file.info(vtm)[, c("size", "mtime")]
+    fileInfo <- file.info(vtm0)[, c("size", "mtime")]
     mod[[refCodeCC]] <- suppressWarnings({
-      Cache(calculateLandscapeMetrics, summaryPolys = rptPoly, polyCol = rptPolyCol, vtm = fname1,
-            funList = funList,
-            .cacheExtra = file.info(fname1)[, c("size", "mtime")])
+      Cache(calculateLandscapeMetrics, summaryPolys = rptPoly,
+            polyCol = rptPolyCol, vtm = vtm0, funList = funList,
+            .cacheExtra = fileInfo)
     })
 
-    mod[[refCode]] <- Cache(calculateLandscapeMetrics, summaryPolys = rptPoly, polyCol = rptPolyCol, vtm = vtm,
-                            funList = funList,
+    fileInfo <- file.info(vtm)[, c("size", "mtime")]
+    mod[[refCode]] <- Cache(calculateLandscapeMetrics, summaryPolys = rptPoly,
+                            polyCol = rptPolyCol, vtm = vtm, funList = funList,
                             .cacheExtra = fileInfo)
-  })
+  }, studyArea = studyArea3, reportingPolygons = sim$ml)
 
   return(invisible(sim))
 }
@@ -291,38 +293,46 @@ patchMetrics <- function(sim) {
                  sppEquivCol = P(sim)$sppEquivCol,
                  colors = sim$sppColorVect,
                  doAssertion = FALSE)
-  fname1 <- file.path(outputPath(sim), "vegTypeMap_year0000.tif")
-  writeRaster(vtmCC, fname1, datatype = "INT1U", overwrite = TRUE)
+  vtm0 <- file.path(outputPath(sim), "vegTypeMap_year0000.tif")
+  writeRaster(vtmCC, vtm0, datatype = "INT1U", overwrite = TRUE)
 
   samCC <- if (is.null(sim$ml[["CC SAM"]])) sim$ml[["CC TSF"]] else sim$ml[["CC SAM"]]
   if (is(samCC, "PackedSpatRaster")) {
     samCC <- unwrap(samCC) ## TODO: why is this necessary? saveSimList wraps Spat* objects
   }
-  fname2 <- file.path(outputPath(sim), "standAgeMap_year0000.tif")
-  writeRaster(samCC, fname2, datatype = "INT1U", overwrite = TRUE)
+  sam0 <- file.path(outputPath(sim), "standAgeMap_year0000.tif")
+  writeRaster(samCC, sam0, datatype = "INT1U", overwrite = TRUE)
+
+  ## sim$ml[[grep("\\(studyArea\\)", names(sim$ml), value = TRUE)]]
+  studyArea3 <- map::studyArea(sim$ml, 3)
 
   md <- sim$ml@metadata
 
-  funList <- list("patchAges", "patchAreas") ## TODO: pass this further up via parameter funList_pm
+  funList <- default_patch_metrics() ## TODO: pass this further up via parameter funList_pm
 
-  lapply(mod$rptPolyNames, function(p) {
+  oldPlan <- future::plan() |>
+    tweak(workers = pemisc::optimalClusterNum(5000, length(sim$vtm))) |>
+    future::plan()
+  on.exit(future::plan(oldPlan), add = TRUE)
+
+  lapply(mod$rptPolyNames, function(p, reportingPolygons, studyArea) {
     message(crayon::magenta("Calculating patch metrics for", p, "..."))
 
-    rptPoly <- sim$ml[[p]]
+    rptPoly <- reportingPolygons[[p]]
 
     if (is(rptPoly, "Spatial")) {
       rptPoly <- st_as_sf(rptPoly)
     } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
       rptPoly <- st_collection_extract(rptPoly, "POLYGON")
     }
-    rptPoly <- st_crop(rptPoly, studyArea(sim$ml, 3)) ## ensure cropped to studyArea
+    rptPoly <- st_crop(rptPoly, studyArea) ## ensure cropped to studyArea
     rptPolyCol <- md[layerName == p, ][["columnNameForLabels"]]
     refCode <- paste0("pm_", md[layerName == p, ][["shortName"]])
     refCodeCC <- paste0(refCode, "_CC")
 
     ## CC
-    fileInfo <- file.info(fname1, fname2)[, c("size", "mtime")]
-    mod[[refCodeCC]] <- Cache(calculatePatchMetrics, sam = fname2, vtm = fname1, flm = mod$flm,
+    fileInfo <- file.info(vtm0, sam0)[, c("size", "mtime")]
+    mod[[refCodeCC]] <- Cache(calculatePatchMetrics, sam = sam0, vtm = vtm0, flm = mod$flm,
                               summaryPoly = rptPoly, polyCol = rptPolyCol,
                               funList = funList,
                               .cacheExtra = fileInfo)
@@ -335,88 +345,121 @@ patchMetrics <- function(sim) {
                             .cacheExtra = fileInfo)
 
     return(invisible(NULL))
-  })
+  }, studyArea = studyArea3, reportingPolygons = sim$ml)
 
   return(invisible(sim))
 }
 
-patchMetricsSeral <- function(sim) {
+makeSeralStageMapsBC <- function(sim) {
+  message(crayon::magenta("Creating seral stage maps ..."))
+
   ## sim$ml[[grep("\\(studyArea\\)", names(sim$ml), value = TRUE)]]
   studyArea3 <- map::studyArea(sim$ml, 3)
   NDTBEC <- sf::st_crop(sim$ml$`BEC zones`, studyArea3) |>
     dplyr::mutate(NDTBEC = paste0(NATURAL_DISTURBANCE, "_", ZONE)) |>
     dplyr::group_by(NDTBEC) |>
     dplyr::summarise()
+  fNDTBEC <- file.path(outputPath(sim), "NDTBEC.shp")
+  sf::st_write(NDTBEC, fNDTBEC, delete_dsn = TRUE, quiet = TRUE)
+  rm(studyArea3, NDTBEC)
+
+  rebuild <- TRUE ## NOTE: used for testing/debugging only; keep TRUE.
 
   ## current conditions
   fssm0 <- file.path(outputPath(sim), "seralStageMap_year0000.tif")
-  if (!file.exists(fssm0)) {
-    cd0 <- file.path(outputPath(sim), "rep01", "cohortData_year0000.qs") ## TODO
-    pgm0 <- file.path(outputPath(sim), "rep01", "pixelGroupMap_year0000.tif") ## TODO
-    ssmCC <- seralStageMapGeneratorBC(cd0, pgm0, NDTBEC) |> Cache()
+  if (rebuild || !file.exists(fssm0)) {
+    cd0 <- file.path(outputPath(sim), "rep01", "cohortData_year0000.qs")
+    pgm0 <- file.path(outputPath(sim), "rep01", "pixelGroupMap_year0000.tif")
+    ssmCC <- nrvtools::seralStageMapGeneratorBC(cd0, pgm0, fNDTBEC) |> Cache()
     writeRaster(ssmCC, fssm0, datatype = "INT1U", overwrite = TRUE)
   } else {
     ssmCC <- terra::rast(fssm0)
   }
+  rm(ssmCC)
 
   ## simulated conditions
   fcd <- mod$cd
   fpgm <- mod$pgm
-  oldPlan <- plan(multisession, workers = pemisc::optimalClusterNum(30000, length(fcd)))
-  fssm <- future_mapply(
+
+  oldPlan <- future::plan() |>
+    tweak(workers = pemisc::optimalClusterNum(5000, length(fcd))) |>
+    future::plan()
+  on.exit(future::plan(oldPlan), add = TRUE)
+
+  ## TODO: very slow; ¿because of automatic serializing of objs in the FUN envir (namely `sim`)?
+  ## see <https://github.com/HenrikBengtsson/future.apply/issues/98>
+  ## and <https://github.com/HenrikBengtsson/future/issues/608>
+  fssm <- future.apply::future_mapply(
     FUN = function(cd, pgm, ndtbec) {
       f <- sub("pixelGroupMap", "seralStageMap", pgm)
-      # if (!file.exists(f)) {
+      if (rebuild || !file.exists(f)) {
         ssm <- nrvtools::seralStageMapGeneratorBC(cd, pgm, ndtbec) |> reproducible::Cache()
         terra::writeRaster(ssm, f, datatype = "INT1U", overwrite = TRUE)
         rm(ssm)
-      # }
+      }
       return(f)
     },
     cd = fcd,
     pgm = fpgm,
-    MoreArgs = list(ndtbec = NDTBEC),
-    future.globals = FALSE
+    MoreArgs = list(ndtbec = fNDTBEC),
+    future.globals = FALSE,
+    future.packages = c("nrvtools", "reproducible", "terra")
   )
-  plan(oldPlan)
 
+  mod$ssm0 <- fssm0
   mod$ssm <- fssm
+
+  return(invisible(sim))
+}
+
+patchMetricsSeralBC <- function(sim) {
+  fflm <- mod$flm
+  fssm <- mod$ssm
+  fssm0 <- mod$ssm0
 
   md <- sim$ml@metadata
 
-  # funList <- list("patchAreasSeral") ## TODO: pass further up via parameter funList_bc
+  ## sim$ml[[grep("\\(studyArea\\)", names(sim$ml), value = TRUE)]]
+  studyArea3 <- map::studyArea(sim$ml, 3)
 
-  lapply(mod$rptPolyNames, function(p) {
+  funList <- default_patch_metrics_seral() ## TODO: pass further up via parameter funList_bc
+
+  oldPlan <- future::plan() |>
+    tweak(workers = pemisc::optimalClusterNum(5000, length(fssm))) |>
+    future::plan()
+  on.exit(future::plan(oldPlan), add = TRUE)
+
+  lapply(mod$rptPolyNames, function(p, reportingPolygons, studyArea) {
     message(crayon::magenta("Calculating seral stage patch metrics for", p, "..."))
 
-    rptPoly <- sim$ml[[p]]
+    rptPoly <- reportingPolygons[[p]]
 
     if (is(rptPoly, "Spatial")) {
       rptPoly <- st_as_sf(rptPoly)
     } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
       rptPoly <- st_collection_extract(rptPoly, "POLYGON")
     }
-    rptPoly <- st_crop(rptPoly, studyArea3) ## ensure cropped to studyArea
+    rptPoly <- st_crop(rptPoly, studyArea) ## ensure cropped to studyArea
     rptPolyCol <- md[layerName == p, ][["columnNameForLabels"]]
     refCode <- paste0("sspm_", md[layerName == p, ][["shortName"]])
     refCodeCC <- paste0(refCode, "_CC")
 
     ## CC
     fileInfo <- file.info(fssm)[, c("size", "mtime")]
-    mod[[refCodeCC]] <- Cache(calculatePatchMetricsSeral, ssm = fssm0, flm = mod$flm,
+    mod[[refCodeCC]] <- Cache(calculatePatchMetricsSeral, ssm = fssm0, flm = fflm,
                               summaryPoly = rptPoly, polyCol = rptPolyCol,
-                              # funList = funList, ## TODO: allow passing funList
+                              funList = funList,
                               .cacheExtra = fileInfo)
 
     ## simulation results
     fileInfo <- file.info(mod$ssm)[, c("size", "mtime")]
-    mod[[refCode]] <- Cache(calculatePatchMetricsSeral, ssm = mod$ssm, flm = mod$flm,
+    mod[[refCode]] <- Cache(calculatePatchMetricsSeral, ssm = fssm, flm = fflm,
                             summaryPoly = rptPoly, polyCol = rptPolyCol,
-                            # funList = funList, ## TODO: allow passing funList
+                            funList = funList,
                             .cacheExtra = fileInfo)
 
     return(invisible(NULL))
-  })
+  }, studyArea = studyArea3, reportingPolygons = sim$ml)
 
   return(invisible(sim))
 }
@@ -443,7 +486,9 @@ plotFun <- function(sim) {
       lapply(names(mod[[refCode]]), function(f) {
         write.csv(mod[[refCode]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")))
         write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")))
+      })
 
+      lapply(names(mod[[refCode]]), function(f) {
         ## TODO: use Plots
         gg1 <- plot_over_time(mod[[refCode]][[f]], substr(f, 7, nchar(f))) +
           geom_hline(data = mod[[refCodeCC]][[f]], aes(yintercept = mn), col = "darkred", linetype = 2)
@@ -454,7 +499,8 @@ plotFun <- function(sim) {
           ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_p", pg, ".png")), gg,
                  height = 10, width = 16)
         })
-      })
+      }) |>
+        unlist()
     })
   }
 
@@ -471,36 +517,40 @@ plotFun <- function(sim) {
       refCode <- paste0("pm_", sim$ml@metadata[layerName == p, ][["shortName"]])
       refCodeCC <- paste0(refCode, "_CC")
 
-      pngs_pm_a <- lapply(names(mod[[refCode]]), function(f) {
+      lapply(names(mod[[refCode]]), function(f) {
         write.csv(mod[[refCode]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")))
         write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")))
+      })
 
+      pngs_pm_a <- lapply(names(mod[[refCode]]), function(f) {
         ## TODO: use Plots
-        ggbox1 <- plot_by_species(mod[[refCode]][[f]], "box") +
+        ggbox1 <- plot_by_class(mod[[refCode]][[f]], "box") +
           geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
         nPages <- n_pages(ggbox1)
         lapply(seq_len(nPages), function(pg) {
-          ggbox <- plot_by_species(mod[[refCode]][[f]], "box", page = pg) +
+          ggbox <- plot_by_class(mod[[refCode]][[f]], "box", page = pg) +
             geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
           ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_box_plot", "_p", pg, ".png")), ggbox,
                  height = 10, width = 16)
         })
-      })
+      }) |>
+        unlist()
 
       pngs_pm_b <- lapply(names(mod[[refCode]]), function(f) {
         ## TODO: use Plots
-        ggvio1 <- plot_by_species(mod[[refCode]][[f]], "violin") +
+        ggvio1 <- plot_by_class(mod[[refCode]][[f]], "violin") +
           geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
         nPages <- n_pages(ggvio1)
         lapply(seq_len(nPages), function(pg) {
-          ggvio <- plot_by_species(mod[[refCode]][[f]], "violin", page = pg) +
+          ggvio <- plot_by_class(mod[[refCode]][[f]], "violin", page = pg) +
             geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
           ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_vio_plot", "_p", pg, ".png")), ggvio,
                  height = 10, width = 16)
         })
-      })
+      }) |>
+        unlist()
 
-      append(png_pm_2a, pngs_pm_b)
+      c(png_pm_2a, pngs_pm_b)
     })
   }
 
@@ -517,36 +567,66 @@ plotFun <- function(sim) {
       refCode <- paste0("sspm_", sim$ml@metadata[layerName == p, ][["shortName"]])
       refCodeCC <- paste0(refCode, "_CC")
 
-      pngs_bc_a <- lapply(names(mod[[refCode]]), function(f) {
+      lapply(names(mod[[refCode]]), function(f) {
+        if (refCode == "sspm_NDTBEC" && f == "patchAreasSeral") {
+          seral_table <- mod[[refCode]][[f]] |>
+            na.omit() |>
+            mutate(class = as.factor(class), poly = as.factor(poly),
+                   mm = NULL, q1 = NULL, md = NULL, q3 = NULL, mx = NULL,
+                   sd = NULL, cv = NULL, se = NULL, ci = NULL, n = NULL) >
+            summarize(area = sum(N*mn), .by = c("class", "poly", "time")) |>
+            mutate(totalArea = sum(area, na.rm = TRUE), .by = c("poly", "time")) |>
+            summarize(meanPctArea = 100 * mean(area / totalArea, na.rm = TRUE), .by = c("class", "poly"))
+
+          write.csv(seral_table, file.path(outputPath(sim), "SeralTable.csv"), row.names = FALSE)
+        }
         write.csv(mod[[refCode]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")))
         write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")))
+      })
 
+      pngs_bc_a <- lapply(names(mod[[refCode]]), function(f) {
         ## TODO: use Plots
-        ggbox1 <- plot_by_species(mod[[refCode]][[f]], "box") +
+        ggbox1 <- plot_by_class(mod[[refCode]][[f]], "box") +
           geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
         nPages <- n_pages(ggbox1)
         lapply(seq_len(nPages), function(pg) {
-          ggbox <- plot_by_species(mod[[refCode]][[f]], "box", page = pg) +
+          ggbox <- plot_by_class(mod[[refCode]][[f]], "box", page = pg) +
             geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
           ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_box_plot", "_p", pg, ".png")), ggbox,
                  height = 10, width = 16)
         })
-      })
+      }) |>
+        unlist()
 
       pngs_bc_b <- lapply(names(mod[[refCode]]), function(f) {
         ## TODO: use Plots
-        ggvio1 <- plot_by_species(mod[[refCode]][[f]], "violin") +
+        ggvio1 <- plot_by_class(mod[[refCode]][[f]], "violin") +
           geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
         nPages <- n_pages(ggvio1)
         lapply(seq_len(nPages), function(pg) {
-          ggvio <- plot_by_species(mod[[refCode]][[f]], "violin", page = pg) +
+          ggvio <- plot_by_class(mod[[refCode]][[f]], "violin", page = pg) +
             geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
           ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_vio_plot", "_p", pg, ".png")), ggvio,
                  height = 10, width = 16)
         })
-      })
+      }) |>
+        unlist()
 
-      append(pngs_bc_a, pngs_bc_b)
+      pngs_bc_c <- lapply(names(mod[[refCode]]), function(f) {
+        ## TODO: use Plots
+        gg1 <- plot_over_time_by_class(mod[[refCode]][[f]], f) +
+          geom_hline(data = mod[[refCodeCC]][[f]], aes(yintercept = mn), linetype = 2)
+        nPages <- n_pages(gg1)
+        lapply(seq_len(nPages), function(pg) {
+          gg <- plot_over_time_by_class(mod[[refCode]][[f]], f, page = pg) +
+            geom_hline(data = mod[[refCodeCC]][[f]], aes(yintercept = mn), linetype = 2)
+          ggsave(file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_p", pg, ".png")), gg,
+                 height = 10, width = 16)
+        })
+      }) |>
+        unlist()
+
+      c(pngs_bc_a, pngs_bc_b, pngs_bc_c)
     })
   }
 
@@ -559,7 +639,7 @@ plotFun <- function(sim) {
     unlist(pngs_pm),
     unlist(pngs_bc),
     unlist(pngs_on)
-  ) ## TODO: append these to sim outputs
+  ) ## TODO: use registerOutputs()
 
   # ! ----- STOP EDITING ----- ! #
   return(invisible(sim))
@@ -572,7 +652,7 @@ plotFun <- function(sim) {
   # ! ----- EDIT BELOW ----- ! #
   fsim <- file.path(outputPath(sim), paste0("simOutPreamble_", P(sim)$.studyAreaName, ".qs"))
   if (!file.exists(fsim)) {
-    fsim <- file.path(tools::file_path_sans_ext(fsim), ".rds") ## fallback to rds if qs not used
+    fsim <- paste0(tools::file_path_sans_ext(fsim), ".rds") ## fallback to rds if qs not used
   }
   tmp <- loadSimList(fsim)
 
@@ -580,9 +660,18 @@ plotFun <- function(sim) {
     sim$ml <- tmp$ml ## TODO: can't load ml objects from qs file !!
   }
 
+  if (!suppliedElsewhere("flammableMap", sim)) {
+    sim$flammableMap <- tmp$flammableMap
+  }
+
   if (!suppliedElsewhere("sppEquiv", sim)) {
     sim$sppEquiv <- tmp$sppEquiv
   }
+
+  ## TODO
+  # if (!suppliedElsewhere("speciesLayers", sim)) {
+  #   sim$speciesLayers <- tmp2$speciesLayers
+  # }
 
   # ! ----- STOP EDITING ----- ! #
   return(invisible(sim))
