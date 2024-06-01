@@ -16,7 +16,7 @@ defineModule(sim, list(
                   "ggforce", "ggplot2", "googledrive", "landscapemetrics",
                   "PredictiveEcology/LandR@development (>= 1.1.1)",
                   "PredictiveEcology/LandWebUtils@development (>= 0.1.5)",
-                  "FOR-CAST/nrvtools (>= 0.0.15)",
+                  "FOR-CAST/nrvtools (>= 0.0.16)",
                   "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
                   "raster", "sf", "sp",
                   "PredictiveEcology/SpaDES.core@development (>= 1.1.1)",
@@ -226,6 +226,9 @@ Init <- function(sim) {
 
 ## build landscape metrics tables from vegetation type maps (VTMs)
 landscapeMetrics <- function(sim) {
+  fvtm0 <- file.path(outputPath(sim), "vegTypeMap_year0000.tif")
+  fvtm <- mod$vtm
+
   ## current conditions
   vtmCC <- Cache(vegTypeMapGenerator,
                  x = sim$speciesLayers,
@@ -235,8 +238,7 @@ landscapeMetrics <- function(sim) {
                  sppEquivCol = P(sim)$sppEquivCol,
                  colors = sim$sppColorVect,
                  doAssertion = FALSE)
-  vtm0 <- file.path(outputPath(sim), "vegTypeMap_year0000.tif")
-  writeRaster(vtmCC, vtm0, datatype = "INT1U", overwrite = TRUE)
+  writeRaster(vtmCC, fvtm0, datatype = "INT1U", overwrite = TRUE)
 
   md <- sim$ml@metadata
 
@@ -246,7 +248,7 @@ landscapeMetrics <- function(sim) {
   funList <- default_landscape_metrics() ## TODO: pass this further up via parameter funList_lm
 
   oldPlan <- future::plan() |>
-    tweak(workers = pemisc::optimalClusterNum(5000, length(sim$vtm))) |>
+    tweak(workers = pemisc::optimalClusterNum(5000, length(fvtm))) |>
     future::plan()
   on.exit(future::plan(oldPlan), add = TRUE)
 
@@ -266,24 +268,38 @@ landscapeMetrics <- function(sim) {
     refCode <- paste0("lm_", md[layerName == p, ][["shortName"]])
     refCodeCC <- paste0(refCode, "_CC")
 
-    vtm <- mod$vtm
-    fileInfo <- file.info(vtm0)[, c("size", "mtime")]
+    fileInfo <- file.info(fvtm0)[, c("size", "mtime")]
     mod[[refCodeCC]] <- suppressWarnings({
       Cache(calculateLandscapeMetrics, summaryPolys = rptPoly,
-            polyCol = rptPolyCol, vtm = vtm0, funList = funList,
+            polyCol = rptPolyCol, vtm = fvtm0, funList = funList,
             .cacheExtra = fileInfo)
     })
 
     fileInfo <- file.info(vtm)[, c("size", "mtime")]
     mod[[refCode]] <- Cache(calculateLandscapeMetrics, summaryPolys = rptPoly,
-                            polyCol = rptPolyCol, vtm = vtm, funList = funList,
+                            polyCol = rptPolyCol, vtm = fvtm, funList = funList,
                             .cacheExtra = fileInfo)
+
+    ## write data.frames to csv
+    lapply(names(mod[[refCode]]), function(f) {
+      write.csv(mod[[refCode]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")))
+      write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")))
+    })
+
+    return(invisible(NULL))
+
   }, studyArea = studyArea3, reportingPolygons = sim$ml)
 
   return(invisible(sim))
 }
 
 patchMetrics <- function(sim) {
+  fflm <- mod$flm
+  fsam0 <- file.path(outputPath(sim), "standAgeMap_year0000.tif")
+  fsam <- mod$sam
+  fvtm0 <- file.path(outputPath(sim), "vegTypeMap_year0000.tif")
+  fvtm <- mod$vtm
+
   ## current conditions
   vtmCC <- Cache(vegTypeMapGenerator,
                  x = sim$speciesLayers,
@@ -293,15 +309,13 @@ patchMetrics <- function(sim) {
                  sppEquivCol = P(sim)$sppEquivCol,
                  colors = sim$sppColorVect,
                  doAssertion = FALSE)
-  vtm0 <- file.path(outputPath(sim), "vegTypeMap_year0000.tif")
-  writeRaster(vtmCC, vtm0, datatype = "INT1U", overwrite = TRUE)
+  writeRaster(vtmCC, fvtm0, datatype = "INT1U", overwrite = TRUE)
 
   samCC <- if (is.null(sim$ml[["CC SAM"]])) sim$ml[["CC TSF"]] else sim$ml[["CC SAM"]]
   if (is(samCC, "PackedSpatRaster")) {
     samCC <- unwrap(samCC) ## TODO: why is this necessary? saveSimList wraps Spat* objects
   }
-  sam0 <- file.path(outputPath(sim), "standAgeMap_year0000.tif")
-  writeRaster(samCC, sam0, datatype = "INT1U", overwrite = TRUE)
+  writeRaster(samCC, fsam0, datatype = "INT1U", overwrite = TRUE)
 
   ## sim$ml[[grep("\\(studyArea\\)", names(sim$ml), value = TRUE)]]
   studyArea3 <- map::studyArea(sim$ml, 3)
@@ -311,7 +325,7 @@ patchMetrics <- function(sim) {
   funList <- default_patch_metrics() ## TODO: pass this further up via parameter funList_pm
 
   oldPlan <- future::plan() |>
-    tweak(workers = pemisc::optimalClusterNum(5000, length(sim$vtm))) |>
+    tweak(workers = pemisc::optimalClusterNum(5000, length(fvtm))) |>
     future::plan()
   on.exit(future::plan(oldPlan), add = TRUE)
 
@@ -331,18 +345,32 @@ patchMetrics <- function(sim) {
     refCodeCC <- paste0(refCode, "_CC")
 
     ## CC
-    fileInfo <- file.info(vtm0, sam0)[, c("size", "mtime")]
-    mod[[refCodeCC]] <- Cache(calculatePatchMetrics, sam = sam0, vtm = vtm0, flm = mod$flm,
-                              summaryPoly = rptPoly, polyCol = rptPolyCol,
-                              funList = funList,
-                              .cacheExtra = fileInfo)
+    fileInfo <- file.info(fvtm0, fsam0)[, c("size", "mtime")]
+    dfl_cc <- Cache(calculatePatchMetrics, sam = fsam0, vtm = fvtm0, flm = fflm,
+                    summaryPolys = rptPoly, polyCol = rptPolyCol,
+                    funList = funList,
+                    .cacheExtra = fileInfo)
+    lapply(names(dfl_cc), function(f) {
+      write.csv(dfl_cc[[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_raw.csv")), row.names = FALSE)
+    })
+    mod[[refCodeCC]] <- summarizePatchMetrics(dfl_cc)
 
     ## simulation results
-    fileInfo <- file.info(mod$sam, mod$vtm)[, c("size", "mtime")]
-    mod[[refCode]] <- Cache(calculatePatchMetrics, sam = mod$sam, vtm = mod$vtm, flm = mod$flm,
-                            summaryPoly = rptPoly, polyCol = rptPolyCol,
-                            funList = funList,
-                            .cacheExtra = fileInfo)
+    fileInfo <- file.info(fsam, fvtm)[, c("size", "mtime")]
+    dfl <- Cache(calculatePatchMetrics, sam = fsam, vtm = fvtm, flm = fflm,
+                 summaryPolys = rptPoly, polyCol = rptPolyCol,
+                 funList = funList,
+                 .cacheExtra = fileInfo)
+    lapply(names(dfl), function(f) {
+      write.csv(dfl[[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_raw.csv")), row.names = FALSE)
+    })
+    mod[[refCode]] <- summarizePatchMetrics(dfl)
+
+    ## write data.frames to csv
+    lapply(names(mod[[refCode]]), function(f) {
+      write.csv(mod[[refCode]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")), row.names = FALSE)
+      write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")), row.names = FALSE)
+    })
 
     return(invisible(NULL))
   }, studyArea = studyArea3, reportingPolygons = sim$ml)
@@ -355,59 +383,28 @@ makeSeralStageMapsBC <- function(sim) {
 
   ## sim$ml[[grep("\\(studyArea\\)", names(sim$ml), value = TRUE)]]
   studyArea3 <- map::studyArea(sim$ml, 3)
-  NDTBEC <- sf::st_crop(sim$ml$`BEC zones`, studyArea3) |>
-    dplyr::mutate(NDTBEC = paste0(NATURAL_DISTURBANCE, "_", ZONE)) |>
-    dplyr::group_by(NDTBEC) |>
-    dplyr::summarise()
+  NDTBEC <- sf::st_crop(sim$ml$`ecoregionLayer (NDTxBEC)`, studyArea3)
   fNDTBEC <- file.path(outputPath(sim), "NDTBEC.shp")
-  sf::st_write(NDTBEC, fNDTBEC, delete_dsn = TRUE, quiet = TRUE)
+  sf::st_write(NDTBEC, fNDTBEC, append = FALSE, quiet = TRUE)
   rm(studyArea3, NDTBEC)
 
-  rebuild <- TRUE ## NOTE: used for testing/debugging only; keep TRUE.
+  fcd0 <- file.path(outputPath(sim), "rep01", "cohortData_year0000.qs")
+  fpgm0 <- file.path(outputPath(sim), "rep01", "pixelGroupMap_year0000.tif")
 
-  ## current conditions
-  fssm0 <- file.path(outputPath(sim), "seralStageMap_year0000.tif")
-  if (rebuild || !file.exists(fssm0)) {
-    cd0 <- file.path(outputPath(sim), "rep01", "cohortData_year0000.qs")
-    pgm0 <- file.path(outputPath(sim), "rep01", "pixelGroupMap_year0000.tif")
-    ssmCC <- nrvtools::seralStageMapGeneratorBC(cd0, pgm0, fNDTBEC) |> Cache()
-    writeRaster(ssmCC, fssm0, datatype = "INT1U", overwrite = TRUE)
-  } else {
-    ssmCC <- terra::rast(fssm0)
-  }
-  rm(ssmCC)
+  fcd <- c(fcd0, mod$cd)
+  fpgm <- c(fpgm0, mod$pgm)
 
-  ## simulated conditions
-  fcd <- mod$cd
-  fpgm <- mod$pgm
-
-  oldPlan <- future::plan() |>
-    tweak(workers = pemisc::optimalClusterNum(5000, length(fcd))) |>
-    future::plan()
+  # oldPlan <- future::plan() |>
+  #   tweak(workers = pemisc::optimalClusterNum(5000, length(fcd))) |>
+  #   future::plan()
+  browser()
+  oldPlan <- future::plan(callr, workers = pemisc::optimalClusterNum(5000, length(fcd)))
   on.exit(future::plan(oldPlan), add = TRUE)
 
-  ## TODO: very slow; ¿because of automatic serializing of objs in the FUN envir (namely `sim`)?
-  ## see <https://github.com/HenrikBengtsson/future.apply/issues/98>
-  ## and <https://github.com/HenrikBengtsson/future/issues/608>
-  fssm <- future.apply::future_mapply(
-    FUN = function(cd, pgm, ndtbec) {
-      f <- sub("pixelGroupMap", "seralStageMap", pgm)
-      if (rebuild || !file.exists(f)) {
-        ssm <- nrvtools::seralStageMapGeneratorBC(cd, pgm, ndtbec) |> reproducible::Cache()
-        terra::writeRaster(ssm, f, datatype = "INT1U", overwrite = TRUE)
-        rm(ssm)
-      }
-      return(f)
-    },
-    cd = fcd,
-    pgm = fpgm,
-    MoreArgs = list(ndtbec = fNDTBEC),
-    future.globals = FALSE,
-    future.packages = c("nrvtools", "reproducible", "terra")
-  )
+  ssmFiles <- writeSeralStageMapBC(cd = fcd, pgm = fpgm, ndtbec = fNDTBEC)
 
-  mod$ssm0 <- fssm0
-  mod$ssm <- fssm
+  mod$ssm0 <- grep("seralStageMap_year0000.tif", ssmFiles, value = TRUE)
+  mod$ssm <- grep("seralStageMap_year0000.tif", ssmFiles, invert = TRUE, value = TRUE)
 
   return(invisible(sim))
 }
@@ -424,12 +421,15 @@ patchMetricsSeralBC <- function(sim) {
 
   funList <- default_patch_metrics_seral() ## TODO: pass further up via parameter funList_bc
 
+  rptPolygons <- sim$ml
+  rptPolyNames <- mod$rptPolyNames
+
   oldPlan <- future::plan() |>
     tweak(workers = pemisc::optimalClusterNum(5000, length(fssm))) |>
     future::plan()
   on.exit(future::plan(oldPlan), add = TRUE)
 
-  lapply(mod$rptPolyNames, function(p, reportingPolygons, studyArea) {
+  lapply(rptPolyNames, function(p, reportingPolygons, studyArea) {
     message(crayon::magenta("Calculating seral stage patch metrics for", p, "..."))
 
     rptPoly <- reportingPolygons[[p]]
@@ -446,20 +446,46 @@ patchMetricsSeralBC <- function(sim) {
 
     ## CC
     fileInfo <- file.info(fssm)[, c("size", "mtime")]
-    mod[[refCodeCC]] <- Cache(calculatePatchMetricsSeral, ssm = fssm0, flm = fflm,
-                              summaryPoly = rptPoly, polyCol = rptPolyCol,
-                              funList = funList,
-                              .cacheExtra = fileInfo)
+    dfl_cc <- Cache(calculatePatchMetricsSeral, ssm = fssm0, flm = fflm,
+                    summaryPolys = rptPoly, polyCol = rptPolyCol,
+                    funList = funList,
+                    .cacheExtra = fileInfo)
+    lapply(names(dfl_cc), function(f) {
+      write.csv(dfl_cc[[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_raw.csv")), row.names = FALSE)
+    })
+    mod[[refCodeCC]] <- summarizePatchMetricsSeral(dfl_cc)
 
     ## simulation results
     fileInfo <- file.info(mod$ssm)[, c("size", "mtime")]
-    mod[[refCode]] <- Cache(calculatePatchMetricsSeral, ssm = fssm, flm = fflm,
-                            summaryPoly = rptPoly, polyCol = rptPolyCol,
-                            funList = funList,
-                            .cacheExtra = fileInfo)
+    dfl <- Cache(calculatePatchMetricsSeral, ssm = fssm, flm = fflm,
+                 summaryPoly = rptPoly, polyCol = rptPolyCol,
+                 funList = funList,
+                 .cacheExtra = fileInfo)
+    lapply(names(dfl), function(f) {
+      write.csv(dfl[[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_raw.csv")), row.names = FALSE)
+    })
+    mod[[refCode]] <- summarizePatchMetricsSeral(dfl)
+
+    ## write data.frames to csv
+    lapply(names(mod[[refCode]]), function(f) {
+      if (refCode == "sspm_NDTBEC" && f == "patchAreasSeral") {
+        seral_table <- mod[[refCode]][[f]] |>
+          na.omit() |>
+          mutate(class = as.factor(class), poly = as.factor(poly),
+                 mm = NULL, q1 = NULL, md = NULL, q3 = NULL, mx = NULL,
+                 sd = NULL, cv = NULL, se = NULL, ci = NULL, n = NULL) >
+          summarize(area = sum(N * mn), .by = c("class", "poly", "time")) |> ## TODO: no 'N'???
+          mutate(totalArea = sum(area, na.rm = TRUE), .by = c("poly", "time")) |>
+          summarize(meanPctArea = 100 * mean(area / totalArea, na.rm = TRUE), .by = c("class", "poly"))
+
+        write.csv(seral_table, file.path(outputPath(sim), "SeralTable.csv"), row.names = FALSE)
+      }
+      write.csv(mod[[refCode]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")), row.names = FALSE)
+      write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")), row.names = FALSE)
+    })
 
     return(invisible(NULL))
-  }, studyArea = studyArea3, reportingPolygons = sim$ml)
+  }, studyArea = studyArea3, reportingPolygons = rptPolygons)
 
   return(invisible(sim))
 }
@@ -482,11 +508,6 @@ plotFun <- function(sim) {
       rptPolyCol <- sim$ml@metadata[layerName == p, ][["columnNameForLabels"]]
       refCode <- paste0("lm_", sim$ml@metadata[layerName == p, ][["shortName"]])
       refCodeCC <- paste0(refCode, "_CC")
-
-      lapply(names(mod[[refCode]]), function(f) {
-        write.csv(mod[[refCode]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")))
-        write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")))
-      })
 
       lapply(names(mod[[refCode]]), function(f) {
         ## TODO: use Plots
@@ -550,7 +571,7 @@ plotFun <- function(sim) {
       }) |>
         unlist()
 
-      c(png_pm_2a, pngs_pm_b)
+      c(pngs_pm_a, pngs_pm_b)
     })
   }
 
@@ -566,23 +587,6 @@ plotFun <- function(sim) {
       rptPolyCol <- sim$ml@metadata[layerName == p, ][["columnNameForLabels"]]
       refCode <- paste0("sspm_", sim$ml@metadata[layerName == p, ][["shortName"]])
       refCodeCC <- paste0(refCode, "_CC")
-
-      lapply(names(mod[[refCode]]), function(f) {
-        if (refCode == "sspm_NDTBEC" && f == "patchAreasSeral") {
-          seral_table <- mod[[refCode]][[f]] |>
-            na.omit() |>
-            mutate(class = as.factor(class), poly = as.factor(poly),
-                   mm = NULL, q1 = NULL, md = NULL, q3 = NULL, mx = NULL,
-                   sd = NULL, cv = NULL, se = NULL, ci = NULL, n = NULL) >
-            summarize(area = sum(N*mn), .by = c("class", "poly", "time")) |>
-            mutate(totalArea = sum(area, na.rm = TRUE), .by = c("poly", "time")) |>
-            summarize(meanPctArea = 100 * mean(area / totalArea, na.rm = TRUE), .by = c("class", "poly"))
-
-          write.csv(seral_table, file.path(outputPath(sim), "SeralTable.csv"), row.names = FALSE)
-        }
-        write.csv(mod[[refCode]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")))
-        write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")))
-      })
 
       pngs_bc_a <- lapply(names(mod[[refCode]]), function(f) {
         ## TODO: use Plots
