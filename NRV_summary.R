@@ -394,12 +394,9 @@ makeSeralStageMapsBC <- function(sim) {
   fcd <- c(fcd0, mod$cd)
   fpgm <- c(fpgm0, mod$pgm)
 
-  # oldPlan <- future::plan() |>
-  #   tweak(workers = pemisc::optimalClusterNum(5000, length(fcd))) |>
-  #   future::plan()
-  browser()
-  oldPlan <- future::plan(callr, workers = pemisc::optimalClusterNum(5000, length(fcd)))
-  on.exit(future::plan(oldPlan), add = TRUE)
+  oldPlan <- future::plan() |>
+    tweak(workers = pemisc::optimalClusterNum(5000, length(fcd))) |>
+    future::plan()
 
   ssmFiles <- writeSeralStageMapBC(cd = fcd, pgm = fpgm, ndtbec = fNDTBEC)
 
