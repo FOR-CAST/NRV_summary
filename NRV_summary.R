@@ -470,8 +470,9 @@ patchMetricsSeralBC <- function(sim) {
           na.omit() |>
           mutate(class = as.factor(class), poly = as.factor(poly),
                  mm = NULL, q1 = NULL, md = NULL, q3 = NULL, mx = NULL,
-                 sd = NULL, cv = NULL, se = NULL, ci = NULL, n = NULL) >
-          summarize(area = sum(N * mn), .by = c("class", "poly", "time")) |> ## TODO: no 'N'???
+                 sd = NULL, cv = NULL, se = NULL, ci = NULL, n = NULL) |>
+          ungroup() |>
+          summarize(area = sum(N * mn), .by = c("class", "poly", "time")) |>
           mutate(totalArea = sum(area, na.rm = TRUE), .by = c("poly", "time")) |>
           summarize(meanPctArea = 100 * mean(area / totalArea, na.rm = TRUE), .by = c("class", "poly"))
 
