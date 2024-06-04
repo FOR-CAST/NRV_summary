@@ -274,16 +274,16 @@ landscapeMetrics <- function(sim) {
             polyCol = rptPolyCol, vtm = fvtm0, funList = funList,
             .cacheExtra = fileInfo)
     })
+    lapply(names(mod[[refCodeCC]]), function(f) {
+      write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCodeCC, "_", f, "_CC.csv")), row.names = FALSE)
+    })
 
     fileInfo <- file.info(vtm)[, c("size", "mtime")]
     mod[[refCode]] <- Cache(calculateLandscapeMetrics, summaryPolys = rptPoly,
                             polyCol = rptPolyCol, vtm = fvtm, funList = funList,
                             .cacheExtra = fileInfo)
-
-    ## write data.frames to csv
     lapply(names(mod[[refCode]]), function(f) {
-      write.csv(mod[[refCode]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")))
-      write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")))
+      write.csv(mod[[refCode]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")), row.names = FALSE)
     })
 
     return(invisible(NULL))
@@ -351,9 +351,13 @@ patchMetrics <- function(sim) {
                     funList = funList,
                     .cacheExtra = fileInfo)
     lapply(names(dfl_cc), function(f) {
-      write.csv(dfl_cc[[f]], file.path(outputPath(sim), paste0(refCodeCC, "_", f, "_raw.csv")), row.names = FALSE)
+      write.csv(dfl_cc[[f]], file.path(outputPath(sim), paste0(refCodeCC, "_", f, "_CC_raw.csv")), row.names = FALSE)
     })
+
     mod[[refCodeCC]] <- summarizePatchMetrics(dfl_cc)
+    lapply(names(mod[[refCodeCC]]), function(f) {
+      write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")), row.names = FALSE)
+    })
 
     ## simulation results
     fileInfo <- file.info(fsam, fvtm)[, c("size", "mtime")]
@@ -364,12 +368,10 @@ patchMetrics <- function(sim) {
     lapply(names(dfl), function(f) {
       write.csv(dfl[[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_raw.csv")), row.names = FALSE)
     })
-    mod[[refCode]] <- summarizePatchMetrics(dfl)
 
-    ## write data.frames to csv
+    mod[[refCode]] <- summarizePatchMetrics(dfl)
     lapply(names(mod[[refCode]]), function(f) {
       write.csv(mod[[refCode]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")), row.names = FALSE)
-      write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")), row.names = FALSE)
     })
 
     return(invisible(NULL))
@@ -448,9 +450,12 @@ patchMetricsSeralBC <- function(sim) {
                     funList = funList,
                     .cacheExtra = fileInfo)
     lapply(names(dfl_cc), function(f) {
-      write.csv(dfl_cc[[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_raw.csv")), row.names = FALSE)
+      write.csv(dfl_cc[[f]], file.path(outputPath(sim), paste0(refCodeCC, "_", f, "_CC_raw.csv")), row.names = FALSE)
     })
     mod[[refCodeCC]] <- summarizePatchMetricsSeral(dfl_cc)
+    lapply(names(mod[[refCodeCC]]), function(f) {
+      write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCodeCC, "_", f, "_CC.csv")), row.names = FALSE)
+    })
 
     ## simulation results
     fileInfo <- file.info(mod$ssm)[, c("size", "mtime")]
@@ -462,8 +467,6 @@ patchMetricsSeralBC <- function(sim) {
       write.csv(dfl[[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_raw.csv")), row.names = FALSE)
     })
     mod[[refCode]] <- summarizePatchMetricsSeral(dfl)
-
-    ## write data.frames to csv
     lapply(names(mod[[refCode]]), function(f) {
       if (refCode == "sspm_NDTBEC" && f == "patchAreasSeral") {
         seral_table <- mod[[refCode]][[f]] |>
@@ -479,7 +482,6 @@ patchMetricsSeralBC <- function(sim) {
         write.csv(seral_table, file.path(outputPath(sim), "SeralTable.csv"), row.names = FALSE)
       }
       write.csv(mod[[refCode]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")), row.names = FALSE)
-      write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")), row.names = FALSE)
     })
 
     return(invisible(NULL))
@@ -535,11 +537,6 @@ plotFun <- function(sim) {
       rptPolyCol <- sim$ml@metadata[layerName == p, ][["columnNameForLabels"]]
       refCode <- paste0("pm_", sim$ml@metadata[layerName == p, ][["shortName"]])
       refCodeCC <- paste0(refCode, "_CC")
-
-      lapply(names(mod[[refCode]]), function(f) {
-        write.csv(mod[[refCode]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")))
-        write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")))
-      })
 
       pngs_pm_a <- lapply(names(mod[[refCode]]), function(f) {
         ## TODO: use Plots
