@@ -16,7 +16,7 @@ defineModule(sim, list(
                   "ggforce", "ggplot2", "googledrive", "landscapemetrics",
                   "PredictiveEcology/LandR@development (>= 1.1.1)",
                   "PredictiveEcology/LandWebUtils@development (>= 0.1.5)",
-                  "FOR-CAST/nrvtools (>= 0.0.16)",
+                  "FOR-CAST/nrvtools (>= 0.0.17)",
                   "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
                   "raster", "sf", "sp",
                   "PredictiveEcology/SpaDES.core@development (>= 1.1.1)",
@@ -399,6 +399,7 @@ makeSeralStageMapsBC <- function(sim) {
   oldPlan <- future::plan() |>
     tweak(workers = pemisc::optimalClusterNum(5000, length(fcd))) |>
     future::plan()
+  on.exit(plan(oldPlan), add = TRUE)
 
   ssmFiles <- writeSeralStageMapBC(cd = fcd, pgm = fpgm, ndtbec = fNDTBEC)
 
@@ -475,9 +476,14 @@ patchMetricsSeralBC <- function(sim) {
                  mm = NULL, q1 = NULL, md = NULL, q3 = NULL, mx = NULL,
                  sd = NULL, cv = NULL, se = NULL, ci = NULL, n = NULL) |>
           ungroup() |>
-          summarize(area = sum(N * mn), .by = c("class", "poly", "time")) |>
+          summarize(area = sum(N * mn, na.rm = TRUE), .by = c("class", "poly", "time")) |>
           mutate(totalArea = sum(area, na.rm = TRUE), .by = c("poly", "time")) |>
-          summarize(meanPctArea = 100 * mean(area / totalArea, na.rm = TRUE), .by = c("class", "poly"))
+          summarize(
+            minPctArea = 100 * min(area / totalArea, na.rm = TRUE),
+            meanPctArea = 100 * mean(area / totalArea, na.rm = TRUE),
+            maxPctArea = 100 * max(area / totalArea, na.rm = TRUE),
+            .by = c("class", "poly")
+          )
 
         write.csv(seral_table, file.path(outputPath(sim), "SeralTable.csv"), row.names = FALSE)
       }
