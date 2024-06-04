@@ -351,7 +351,7 @@ patchMetrics <- function(sim) {
                     funList = funList,
                     .cacheExtra = fileInfo)
     lapply(names(dfl_cc), function(f) {
-      write.csv(dfl_cc[[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_raw.csv")), row.names = FALSE)
+      write.csv(dfl_cc[[f]], file.path(outputPath(sim), paste0(refCodeCC, "_", f, "_raw.csv")), row.names = FALSE)
     })
     mod[[refCodeCC]] <- summarizePatchMetrics(dfl_cc)
 
