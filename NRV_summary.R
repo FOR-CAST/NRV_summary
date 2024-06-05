@@ -275,7 +275,7 @@ landscapeMetrics <- function(sim) {
             .cacheExtra = fileInfo)
     })
     lapply(names(mod[[refCodeCC]]), function(f) {
-      write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCodeCC, "_", f, "_CC.csv")), row.names = FALSE)
+      write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCodeCC, "_", f, ".csv")), row.names = FALSE)
     })
 
     fileInfo <- file.info(vtm)[, c("size", "mtime")]
@@ -356,7 +356,7 @@ patchMetrics <- function(sim) {
 
     mod[[refCodeCC]] <- summarizePatchMetrics(dfl_cc)
     lapply(names(mod[[refCodeCC]]), function(f) {
-      write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, "_CC.csv")), row.names = FALSE)
+      write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")), row.names = FALSE)
     })
 
     ## simulation results
@@ -455,7 +455,7 @@ patchMetricsSeralBC <- function(sim) {
     })
     mod[[refCodeCC]] <- summarizePatchMetricsSeral(dfl_cc)
     lapply(names(mod[[refCodeCC]]), function(f) {
-      write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCodeCC, "_", f, "_CC.csv")), row.names = FALSE)
+      write.csv(mod[[refCodeCC]][[f]], file.path(outputPath(sim), paste0(refCodeCC, "_", f, ".csv")), row.names = FALSE)
     })
 
     ## simulation results
