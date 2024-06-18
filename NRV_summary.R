@@ -37,6 +37,9 @@ defineModule(sim, list(
                           "'on' for ON patch metrics.")),
     defineParameter("reps", "integer", 1L:10L, 1L, NA_integer_,
                     paste("number of replicates/runs per study area.")),
+    defineParameter("sieveThresh", "integer", 1L, NA_integer_, NA_integer_,
+                    paste("threshold patch size (number of pixels) to use with `terra::sieve`",
+                          "when creating seral stage maps")),
     defineParameter("sppEquivCol", "character", "EN_generic_short", NA, NA,
                     "The column in `sim$sppEquiv` data.table to use as a naming convention"),
     defineParameter("sppEquivCol", "character", "LandR", NA, NA,
@@ -402,6 +405,17 @@ makeSeralStageMapsBC <- function(sim) {
   on.exit(plan(oldPlan), add = TRUE)
 
   ssmFiles <- writeSeralStageMapBC(cd = fcd, pgm = fpgm, ndtbec = fNDTBEC)
+
+  if (!is.na(P(sim)$sieveThresh)) {
+    ## pass ssm through terra::sieve to merge singletons with neighbouring large patches?
+    ## <https://rspatial.github.io/terra/reference/sieve.html>
+    ssmFiles <- vapply(ssmFiles, function(f) {
+      ## clumps < threshold merged with largest neighbour
+      fs <- .suffix(f, sprintf("_sieve_%d", floor(P(sim)$sieveThresh)))
+      sieve(rast(f), threshold = P(sim)$sieveThresh, filename = fs)
+      fs
+    }, character(1))
+  }
 
   mod$ssm0 <- grep("seralStageMap_year0000.tif", ssmFiles, value = TRUE)
   mod$ssm <- grep("seralStageMap_year0000.tif", ssmFiles, invert = TRUE, value = TRUE)
