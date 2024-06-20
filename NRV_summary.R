@@ -16,7 +16,7 @@ defineModule(sim, list(
                   "ggforce", "ggplot2", "googledrive", "landscapemetrics",
                   "PredictiveEcology/LandR@development (>= 1.1.1)",
                   "PredictiveEcology/LandWebUtils@development (>= 0.1.5)",
-                  "FOR-CAST/nrvtools (>= 0.0.19)",
+                  "FOR-CAST/nrvtools (>= 0.0.21)",
                   "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
                   "raster", "sf", "sp",
                   "PredictiveEcology/SpaDES.core@development (>= 1.1.1)",
@@ -163,7 +163,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
 #   - keep event functions short and clean, modularize by calling subroutines from section below.
 
 Init <- function(sim) {
-  # # ! ----- EDIT BELOW ----- ! #
+  ## check for necessary output files -----------------------------------------------
   padL <- 4
 
   mod$analysesOutputsTimes <- analysesOutputsTimes(P(sim)$summaryPeriod, P(sim)$summaryInterval)
@@ -411,8 +411,8 @@ makeSeralStageMapsBC <- function(sim) {
     ## <https://rspatial.github.io/terra/reference/sieve.html>
     ssmFiles <- vapply(ssmFiles, function(f) {
       ## clumps < threshold merged with largest neighbour
-      fs <- .suffix(f, sprintf("_sieve_%d", floor(P(sim)$sieveThresh)))
-      sieve(rast(f), threshold = P(sim)$sieveThresh, filename = fs)
+      fs <- .suffix(f, sprintf("_sieve_%d", as.integer(P(sim)$sieveThresh))) ## TODO: use round() ??
+      terra::sieve(rast(f), threshold = P(sim)$sieveThresh, filename = fs, overwrite = TRUE)
       fs
     }, character(1))
   }
