@@ -416,17 +416,17 @@ makeSeralStageMapsBC <- function(sim) {
       fs
     }, character(1))
   }
-
-  mod$ssm0 <- grep("seralStageMap_year0000.tif", ssmFiles, value = TRUE)
-  mod$ssm <- grep("seralStageMap_year0000.tif", ssmFiles, invert = TRUE, value = TRUE)
+browser()
+  mod$ssm0 <- grep("^seralStageMap_year0000_.*[.]tif$", ssmFiles, value = TRUE)
+  mod$ssm <- grep("^seralStageMap_year0000_.*[.]tif$", ssmFiles, invert = TRUE, value = TRUE)
 
   return(invisible(sim))
 }
 
 patchMetricsSeralBC <- function(sim) {
   fflm <- mod$flm
-  fssm <- mod$ssm
   fssm0 <- mod$ssm0
+  fssm <- mod$ssm
 
   md <- sim$ml@metadata
 
