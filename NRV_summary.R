@@ -416,9 +416,9 @@ makeSeralStageMapsBC <- function(sim) {
       fs
     }, character(1))
   }
-browser()
-  mod$ssm0 <- grep("^seralStageMap_year0000_.*[.]tif$", ssmFiles, value = TRUE)
-  mod$ssm <- grep("^seralStageMap_year0000_.*[.]tif$", ssmFiles, invert = TRUE, value = TRUE)
+
+  mod$ssm0 <- grep("/seralStageMap_year0000_.*[.]tif$", ssmFiles, value = TRUE)
+  mod$ssm <- grep("/seralStageMap_year0000_.*[.]tif$", ssmFiles, invert = TRUE, value = TRUE)
 
   return(invisible(sim))
 }
