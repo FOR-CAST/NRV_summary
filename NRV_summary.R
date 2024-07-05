@@ -12,15 +12,15 @@ defineModule(sim, list(
   timeunit = "year",
   citation = list("citation.bib"),
   documentation = list("README.md", "NRV_summary.Rmd"), ## same file
-  reqdPkgs = list("data.table", "dplyr", "fs", "future.apply", "future.callr",
-                  "ggforce", "ggplot2", "googledrive", "landscapemetrics",
-                  "PredictiveEcology/LandR@development (>= 1.1.1)",
-                  "PredictiveEcology/LandWebUtils@development (>= 0.1.5)",
-                  "FOR-CAST/nrvtools (>= 0.0.21)",
-                  "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
-                  "raster", "sf", "sp",
-                  "PredictiveEcology/SpaDES.core@development (>= 1.1.1)",
-                  "terra"),
+  reqdPkgs = list(
+    "data.table", "dplyr", "fs", "future.apply", "future.callr",
+    "ggforce", "ggplot2", "googledrive", "landscapemetrics", "sf", "terra",
+    "PredictiveEcology/LandR@development (>= 1.1.1)",
+    "PredictiveEcology/LandWebUtils@development (>= 0.1.5)",
+    "FOR-CAST/nrvtools (>= 0.0.21)",
+    "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
+    "PredictiveEcology/SpaDES.core@development (>= 1.1.1)"
+  ),
   parameters = bindrows(
     defineParameter("ageClasses", "character", LandWebUtils:::.ageClasses, NA, NA,
                     "descriptions/labels for age classes (seral stages)"),
@@ -411,7 +411,7 @@ makeSeralStageMapsBC <- function(sim) {
     ## <https://rspatial.github.io/terra/reference/sieve.html>
     ssmFiles <- vapply(ssmFiles, function(f) {
       ## clumps < threshold merged with largest neighbour
-      fs <- .suffix(f, sprintf("_sieve_%d", as.integer(P(sim)$sieveThresh))) ## TODO: use round() ??
+      fs <- .suffix(f, sprintf("-sieve%d", as.integer(P(sim)$sieveThresh))) ## TODO: use round() ??
       terra::sieve(rast(f), threshold = P(sim)$sieveThresh, filename = fs, overwrite = TRUE)
       fs
     }, character(1))
