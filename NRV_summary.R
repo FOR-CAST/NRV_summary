@@ -40,8 +40,6 @@ defineModule(sim, list(
     defineParameter("sieveThresh", "integer", 1L, NA_integer_, NA_integer_,
                     paste("threshold patch size (number of pixels) to use with `terra::sieve`",
                           "when creating seral stage maps")),
-    defineParameter("sppEquivCol", "character", "EN_generic_short", NA, NA,
-                    "The column in `sim$sppEquiv` data.table to use as a naming convention"),
     defineParameter("sppEquivCol", "character", "LandR", NA, NA,
                     "The column in `sim$sppEquiv` data.table to use as a naming convention"),
     defineParameter("summaryInterval", "integer", 100L, NA, NA,
