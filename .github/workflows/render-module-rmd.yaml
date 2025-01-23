@@ -54,7 +54,7 @@ jobs:
 
       - name: Install module package and other dependencies
         run: |
-          Require::Require("PredictiveEcology/LandWebUtils@development")
+          Require::Require("PredictiveEcology/LandWebUtils@development", require = FALSE)
           pkgs <- SpaDES.core::packages(modules = "[[name]]", paths = "..")[[1]]
           Require::Require(pkgs[[1]])
         shell: Rscript {0}
