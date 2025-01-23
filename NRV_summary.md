@@ -1,7 +1,7 @@
 ---
 title: "NRV_summary Manual"
-subtitle: "v.0.0.1"
-date: "Last updated: 2022-10-28"
+subtitle: "v.1.1.1"
+date: "Last updated: 2025-01-23"
 output:
   bookdown::html_document2:
     toc: true
@@ -45,8 +45,8 @@ Produces 'X over time' and other summaries for multiple landscape and patch metr
 
 Table \@ref(tab:moduleInputs-NRV-summary) shows the full list of module inputs.
 
-<table class="table" style="margin-left: auto; margin-right: auto;">
-<caption>(\#tab:moduleInputs-NRV-summary)List of (ref:NRV-summary) input objects and their description.</caption>
+<table class="table" style="color: black; margin-left: auto; margin-right: auto;">
+<caption>(\#tab:moduleInputs-NRV-summary)(\#tab:moduleInputs-NRV-summary)List of (ref:NRV-summary) input objects and their description.</caption>
  <thead>
   <tr>
    <th style="text-align:left;"> objectName </th>
@@ -57,9 +57,21 @@ Table \@ref(tab:moduleInputs-NRV-summary) shows the full list of module inputs.
  </thead>
 <tbody>
   <tr>
+   <td style="text-align:left;"> flammableMap </td>
+   <td style="text-align:left;"> SpatRaster </td>
+   <td style="text-align:left;"> binary flammability map. Required in single mode. </td>
+   <td style="text-align:left;"> NA </td>
+  </tr>
+  <tr>
    <td style="text-align:left;"> ml </td>
    <td style="text-align:left;"> map </td>
    <td style="text-align:left;"> map list object from preamble module (e.g., LandWeb_preamble). </td>
+   <td style="text-align:left;"> NA </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> speciesLayers </td>
+   <td style="text-align:left;"> SpatRaster </td>
+   <td style="text-align:left;"> initial percent cover raster layers used for simulation. </td>
    <td style="text-align:left;"> NA </td>
   </tr>
   <tr>
@@ -80,8 +92,8 @@ Table \@ref(tab:moduleInputs-NRV-summary) shows the full list of module inputs.
 Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
 
 
-<table class="table" style="margin-left: auto; margin-right: auto;">
-<caption>(\#tab:moduleParams-NRV-summary)List of (ref:NRV-summary) parameters and their description.</caption>
+<table class="table" style="color: black; margin-left: auto; margin-right: auto;">
+<caption>(\#tab:moduleParams-NRV-summary)(\#tab:moduleParams-NRV-summary)List of (ref:NRV-summary) parameters and their description.</caption>
  <thead>
   <tr>
    <th style="text-align:left;"> paramName </th>
@@ -118,6 +130,14 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> maximum possible age </td>
   </tr>
   <tr>
+   <td style="text-align:left;"> postprocessEvents </td>
+   <td style="text-align:left;"> character </td>
+   <td style="text-align:left;"> lm, pm </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> Specify which subset of postprocessing events to run. At least one of: 'lm' for default landscape metrics; 'pm' for default patch metrics; 'bc' for BC seral stage patch metrics; 'on' for ON patch metrics. </td>
+  </tr>
+  <tr>
    <td style="text-align:left;"> reps </td>
    <td style="text-align:left;"> integer </td>
    <td style="text-align:left;"> 1, 2, 3,.... </td>
@@ -126,9 +146,17 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> number of replicates/runs per study area. </td>
   </tr>
   <tr>
+   <td style="text-align:left;"> sieveThresh </td>
+   <td style="text-align:left;"> integer </td>
+   <td style="text-align:left;"> 1 </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> threshold patch size (number of pixels) to use with `terra::sieve` when creating seral stage maps </td>
+  </tr>
+  <tr>
    <td style="text-align:left;"> sppEquivCol </td>
    <td style="text-align:left;"> character </td>
-   <td style="text-align:left;"> EN_gener.... </td>
+   <td style="text-align:left;"> LandR </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> The column in `sim$sppEquiv` data.table to use as a naming convention </td>
@@ -150,6 +178,14 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> lower and upper end of the range of simulation times used for summary analyses </td>
   </tr>
   <tr>
+   <td style="text-align:left;"> timeSeriesTimes </td>
+   <td style="text-align:left;"> numeric </td>
+   <td style="text-align:left;"> 601, 602.... </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> simulation times for which to build time steries animations. </td>
+  </tr>
+  <tr>
    <td style="text-align:left;"> upload </td>
    <td style="text-align:left;"> logical </td>
    <td style="text-align:left;"> FALSE </td>
@@ -166,6 +202,14 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> if `upload = TRUE`, a Google Drive folder id corresponding to `.studyAreaName`. </td>
   </tr>
   <tr>
+   <td style="text-align:left;"> vegLeadingProportion </td>
+   <td style="text-align:left;"> numeric </td>
+   <td style="text-align:left;"> 0.8 </td>
+   <td style="text-align:left;"> 0 </td>
+   <td style="text-align:left;"> 1 </td>
+   <td style="text-align:left;"> a number that defines whether a species is leading for a given pixel </td>
+  </tr>
+  <tr>
    <td style="text-align:left;"> .plots </td>
    <td style="text-align:left;"> character </td>
    <td style="text-align:left;"> screen </td>
@@ -176,7 +220,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
   <tr>
    <td style="text-align:left;"> .plotInitialTime </td>
    <td style="text-align:left;"> numeric </td>
-   <td style="text-align:left;"> start(sim) </td>
+   <td style="text-align:left;"> 0 </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> Describes the simulation time at which the first plot event should occur. </td>
@@ -248,8 +292,8 @@ Write what is saved.
 
 Description of the module outputs (Table \@ref(tab:moduleOutputs-NRV-summary)).
 
-<table class="table" style="margin-left: auto; margin-right: auto;">
-<caption>(\#tab:moduleOutputs-NRV-summary)List of (ref:NRV-summary) outputs and their description.</caption>
+<table class="table" style="color: black; margin-left: auto; margin-right: auto;">
+<caption>(\#tab:moduleOutputs-NRV-summary)(\#tab:moduleOutputs-NRV-summary)List of (ref:NRV-summary) outputs and their description.</caption>
  <thead>
   <tr>
    <th style="text-align:left;"> objectName </th>
