@@ -75,8 +75,8 @@ defineModule(sim, list(
   inputObjects = bindrows(
     expectsInput("flammableMap", "SpatRaster",
                  desc = "binary flammability map. Required in single mode."),
-    expectsInput("ml", "map",
-                 desc = "map list object from preamble module (e.g., LandWeb_preamble)."),
+    expectsInput("reportingPolygons", "list",
+                 desc = "reporting polygons for post-processing (required with `type = 'multi')"),
     expectsInput("speciesLayers", "SpatRaster",
                  desc = "initial percent cover raster layers used for simulation."),
     expectsInput("sppColorVect", "character",
@@ -101,11 +101,11 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       mod$analysesOutputsTimes <- analysesOutputsTimes(P(sim)$summaryPeriod, P(sim)$summaryInterval)
 
       if (P(sim)$mode == "single") {
-        sim <- scheduleEvent(sim, start(sim), "NRV_summary", "declare_outputs", .first())
-
         sim <- scheduleEvent(sim, start(sim), "NRV_summary", "map_generators", .last())
         sim <- scheduleEvent(sim, P(sim)$summaryPeriod[1], "NRV_summary", "map_generators", .last())
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "map_generators", .last())
+
+        sim <- scheduleEvent(sim, start(sim), "NRV_summary", "save_single", .last())
       } else if (P(sim)$mode == "multi") {
         sim <- InitMulti(sim)
 
@@ -136,58 +136,6 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess", .last())
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "plot", .last())
       }
-    },
-    declare_outputs = {
-      ## objects to save at start of simulation ---------------------------------------------------
-      objs2save_start <- c(
-        "sppColorVect", ## character (.qs2);
-        "sppEquiv", ## data.table (.qs2);
-        "speciesLayers" ## SpatRaster (.tif);
-      )
-
-      nRsts_start <- (length(objs2save_start) - 2)
-
-      outputs_start <- data.frame(
-        expand.grid(objectName = objs2save_start, saveTime = start(sim)),
-        fun = c("qs_save", "qs_save", rep("writeRaster", nRsts_start)),
-        package = c("qs2", "qs2", rep("terra", nRsts_start)),
-        file = paste0(objs2save_start, c(".qs2", ".qs2", rep(".tif", nRsts_start))),
-        stringsAsFactors = FALSE
-      )
-      outputs_start$arguments <- I(list(
-        list(nthreads = 1),
-        list(nthreads = 1),
-        list(overwrite = TRUE, progress = FALSE, datatype = "INT2U")
-      ))
-
-      ## objects to save during simulation --------------------------------------------------------
-      times_during <- c(start(sim), end(sim), mod$analysesOutputsTimes) |> unique() |> sort()
-
-      objs2save_during <- c(
-        "cohortData", ## data.table (.qs2);
-        "pixelGroupMap", ## SpatRaster (.tif);
-        "standAgeMap", ## SpatRaster (.tif);
-        "vegTypeMap" ## SpatRaster (.tif);
-      )
-
-      nRsts_during <- (length(objs2save_during) - 1)
-
-      outputs_during <- data.frame(
-        expand.grid(objectName = objs2save_during, saveTime = times_during),
-        fun = c("qs_save", rep("writeRaster", nRsts_during)),
-        package = c("qs2", rep("terra", nRsts_during)),
-        file = paste0(objs2save_during, c(".qs2", rep(".tif", nRsts_during))),
-        stringsAsFactors = FALSE
-      )
-      outputs_during$arguments <- I(list(
-        ## fmt: skip
-        list(nthreads = 1),
-        list(overwrite = TRUE, progress = FALSE, datatype = "INT4U"), ## !! need >6e6 pixelGroupIDs
-        list(overwrite = TRUE, progress = FALSE, datatype = "INT2U"),
-        list(overwrite = TRUE, progress = FALSE, datatype = "INT2U")
-      ))
-
-      outputs(sim) <- rbind(outputs_start, outputs_during)
     },
     map_generators = {
       sim$vegTypeMap <- LandR::vegTypeMapGenerator(
@@ -236,13 +184,52 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       ## TODO finalize implementation
       message("Ontario NRV metrics are not yet fully implemented.")
     },
+    save_single = {
+      padYear <- paddedFloatToChar(time(sim), padL = ceiling(log10(end(sim) + 1)))
+
+      ## objects to save at start of simulation ---------------------------------------------------
+      if (time(sim) == start(sim)) {
+        f_sppColorVect <- file.path(outputPath(sim), paste0("sppColorVect_year", padYear, ".qs2"))
+        qs2::qs_save(sim$sppColorVect, f_sppColorVect)
+        sim <- registerOutputs(f_sppColorVect, sim)
+
+        f_sppEquiv <- file.path(outputPath(sim), paste0("sppEquiv_year", padYear, ".qs2"))
+        qs2::qs_save(sim$sppEquiv, f_sppEquiv)
+        sim <- registerOutputs(f_sppEquiv, sim)
+
+        f_speciesLayers <- file.path(outputPath(sim), paste0("speciesLayers_year", padYear, ".tif"))
+        terra::writeRaster(sim$speciesLayers, f_speciesLayers, datatype = "INT2U", overwrite = TRUE)
+        sim <- registerOutputs(f_speciesLayers, sim)
+      }
+
+      ## objects to save during simulation --------------------------------------------------------
+      times_during <- c(start(sim), end(sim), mod$analysesOutputsTimes) |> unique() |> sort()
+      if (time(sim) %in% times_during) {
+        f_cohortData <- file.path(outputPath(sim), paste0("cohortData_year", padYear, ".qs2"))
+        qs2::qs_save(sim$cohortData, f_cohortData)
+        sim <- registerOutputs(f_cohortData, sim)
+
+        f_pixelGroupMap <- file.path(outputPath(sim), paste0("pixelGroupMap_year", padYear, ".tif"))
+        terra::writeRaster(sim$pixelGroupMap, f_pixelGroupMap, datatype = "INT4U", overwrite = TRUE)
+        sim <- registerOutputs(f_pixelGroupMap, sim)
+
+        f_standAgeMap <- file.path(outputPath(sim), paste0("standAgeMap_year", padYear, ".tif"))
+        terra::writeRaster(sim$standAgeMap, f_standAgeMap, datatype = "INT2U", overwrite = TRUE)
+        sim <- registerOutputs(f_standAgeMap, sim)
+
+        f_vegTypeMap <- file.path(outputPath(sim), paste0("vegTypeMap_year", padYear, ".tif"))
+        terra::writeRaster(sim$vegTypeMap, f_vegTypeMap, datatype = "INT2U", overwrite = TRUE)
+        sim <- registerOutputs(f_vegTypeMap, sim)
+
+        if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2]) {
+          sim <- scheduleEvent(sim, time(sim) + P(sim)$summaryInterval, "NRV_summary", "save_single", .last())
+        }
+      }
+    },
+    ## fmt: skip
     warning(paste(
-      "Undefined event type: \'",
-      (sim)[1, "eventType", with = FALSE],
-      "\' in module \'",
-      current(sim)[1, "moduleName", with = FALSE],
-      "\'",
-      sep = ""
+      "Undefined event type: \'", current(sim)[1, "eventType", with = FALSE],
+      "\' in module \'", current(sim)[1, "moduleName", with = FALSE], "\'", sep = ""
     ))
   )
 
