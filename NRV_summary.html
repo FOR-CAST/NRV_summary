@@ -2972,8 +2972,8 @@ border-radius: 0px;
 
 
 <h1 class="title toc-ignore">NRV_summary Manual</h1>
-<h3 class="subtitle">v.1.1.1</h3>
-<h4 class="date">Last updated: 2025-01-23</h4>
+<h3 class="subtitle">v.1.1.2</h3>
+<h4 class="date">Last updated: 2026-02-02</h4>
 
 </div>
 
@@ -3182,6 +3182,46 @@ maximum possible age
 </tr>
 <tr>
 <td style="text-align:left;">
+mixedType
+</td>
+<td style="text-align:left;">
+integer
+</td>
+<td style="text-align:left;">
+2
+</td>
+<td style="text-align:left;">
+NA
+</td>
+<td style="text-align:left;">
+NA
+</td>
+<td style="text-align:left;">
+How to define mixed stands: <code>0L</code> for none; <code>1L</code> for any species admixture; <code>2L</code> for deciduous &gt; conifer. See <code>LandR::vegTypeMapGenerator</code>.
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+mode
+</td>
+<td style="text-align:left;">
+character
+</td>
+<td style="text-align:left;">
+single
+</td>
+<td style="text-align:left;">
+NA
+</td>
+<td style="text-align:left;">
+NA
+</td>
+<td style="text-align:left;">
+use ‘single’ to run part of a simulation; use ‘multi’ to run as part of postprocessing multiple runs.
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
 postprocessEvents
 </td>
 <td style="text-align:left;">
@@ -3197,7 +3237,7 @@ NA
 NA
 </td>
 <td style="text-align:left;">
-Specify which subset of postprocessing events to run. At least one of: ‘lm’ for default landscape metrics; ‘pm’ for default patch metrics; ‘bc’ for BC seral stage patch metrics; ‘on’ for ON patch metrics.
+Specify which subset of postprocessing events to run. At least one of: ‘bc’ for BC seral stage patch metrics; ‘fd’ for forest degradation indicators; ‘lm’ for default landscape metrics; ‘lw’ for default LandWeb summaries ‘pm’ for default patch metrics; ‘on’ for ON patch metrics.
 </td>
 </tr>
 <tr>
@@ -3322,46 +3362,6 @@ simulation times for which to build time steries animations.
 </tr>
 <tr>
 <td style="text-align:left;">
-upload
-</td>
-<td style="text-align:left;">
-logical
-</td>
-<td style="text-align:left;">
-FALSE
-</td>
-<td style="text-align:left;">
-NA
-</td>
-<td style="text-align:left;">
-NA
-</td>
-<td style="text-align:left;">
-if TRUE, uses the <code>googledrive</code> package to upload figures.
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-uploadTo
-</td>
-<td style="text-align:left;">
-character
-</td>
-<td style="text-align:left;">
-NA
-</td>
-<td style="text-align:left;">
-NA
-</td>
-<td style="text-align:left;">
-NA
-</td>
-<td style="text-align:left;">
-if <code>upload = TRUE</code>, a Google Drive folder id corresponding to <code>.studyAreaName</code>.
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
 vegLeadingProportion
 </td>
 <td style="text-align:left;">
@@ -3438,46 +3438,6 @@ NA
 </td>
 <td style="text-align:left;">
 Describes the simulation time interval between plot events.
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-.saveInitialTime
-</td>
-<td style="text-align:left;">
-numeric
-</td>
-<td style="text-align:left;">
-NA
-</td>
-<td style="text-align:left;">
-NA
-</td>
-<td style="text-align:left;">
-NA
-</td>
-<td style="text-align:left;">
-Describes the simulation time at which the first save event should occur.
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-.saveInterval
-</td>
-<td style="text-align:left;">
-numeric
-</td>
-<td style="text-align:left;">
-NA
-</td>
-<td style="text-align:left;">
-NA
-</td>
-<td style="text-align:left;">
-NA
-</td>
-<td style="text-align:left;">
-This describes the simulation time interval between save events.
 </td>
 </tr>
 <tr>
