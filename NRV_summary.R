@@ -209,7 +209,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       ) |>
         terra::mask(sim$studyAreaReporting)
 
-      if (time(sim) >= sim$summaryPeriod[1] && time(sim) < sim$summaryPeriod[2]) {
+      if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriods[2]) {
         sim <- scheduleEvent(sim, time(sim) + P(sim)$summaryInterval, "NRV_summary", "map_generators", .last())
       }
     },
