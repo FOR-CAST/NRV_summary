@@ -615,7 +615,7 @@ patchMetricsSeralBC <- function(sim) {
   rptPolyCols <- vapply(
     sim$reportingPolygons,
     FUN = attr,
-    which = "useCol",
+    which = "field",
     FUN.VALUE = character(1)
   )
   rptPolyNames <- names(sim$reportingPolygons)
