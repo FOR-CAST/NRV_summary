@@ -48,6 +48,8 @@ defineModule(sim, list(
     defineParameter("sieveThresh", "integer", 1L, NA_integer_, NA_integer_,
                     paste("threshold patch size (number of pixels) to use with `terra::sieve`",
                           "when creating seral stage maps")),
+    defineParameter("simTimes", "numeric", c(NA, NA), NA, NA,
+                    "Simulation start and end times when running in 'multi' mode."),
     defineParameter("sppEquivCol", "character", "LandR", NA, NA,
                     "The column in `sim$sppEquiv` data.table to use as a naming convention"),
     defineParameter("summaryInterval", "integer", 100L, NA, NA,
@@ -74,9 +76,9 @@ defineModule(sim, list(
   ),
   inputObjects = bindrows(
     expectsInput("flammableMap", "SpatRaster",
-                 desc = "binary flammability map. Required in single mode."),
+                 desc = "binary flammability map (required with `type = 'single'`)"),
     expectsInput("reportingPolygons", "list",
-                 desc = "reporting polygons for post-processing (required with `type = 'multi')"),
+                 desc = "reporting polygons for post-processing (required with `type = 'multi'`)"),
     expectsInput("speciesLayers", "SpatRaster",
                  desc = "initial percent cover raster layers used for simulation."),
     expectsInput("sppColorVect", "character",
@@ -106,6 +108,8 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "map_generators", .last())
 
         sim <- scheduleEvent(sim, start(sim), "NRV_summary", "save_single", .last())
+        sim <- scheduleEvent(sim, P(sim)$summaryPeriod[1], "NRV_summary", "save_single", .last())
+        sim <- scheduleEvent(sim, end(sim), "NRV_summary", "save_single", .last())
       } else if (P(sim)$mode == "multi") {
         sim <- InitMulti(sim)
 
@@ -225,6 +229,13 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
           sim <- scheduleEvent(sim, time(sim) + P(sim)$summaryInterval, "NRV_summary", "save_single", .last())
         }
       }
+
+      ## objects to save at end of simulation -----------------------------------------------------
+      if (time(sim) == end(sim)) {
+        f_flammableMap <- file.path(outputPath(sim), paste0("flammableMap_year", padYear, ".tif"))
+        terra::writeRaster(sim$flammableMap, f_flammableMap, datatype = "INT2U", overwrite = TRUE)
+        sim <- registerOutputs(f_flammableMap, sim)
+      }
     },
     ## fmt: skip
     warning(paste(
@@ -241,14 +252,21 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
 InitMulti <- function(sim) {
   ## check for necessary output files -----------------------------------------------
   ## NOTE: don't load simLists -- slow and unreliable
-  padL <- 4
-  browser()
+  allReps <- sprintf("rep%02d", P(sim)$reps)
+  padL <- ceiling(log10(P(sim)$simTimes[2] + 1))
+  padYearStart <- paddedFloatToChar(P(sim)$simTimes[1], padL = padL)
+  padYearEnd <- paddedFloatToChar(P(sim)$simTimes[2], padL = padL)
+
+  ## all reps have same flammable map
+  mod$flm <- file.path(outputPath(sim), allReps[1], paste0("flammableMap_year", padYearEnd, ".tif"))
+
   cdpgm <- fs::dir_ls(
     outputPath(sim),
     regexp = "cohortData|pixelGroupMap",
     recurse = 1,
     type = "file"
   ) |>
+    grep(paste0("(", paste0(allReps, collapse = "|"), ")"), x = _, value = TRUE) |>
     grep(paste(mod$analysesOutputsTimes, collapse = "|"), x = _, value = TRUE)
   mod$allouts <- fs::dir_ls(
     outputPath(sim),
@@ -256,26 +274,23 @@ InitMulti <- function(sim) {
     recurse = 1,
     type = "file"
   ) |>
+    grep(paste0("(", paste0(allReps, collapse = "|"), ")"), x = _, value = TRUE) |>
     grep("gri|png|txt|xml", x = _, value = TRUE, invert = TRUE)
-  mod$allouts2 <- grep(
-    paste(
-      paste0(
-        "year",
-        paddedFloatToChar(
-          setdiff(c(0, P(sim)$timeSeriesTimes), mod$analysesOutputsTimes),
-          padL = padL
-        )
-      ),
-      collapse = "|"
+  mod$allouts2 <- paste(
+    paste0(
+      "year",
+      paddedFloatToChar(
+        setdiff(c(0, P(sim)$timeSeriesTimes), mod$analysesOutputsTimes),
+        padL = padL
+      )
     ),
-    mod$allouts,
-    value = TRUE,
-    invert = TRUE
-  )
+    collapse = "|"
+  ) |>
+    grep(pattern = _, x = mod$allouts, value = TRUE, invert = TRUE)
 
   filesUserHas <- c(cdpgm, mod$allouts2)
 
-  dirsExpected <- file.path(outputPath(sim), sprintf("rep%02d", P(sim)$reps))
+  dirsExpected <- file.path(outputPath(sim), allReps)
   filesExpected <- as.character(sapply(dirsExpected, function(d) {
     c(
       file.path(d, sprintf("cohortData_year%04d.qs2", mod$analysesOutputsTimes)),
@@ -315,11 +330,7 @@ InitMulti <- function(sim) {
   mod$pgm <- grep("pixelGroupMap", cdpgm, value = TRUE)
 
   ## extract the reporting polygons to run the analyses on
-  browser() ## TODO: remove `map` vestige `@metadata`
-  md <- sim$reportingPolygons@metadata
-  cols <- which(grepl("analysisGroup", colnames(md)))
-  rowIDs <- which(md[, ..cols] == currentModule(sim), arr.ind = TRUE)[, "row"]
-  mod$rptPolyNames <- md[["layerName"]][rowIDs]
+  mod$rptPolyNames <- names(sim$reportingPolygons)
 
   # ! ----- STOP EDITING ----- ! #
 
@@ -347,7 +358,7 @@ landscapeMetrics <- function(sim) {
   browser() ## TODO: remove `map` vestige `@metadata`
   md <- sim$reportingPolygons@metadata
 
-  studyArea3 <- sim$studyAreaReporting
+  studyAreaReporting <- sf::st_as_sf(sim$studyAreaReporting)
 
   funList <- default_landscape_metrics() ## TODO: pass this further up via parameter funList_lm
 
@@ -412,7 +423,7 @@ landscapeMetrics <- function(sim) {
 
       return(invisible(NULL))
     },
-    studyArea = studyArea3,
+    studyArea = studyAreaReporting,
     reportingPolygons = sim$reportingPolygons
   )
 
@@ -449,7 +460,7 @@ patchMetrics <- function(sim) {
   }
   terra::writeRaster(samCC, fsam0, datatype = "INT1U", overwrite = TRUE)
 
-  studyArea3 <- sim$studyAreaReporting
+  studyAreaReporting <- sf::st_as_sf(sim$studyAreaReporting)
 
   browser() ## TODO: remove `map` vestige `@metadata`
   md <- sim$reportingPolygons@metadata
@@ -538,7 +549,7 @@ patchMetrics <- function(sim) {
 
       return(invisible(NULL))
     },
-    studyArea = studyArea3,
+    studyArea = studyAreaReporting,
     reportingPolygons = sim$reportingPolygons
   )
 
@@ -548,11 +559,13 @@ patchMetrics <- function(sim) {
 makeSeralStageMapsBC <- function(sim) {
   message(crayon::magenta("Creating seral stage maps ..."))
 
-  studyArea3 <- sim$studyAreaReporting
-  NDTBEC <- sf::st_crop(sim$reportingPolygons[["ecoregionLayer (NDTxBEC)"]], studyArea3)
+  studyAreaReporting <- sf::st_as_sf(sim$studyAreaReporting)
+  NDTBEC <- sim$reportingPolygons[["ecoregionLayer"]] |>
+    sf::st_as_sf() |>
+    sf::st_crop(studyAreaReporting)
   fNDTBEC <- file.path(outputPath(sim), "NDTBEC.shp")
   sf::st_write(NDTBEC, fNDTBEC, append = FALSE, quiet = TRUE)
-  rm(studyArea3, NDTBEC)
+  rm(studyAreaReporting, NDTBEC)
 
   fcd0 <- file.path(outputPath(sim), "rep01", "cohortData_year0000.qs2")
   fpgm0 <- file.path(outputPath(sim), "rep01", "pixelGroupMap_year0000.tif")
@@ -593,50 +606,49 @@ patchMetricsSeralBC <- function(sim) {
   fflm <- mod$flm
   fssm0 <- mod$ssm0
   fssm <- mod$ssm
-
   browser() ## TODO: remove `map` vestige `@metadata`
-  md <- sim$reportingPolygons@metadata
-
-  studyArea3 <- sim$studyAreaReporting
+  studyAreaReporting <- sf::st_as_sf(sim$studyAreaReporting)
 
   funList <- default_patch_metrics_seral() ## TODO: pass further up via parameter funList_bc
 
-  rptPolygons <- sim$reportingPolygons
-  rptPolyNames <- mod$rptPolyNames
+  rptPolygons <- lapply(sim$reportingPolygons, sf::st_as_sf) ## converts to sf, keeping names
+  rptPolyCols <- vapply(
+    sim$reportingPolygons,
+    FUN = attr,
+    which = "useCol",
+    FUN.VALUE = character(1)
+  )
+  rptPolyNames <- names(sim$reportingPolygons)
 
-  oldPlan <- future::plan() |>
-    tweak(workers = pemisc::optimalClusterNum(5000, length(fssm))) |>
-    future::plan()
+  oldPlan <- plan(workers = pemisc::optimalClusterNum(5000, length(fssm)))
   on.exit(future::plan(oldPlan), add = TRUE)
 
   lapply(
     rptPolyNames,
-    function(p, reportingPolygons, studyArea) {
+    function(p, reportingPolygons, reportingPolygonCols, studyArea) {
       message(crayon::magenta("Calculating seral stage patch metrics for", p, "..."))
 
       rptPoly <- reportingPolygons[[p]]
 
-      if (is(rptPoly, "Spatial")) {
-        rptPoly <- st_as_sf(rptPoly)
-      } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
-        rptPoly <- st_collection_extract(rptPoly, "POLYGON")
+      if (is(rptPoly, "sf") && sf::st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
+        rptPoly <- sf::st_collection_extract(rptPoly, "POLYGON")
       }
-      rptPoly <- st_crop(rptPoly, studyArea) ## ensure cropped to studyArea
-      rptPolyCol <- md[layerName == p, ][["columnNameForLabels"]]
-      refCode <- paste0("sspm_", md[layerName == p, ][["shortName"]])
+      rptPoly <- sf::st_crop(rptPoly, studyArea) ## ensure cropped to studyArea
+      rptPolyCol <- reportingPolygonCols[[p]]
+      refCode <- paste0("sspm_", abbreviate(p, minlength = 8)) ## TODO: is this unique enough?
       refCodeCC <- paste0(refCode, "_CC")
 
       ## CC
       fileInfo <- file.info(fssm)[, c("size", "mtime")]
-      dfl_cc <- Cache(
-        calculatePatchMetricsSeral,
+      dfl_cc <- calculatePatchMetricsSeral(
         ssm = fssm0,
         flm = fflm,
         summaryPolys = rptPoly,
         polyCol = rptPolyCol,
-        funList = funList[[1]], ## TODO: temporarily, only patchAreasSeral
-        .cacheExtra = fileInfo
-      )
+        funList = funList[[1]] ## TODO: temporarily, only patchAreasSeral
+      ) |>
+        Cache(.cacheExtra = fileInfo)
+
       lapply(names(dfl_cc), function(f) {
         write.csv(
           dfl_cc[[f]],
@@ -711,8 +723,9 @@ patchMetricsSeralBC <- function(sim) {
 
       return(invisible(NULL))
     },
-    studyArea = studyArea3,
-    reportingPolygons = rptPolygons
+    studyArea = studyAreaReporting,
+    reportingPolygons = rptPolygons,
+    reportingPolygonCols = rptPolyCols
   )
 
   return(invisible(sim))
