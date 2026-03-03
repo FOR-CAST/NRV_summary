@@ -89,7 +89,7 @@ defineModule(sim, list(
                  desc = "table of species equivalencies. See `LandR::sppEquivalencies_CA`.")
   ),
   outputObjects = bindrows(
-    createsOutput("ml", "map", "map list object"),
+    # createsOutput("ml", "map", "map list object"),
   )
 ))
 
