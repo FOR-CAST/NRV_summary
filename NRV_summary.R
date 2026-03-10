@@ -104,7 +104,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         sim <- scheduleEvent(sim, start(sim), "NRV_summary", "declare_outputs", .first())
 
         sim <- scheduleEvent(sim, start(sim), "NRV_summary", "map_generators", .last())
-        sim <- scheduleEvent(sim, P(sim)$summaryPeriod[1], "NRV_summary", "map_generators", .last())
+        sim <- scheduleEvent(sim, start(sim) + P(sim)$summaryPeriod[1], "NRV_summary", "map_generators", .last())
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "map_generators", .last())
       } else if (P(sim)$mode == "multi") {
         sim <- InitMulti(sim)
