@@ -1,13 +1,13 @@
 defineModule(sim, list(
   name = "NRV_summary",
   description = paste("NRV simulation post-processing and summary creation.",
-                      "Produces 'X over time' summaries for multiple patch metrics."),
+                      "Produces summaries for multiple patch metrics and other indicators."),
   keywords = c("NRV"),
   authors = c(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "1.1.2"),
+  version = list(NRV_summary = "1.1.2.9000"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -103,6 +103,15 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       mod$analysesOutputsTimes <- analysesOutputsTimes(P(sim)$summaryPeriod, P(sim)$summaryInterval)
 
       if (P(sim)$mode == "single") {
+        stopifnot(
+          !is.null(sim$cohortData),
+          !is.null(sim$pixelGroupMap),
+          !is.null(sim$speciesLayers),
+          !is.null(sim$sppColorVect),
+          !is.null(sim$sppEquiv),
+          !is.null(sim$studyAreaReporting)
+        )
+
         sim <- scheduleEvent(sim, start(sim), "NRV_summary", "map_generators", .last())
         sim <- scheduleEvent(sim, P(sim)$summaryPeriod[1], "NRV_summary", "map_generators", .last())
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "map_generators", .last())
@@ -111,6 +120,8 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         sim <- scheduleEvent(sim, P(sim)$summaryPeriod[1], "NRV_summary", "save_single", .last())
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "save_single", .last())
       } else if (P(sim)$mode == "multi") {
+        stopifnot(!is.null(sim$reportingPolygons))
+
         sim <- InitMulti(sim)
 
         if ("lm" %in% tolower(P(sim)$postprocessEvents)) {
@@ -929,18 +940,7 @@ plotFun <- function(sim) {
 }
 
 .inputObjects <- function(sim) {
-  if (P(sim)$mode == "single") {
-    stopifnot(
-      suppliedElsewhere("cohortData", sim),
-      suppliedElsewhere("pixelGroupMap", sim),
-      suppliedElsewhere("speciesLayers", sim),
-      suppliedElsewhere("sppColorVect", sim),
-      suppliedElsewhere("sppEquiv", sim),
-      suppliedElsewhere("studyAreaReporting", sim)
-    )
-  } else if (P(sim)$mode == "multi") {
-    stopifnot(suppliedElsewhere("reportingPolygons", sim))
-  }
+  ## nothing here
 
   return(invisible(sim))
 }
