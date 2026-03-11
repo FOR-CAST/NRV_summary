@@ -54,7 +54,7 @@ defineModule(sim, list(
                     "The column in `sim$sppEquiv` data.table to use as a naming convention"),
     defineParameter("summaryInterval", "integer", 100L, NA, NA,
                     "simulation time interval at which to take 'snapshots' used for summary analyses"),
-    defineParameter("summaryPeriod", "integer", c(700L, 1000L), NA, NA,
+    defineParameter("summaryPeriod", "integer", start(sim) + c(700L, 1000L), NA, NA,
                     "lower and upper end of the range of simulation times used for summary analyses"),
     defineParameter("timeSeriesTimes", "numeric", 601:650, NA, NA,
                     "simulation times for which to build time steries animations."),
@@ -113,7 +113,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         )
 
         sim <- scheduleEvent(sim, start(sim), "NRV_summary", "map_generators", .last())
-        sim <- scheduleEvent(sim, P(sim)$summaryPeriod[1], "NRV_summary", "map_generators", .last())
+        sim <- scheduleEvent(sim, start(sim) + P(sim)$summaryPeriod[1], "NRV_summary", "map_generators", .last())
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "map_generators", .last())
 
         sim <- scheduleEvent(sim, start(sim), "NRV_summary", "save_single", .last())
