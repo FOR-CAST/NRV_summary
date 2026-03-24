@@ -75,8 +75,12 @@ defineModule(sim, list(
                     "Should caching of events or module be used?")
   ),
   inputObjects = bindrows(
+    expectsInput("cohortData", "data.table",
+                 desc = "Required in single mode."),
     expectsInput("flammableMap", "SpatRaster",
                  desc = "binary flammability map (required with `type = 'single'`)"),
+    expectsInput("pixelGroupMap", "SpatRaster",
+                 desc = "Required in single mode."),
     expectsInput("reportingPolygons", "list",
                  desc = "reporting polygons for post-processing (required with `type = 'multi'`)"),
     expectsInput("speciesLayers", "SpatRaster",
@@ -86,7 +90,9 @@ defineModule(sim, list(
                               "The names must be in `sim$sppEquiv[[P(sim)$sppEquivCol]]`,",
                               "and should also contain a color for 'Mixed'")),
     expectsInput("sppEquiv", "data.table", NA, NA, NA,
-                 desc = "table of species equivalencies. See `LandR::sppEquivalencies_CA`.")
+                 desc = "table of species equivalencies. See `LandR::sppEquivalencies_CA`."),
+    expectsInput("studyAreaReporting", "SpatVector",
+                 desc = "Required in single mode.")
   ),
   outputObjects = bindrows(
     # createsOutput("ml", "map", "map list object"),
@@ -113,6 +119,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         )
 
         sim <- scheduleEvent(sim, start(sim), "NRV_summary", "map_generators", .last())
+        ## fmt: skip
         sim <- scheduleEvent(sim, start(sim) + P(sim)$summaryPeriod[1], "NRV_summary", "map_generators", .last())
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "map_generators", .last())
 
@@ -173,6 +180,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         terra::mask(sim$studyAreaReporting)
 
       if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2]) {
+        ## fmt: skip
         sim <- scheduleEvent(sim, time(sim) + P(sim)$summaryInterval, "NRV_summary", "map_generators", .last())
       }
     },
@@ -237,6 +245,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         sim <- registerOutputs(f_vegTypeMap, sim)
 
         if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2]) {
+          ## fmt: skip
           sim <- scheduleEvent(sim, time(sim) + P(sim)$summaryInterval, "NRV_summary", "save_single", .last())
         }
       }
@@ -248,11 +257,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         sim <- registerOutputs(f_flammableMap, sim)
       }
     },
-    ## fmt: skip
-    warning(paste(
-      "Undefined event type: \'", current(sim)[1, "eventType", with = FALSE],
-      "\' in module \'", current(sim)[1, "moduleName", with = FALSE], "\'", sep = ""
-    ))
+    noEventWarning(sim)
   )
 
   return(invisible(sim))
@@ -350,25 +355,9 @@ InitMulti <- function(sim) {
 
 ## build landscape metrics tables from vegetation type maps (VTMs)
 landscapeMetrics <- function(sim) {
-  fvtm0 <- file.path(outputPath(sim), "vegTypeMap_year0000.tif")
+  fvtm0 <- file.path(outputPath(sim), paste0("vegTypeMap_year", P(sim)$simTimes[1], ".tif"))
   fvtm <- mod$vtm
-
-  ## current conditions
-  vtmCC <- Cache(
-    vegTypeMapGenerator,
-    x = sim$speciesLayers,
-    vegLeadingProportion = P(sim)$vegLeadingProportion,
-    mixedType = 2,
-    sppEquiv = sim$sppEquiv,
-    sppEquivCol = P(sim)$sppEquivCol,
-    colors = sim$sppColorVect,
-    doAssertion = FALSE
-  )
-  terra::writeRaster(vtmCC, fvtm0, datatype = "INT1U", overwrite = TRUE)
-
-  browser() ## TODO: remove `map` vestige `@metadata`
-  md <- sim$reportingPolygons@metadata
-
+  browser()
   studyAreaReporting <- sf::st_as_sf(sim$studyAreaReporting)
 
   funList <- default_landscape_metrics() ## TODO: pass this further up via parameter funList_lm
@@ -386,14 +375,16 @@ landscapeMetrics <- function(sim) {
       rptPoly <- reportingPolygons[[p]]
 
       if (is(rptPoly, "Spatial")) {
-        rptPoly <- st_as_sf(rptPoly)
-      } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
-        rptPoly <- st_collection_extract(rptPoly, "POLYGON")
+        rptPoly <- sf::st_as_sf(rptPoly)
+      } else if (
+        is(rptPoly, "sf") && sf::st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON"
+      ) {
+        rptPoly <- sf::st_collection_extract(rptPoly, "POLYGON")
       }
-      rptPoly <- st_crop(rptPoly, studyArea) ## ensure cropped to studyArea
+      rptPoly <- sf::st_crop(rptPoly, studyArea) ## ensure cropped to studyArea
 
-      rptPolyCol <- md[layerName == p, ][["columnNameForLabels"]]
-      refCode <- paste0("lm_", md[layerName == p, ][["shortName"]])
+      rptPolyCol <- "NAME"
+      refCode <- paste0("lm_", rptPoly[["ID"]])
       refCodeCC <- paste0(refCode, "_CC")
 
       fileInfo <- file.info(fvtm0)[, c("size", "mtime")]
@@ -472,10 +463,7 @@ patchMetrics <- function(sim) {
   terra::writeRaster(samCC, fsam0, datatype = "INT1U", overwrite = TRUE)
 
   studyAreaReporting <- sf::st_as_sf(sim$studyAreaReporting)
-
-  browser() ## TODO: remove `map` vestige `@metadata`
-  md <- sim$reportingPolygons@metadata
-
+  browser()
   funList <- default_patch_metrics() ## TODO: pass this further up via parameter funList_pm
 
   oldPlan <- future::plan() |>
@@ -496,8 +484,8 @@ patchMetrics <- function(sim) {
         rptPoly <- st_collection_extract(rptPoly, "POLYGON")
       }
       rptPoly <- st_crop(rptPoly, studyArea) ## ensure cropped to studyArea
-      rptPolyCol <- md[layerName == p, ][["columnNameForLabels"]]
-      refCode <- paste0("pm_", md[layerName == p, ][["shortName"]])
+      rptPolyCol <- "NAME"
+      refCode <- paste0("pm_", rptPoly[["ID"]])
       refCodeCC <- paste0(refCode, "_CC")
 
       ## CC
@@ -617,7 +605,7 @@ patchMetricsSeralBC <- function(sim) {
   fflm <- mod$flm
   fssm0 <- mod$ssm0
   fssm <- mod$ssm
-  browser() ## TODO: remove `map` vestige `@metadata`
+  browser()
   studyAreaReporting <- sf::st_as_sf(sim$studyAreaReporting)
 
   funList <- default_patch_metrics_seral() ## TODO: pass further up via parameter funList_bc
@@ -759,9 +747,9 @@ plotFun <- function(sim) {
       ) {
         rptPoly <- sf::st_collection_extract(rptPoly, "POLYGON")
       }
-      browser() ## TODO: remove `map` vestige `@metadata`
-      rptPolyCol <- sim$reportingPolygons@metadata[layerName == p, ][["columnNameForLabels"]]
-      refCode <- paste0("lm_", sim$reportingPolygons@metadata[layerName == p, ][["shortName"]])
+
+      rptPolyCol <- "NAME"
+      refCode <- paste0("lm_", rptPoly[["ID"]])
       refCodeCC <- paste0(refCode, "_CC")
 
       lapply(names(mod[[refCode]]), function(f) {
@@ -803,9 +791,9 @@ plotFun <- function(sim) {
       ) {
         rptPoly <- sf::st_collection_extract(rptPoly, "POLYGON")
       }
-      browser() ## TODO: remove `map` vestige `@metadata`
-      rptPolyCol <- sim$reportingPolygons@metadata[layerName == p, ][["columnNameForLabels"]]
-      refCode <- paste0("pm_", sim$reportingPolygons@metadata[layerName == p, ][["shortName"]])
+      browser()
+      rptPolyCol <- "NAME"
+      refCode <- paste0("pm_", rptPoly[["ID"]])
       refCodeCC <- paste0(refCode, "_CC")
 
       pngs_pm_a <- lapply(names(mod[[refCode]]), function(f) {
@@ -861,13 +849,12 @@ plotFun <- function(sim) {
       } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
         rptPoly <- st_collection_extract(rptPoly, "POLYGON")
       }
-      browser() ## TODO: remove `map` vestige `@metadata`
-      rptPolyCol <- sim$reportingPolygons@metadata[layerName == p, ][["columnNameForLabels"]]
-      refCode <- paste0("sspm_", sim$reportingPolygons@metadata[layerName == p, ][["shortName"]])
+      browser()
+      rptPolyCol <- "NAME"
+      refCode <- paste0("sspm_", rptPoly[["ID"]])
       refCodeCC <- paste0(refCode, "_CC")
 
       pngs_bc_a <- lapply(names(mod[[refCode]]), function(f) {
-        ## TODO: use Plots
         ggbox1 <- plot_by_class(mod[[refCode]][[f]], "box") +
           geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
         nPages <- n_pages(ggbox1)
@@ -888,7 +875,6 @@ plotFun <- function(sim) {
         unlist()
 
       pngs_bc_b <- lapply(names(mod[[refCode]]), function(f) {
-        ## TODO: use Plots
         ggvio1 <- plot_by_class(mod[[refCode]][[f]], "violin") +
           geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
         nPages <- n_pages(ggvio1)
