@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "1.1.2.9000"),
+  version = list(NRV_summary = "1.1.2.9001"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -95,7 +95,8 @@ defineModule(sim, list(
                  desc = "Required in single mode.")
   ),
   outputObjects = bindrows(
-    # createsOutput("ml", "map", "map list object"),
+    createsOutput("standAgeMap", "SpatRaster", "biomass-weighted cohort age map"),
+    createsOutput("vegTypeMap", "SpatRaster", "leading vegetation type map")
   )
 ))
 
