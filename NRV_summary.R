@@ -53,22 +53,22 @@ defineModule(sim, list(
     defineParameter("sppEquivCol", "character", "LandR", NA, NA,
                     "The column in `sim$sppEquiv` data.table to use as a naming convention"),
     defineParameter("summaryInterval", "integer", 100L, NA, NA,
-                    "simulation time interval at which to take 'snapshots' used for summary analyses"),
-    defineParameter("summaryPeriod", "integer", start(sim) + c(700L, 1000L), NA, NA,
-                    "lower and upper end of the range of simulation times used for summary analyses"),
+                    "simulation time interval at which to take 'snapshots' used for summary analyses."),
+    defineParameter("summaryPeriod", "integer", c(700L, 1000L), NA, NA,
+                    "lower and upper end of the range of simulation times used for summary analyses."),
     defineParameter("timeSeriesTimes", "numeric", 601:650, NA, NA,
                     "simulation times for which to build time steries animations."),
     defineParameter("vegLeadingProportion", "numeric", 0.8, 0.0, 1.0,
                     "a number that defines whether a species is leading for a given pixel"),
     defineParameter(".plots", "character", "screen", NA, NA,
-                    "Used by Plots function, which can be optionally used here"),
+                    "Used by `SpaDES.core::Plots`, which can be optionally used here."),
     defineParameter(".plotInitialTime", "numeric", start(sim), NA, NA,
                     "Describes the simulation time at which the first plot event should occur."),
     defineParameter(".plotInterval", "numeric", NA, NA, NA,
                     "Describes the simulation time interval between plot events."),
     defineParameter(".studyAreaName", "character", NA, NA, NA,
-                    paste("Human-readable name for the study area used - e.g., a hash of the study",
-                          "area obtained using `reproducible::studyAreaName()`")),
+                    paste("Human-readable name for the study area used, or a hash of the study",
+                          "area obtained using `reproducible::studyAreaName()`.")),
     defineParameter(".seed", "list", list(), NA, NA,
                     "Named list of seeds to use for each event (names)."),
     defineParameter(".useCache", "logical", FALSE, NA, NA,
@@ -107,6 +107,9 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
   switch(
     eventType,
     init = {
+      if (P(sim)$summaryPeriod[1] < start(sim) || P(sim)$summaryPeriod[2] > end(sim)) {
+        stop("summaryPeriod values are outside the range of simulation times")
+      }
       mod$analysesOutputsTimes <- analysesOutputsTimes(P(sim)$summaryPeriod, P(sim)$summaryInterval)
 
       if (P(sim)$mode == "single") {
@@ -121,7 +124,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
 
         sim <- scheduleEvent(sim, start(sim), "NRV_summary", "map_generators", .last())
         ## fmt: skip
-        sim <- scheduleEvent(sim, start(sim) + P(sim)$summaryPeriod[1], "NRV_summary", "map_generators", .last())
+        sim <- scheduleEvent(sim, P(sim)$summaryPeriod[1], "NRV_summary", "map_generators", .last())
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "map_generators", .last())
 
         sim <- scheduleEvent(sim, start(sim), "NRV_summary", "save_single", .last())
