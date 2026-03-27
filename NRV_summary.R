@@ -54,9 +54,9 @@ defineModule(sim, list(
                     "The column in `sim$sppEquiv` data.table to use as a naming convention"),
     defineParameter("summaryInterval", "integer", 100L, NA, NA,
                     "simulation time interval at which to take 'snapshots' used for summary analyses."),
-    defineParameter("summaryPeriod", "integer", c(700L, 1000L), NA, NA,
+    defineParameter("summaryPeriod", "integer", start(sim) + c(700L, 1000L), NA, NA,
                     "lower and upper end of the range of simulation times used for summary analyses."),
-    defineParameter("timeSeriesTimes", "numeric", 601:650, NA, NA,
+    defineParameter("timeSeriesTimes", "numeric", start(sim) + 601:650, NA, NA,
                     "simulation times for which to build time steries animations."),
     defineParameter("vegLeadingProportion", "numeric", 0.8, 0.0, 1.0,
                     "a number that defines whether a species is leading for a given pixel"),
@@ -104,9 +104,13 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
   switch(
     eventType,
     init = {
-      if (P(sim)$summaryPeriod[1] < start(sim) || P(sim)$summaryPeriod[2] > end(sim)) {
+      if (min(P(sim)$summaryPeriod) < start(sim) || max(P(sim)$summaryPeriod) > end(sim)) {
         stop("summaryPeriod values are outside the range of simulation times")
       }
+      if (min(P(sim)$timeSeriesTimes) < start(sim) || max(P(sim)$timeSeriesTimes) > end(sim)) {
+        stop("timeSeriesTimes values are outside the range of simulation times")
+      }
+
       mod$analysesOutputsTimes <- analysesOutputsTimes(P(sim)$summaryPeriod, P(sim)$summaryInterval)
 
       if (P(sim)$mode == "single") {
