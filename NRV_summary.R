@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "1.1.2.9001"),
+  version = list(NRV_summary = "1.1.2.9002"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -94,10 +94,7 @@ defineModule(sim, list(
     expectsInput("studyAreaReporting", "SpatVector",
                  desc = "Required in single mode.")
   ),
-  outputObjects = bindrows(
-    createsOutput("standAgeMap", "SpatRaster", "biomass-weighted cohort age map"),
-    createsOutput("vegTypeMap", "SpatRaster", "leading vegetation type map")
-  )
+  outputObjects = SpaDES.core:::._outputObjectsDF()
 ))
 
 ## event types
@@ -164,7 +161,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       }
     },
     map_generators = {
-      sim$vegTypeMap <- LandR::vegTypeMapGenerator(
+      mod$vegTypeMap <- LandR::vegTypeMapGenerator(
         sim$cohortData,
         sim$pixelGroupMap,
         P(sim)$vegLeadingProportion,
@@ -175,7 +172,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         doAssertion = getOption("LandR.assertions", TRUE)
       )
 
-      sim$standAgeMap <- LandR::standAgeMapGenerator(
+      mod$standAgeMap <- LandR::standAgeMapGenerator(
         sim$cohortData,
         sim$pixelGroupMap,
         weight = "biomass",
@@ -241,11 +238,11 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         sim <- registerOutputs(f_pixelGroupMap, sim)
 
         f_standAgeMap <- file.path(outputPath(sim), paste0("standAgeMap_year", padYear, ".tif"))
-        terra::writeRaster(sim$standAgeMap, f_standAgeMap, datatype = "INT2U", overwrite = TRUE)
+        terra::writeRaster(mod$standAgeMap, f_standAgeMap, datatype = "INT2U", overwrite = TRUE)
         sim <- registerOutputs(f_standAgeMap, sim)
 
         f_vegTypeMap <- file.path(outputPath(sim), paste0("vegTypeMap_year", padYear, ".tif"))
-        terra::writeRaster(sim$vegTypeMap, f_vegTypeMap, datatype = "INT2U", overwrite = TRUE)
+        terra::writeRaster(mod$vegTypeMap, f_vegTypeMap, datatype = "INT2U", overwrite = TRUE)
         sim <- registerOutputs(f_vegTypeMap, sim)
 
         if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2]) {
