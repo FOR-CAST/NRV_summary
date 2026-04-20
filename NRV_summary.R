@@ -440,9 +440,9 @@ landscapeMetrics <- function(sim) {
 
 patchMetrics <- function(sim) {
   fflm <- mod$flm
-  fsam0 <- file.path(outputPath(sim), "standAgeMap_year0000.tif")
+  fsam0 <- file.path(outputPath(sim), paste0("standAgeMap_year", P(sim)$simTimes[1], ".tif"))  
   fsam <- mod$sam
-  fvtm0 <- file.path(outputPath(sim), "vegTypeMap_year0000.tif")
+  fvtm0 <- file.path(outputPath(sim), paste0("vegTypeMap_year", P(sim)$simTimes[1], ".tif"))
   fvtm <- mod$vtm
 
   ## current conditions
@@ -676,7 +676,7 @@ patchMetricsSeralBC <- function(sim) {
         calculatePatchMetricsSeral,
         ssm = fssm,
         flm = fflm,
-        summaryPoly = rptPoly,
+        summaryPolys = rptPoly,
         polyCol = rptPolyCol,
         funList = funList[[1]], ## TODO: temporarily, only patchAreasSeral
         .cacheExtra = fileInfo
@@ -797,7 +797,7 @@ plotFun <- function(sim) {
       ) {
         rptPoly <- sf::st_collection_extract(rptPoly, "POLYGON")
       }
-      browser()
+
       rptPolyCol <- "NAME"
       refCode <- paste0("pm_", rptPoly[["ID"]])
       refCodeCC <- paste0(refCode, "_CC")
@@ -855,7 +855,7 @@ plotFun <- function(sim) {
       } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
         rptPoly <- st_collection_extract(rptPoly, "POLYGON")
       }
-      browser()
+
       rptPolyCol <- "NAME"
       refCode <- paste0("sspm_", rptPoly[["ID"]])
       refCodeCC <- paste0(refCode, "_CC")
