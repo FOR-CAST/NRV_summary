@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "1.1.3"),
+  version = list(NRV_summary = "2.0.0"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -18,7 +18,7 @@ defineModule(sim, list(
     "ggforce", "ggplot2", "googledrive", "landscapemetrics", "qs2", "sf", "terra",
     "PredictiveEcology/LandR@development (>= 1.1.1)",
     "PredictiveEcology/LandWebUtils@development (>= 0.1.5)",
-    "FOR-CAST/nrvtools (>= 0.0.21)",
+    "FOR-CAST/nrvtools (>= 0.1.0)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
     "PredictiveEcology/SpaDES.core@development (>= 3.0.3.9000)"
   ),
@@ -359,11 +359,60 @@ InitMulti <- function(sim) {
   return(invisible(sim))
 }
 
-## build landscape metrics tables from vegetation type maps (VTMs)
+## ---- arrow-native NRV summary helpers (nrvtools >= 0.1.0) --------------------------------------
+## Replicated metrics are summarised through nrvtools' Arrow-native path (see the "Memory-bounded NRV
+## summaries" vignette): each replicate's raw metric table is written to its own parquet partition
+## under `<outputPath>/_aggregates/<refCode>/replicate=<rep>/`, then `summarize_nrv()` reduces across
+## replicates by pushing the aggregation down to Arrow compute, so the per-replicate rows are never
+## all held in memory at once. This replaces the former in-memory `calculateLandscapeMetrics()` /
+## `summarizePatchMetrics()` reduction (both removed from nrvtools >= 0.1.0); the raw producers
+## (`nrv_metrics_landscape()`, `calculatePatchMetrics()`, `calculatePatchMetricsSeral()`) now return
+## the raw per-replicate long table (schema: level/class/metric/value/rep/time/poly) which
+## `tidy_nrv_metrics()` binds and `summarize_nrv()` reduces to the mean/sd/min/max/... envelope.
+
+## `<outputPath>/_aggregates/<refCode>` -- the parquet dataset root for one refCode.
+.nrvAggRoot <- function(sim, refCode) {
+  file.path(outputPath(sim), "_aggregates", refCode)
+}
+
+## split a per-replicate map-file vector (`.../rep<NN>/<map>_year<YYYY>.tif`) into a named list by rep.
+.filesByRep <- function(files) {
+  split(files, basename(dirname(files)))
+}
+
+## Build the parquet dataset for one refCode and return the across-replicate envelope.
+## `compute_fn(repID)` returns the raw metric list for one replicate (from a raw nrvtools producer).
+.buildRepDataset <- function(root, repIDs, compute_fn, studyArea = NULL, scenario = NULL) {
+  unlink(root, recursive = TRUE)
+  for (repID in repIDs) {
+    tidied <- tidy_nrv_metrics(compute_fn(repID), studyArea = studyArea, scenario = scenario)
+    write_nrv_parquet(tidied, root, replicate = repID)
+  }
+  summarize_nrv(root)
+}
+
+## Write the range-of-variation envelope for one refCode: a combined CSV plus one CSV per metric
+## (keyed by the landscapemetrics metric name, replacing the former per-`funList` CSVs).
+.writeNrvSummaryCSVs <- function(sim, env, refCode) {
+  if (is.null(env) || !nrow(env)) {
+    return(invisible(character(0)))
+  }
+  write.csv(env, file.path(outputPath(sim), paste0(refCode, ".csv")), row.names = FALSE)
+  vapply(
+    unique(env$metric),
+    function(m) {
+      f <- file.path(outputPath(sim), paste0(refCode, "_", m, ".csv"))
+      write.csv(env[env$metric == m, ], f, row.names = FALSE)
+      f
+    },
+    character(1)
+  )
+}
+
+## build landscape metric envelopes from vegetation type maps (VTMs)
 landscapeMetrics <- function(sim) {
   fvtm0 <- file.path(outputPath(sim), paste0("vegTypeMap_year", P(sim)$simTimes[1], ".tif"))
   fvtm <- mod$vtm
-  browser()
   studyAreaReporting <- sf::st_as_sf(sim$studyAreaReporting)
 
   funList <- default_landscape_metrics() ## TODO: pass this further up via parameter funList_lm
@@ -372,6 +421,8 @@ landscapeMetrics <- function(sim) {
     tweak(workers = pemisc::optimalClusterNum(5000, length(fvtm))) |>
     future::plan()
   on.exit(future::plan(oldPlan), add = TRUE)
+
+  vtmByRep <- .filesByRep(fvtm)
 
   lapply(
     mod$rptPolyNames,
@@ -393,41 +444,36 @@ landscapeMetrics <- function(sim) {
       refCode <- paste0("lm_", rptPoly[["ID"]])
       refCodeCC <- paste0(refCode, "_CC")
 
-      fileInfo <- file.info(fvtm0)[, c("size", "mtime")]
-      mod[[refCodeCC]] <- suppressWarnings({
+      ## raw per-replicate landscape metrics, Cached on the map file(s) it reads.
+      lmRaw <- function(vtm) {
         Cache(
-          calculateLandscapeMetrics,
+          nrv_metrics_landscape,
           summaryPolys = rptPoly,
           polyCol = rptPolyCol,
-          vtm = fvtm0,
+          vtm = vtm,
           funList = funList,
-          .cacheExtra = fileInfo
+          .cacheExtra = file.info(vtm)[, c("size", "mtime")]
         )
-      })
-      lapply(names(mod[[refCodeCC]]), function(f) {
-        write.csv(
-          mod[[refCodeCC]][[f]],
-          file.path(outputPath(sim), paste0(refCodeCC, "_", f, ".csv")),
-          row.names = FALSE
-        )
-      })
+      }
 
-      fileInfo <- file.info(vtm)[, c("size", "mtime")]
-      mod[[refCode]] <- Cache(
-        calculateLandscapeMetrics,
-        summaryPolys = rptPoly,
-        polyCol = rptPolyCol,
-        vtm = fvtm,
-        funList = funList,
-        .cacheExtra = fileInfo
-      )
-      lapply(names(mod[[refCode]]), function(f) {
-        write.csv(
-          mod[[refCode]][[f]],
-          file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")),
-          row.names = FALSE
+      ## current conditions: a single snapshot, summarised as one replicate.
+      mod[[refCodeCC]] <- suppressWarnings(
+        .buildRepDataset(
+          .nrvAggRoot(sim, refCodeCC),
+          repIDs = "CC",
+          compute_fn = function(repID) lmRaw(fvtm0)
         )
-      })
+      )
+
+      ## simulation: one parquet partition per replicate, then reduce across reps.
+      mod[[refCode]] <- .buildRepDataset(
+        .nrvAggRoot(sim, refCode),
+        repIDs = names(vtmByRep),
+        compute_fn = function(repID) lmRaw(vtmByRep[[repID]])
+      )
+
+      .writeNrvSummaryCSVs(sim, mod[[refCode]], refCode)
+      .writeNrvSummaryCSVs(sim, mod[[refCodeCC]], refCodeCC)
 
       return(invisible(NULL))
     },
@@ -469,13 +515,16 @@ patchMetrics <- function(sim) {
   terra::writeRaster(samCC, fsam0, datatype = "INT1U", overwrite = TRUE)
 
   studyAreaReporting <- sf::st_as_sf(sim$studyAreaReporting)
-  browser()
   funList <- default_patch_metrics() ## TODO: pass this further up via parameter funList_pm
 
   oldPlan <- future::plan() |>
     tweak(workers = pemisc::optimalClusterNum(5000, length(fvtm))) |>
     future::plan()
   on.exit(future::plan(oldPlan), add = TRUE)
+
+  ## one parquet partition per replicate (the vtm/sam file vectors align by index).
+  vtmByRep <- .filesByRep(fvtm)
+  samByRep <- .filesByRep(fsam)
 
   lapply(
     mod$rptPolyNames,
@@ -494,63 +543,36 @@ patchMetrics <- function(sim) {
       refCode <- paste0("pm_", rptPoly[["ID"]])
       refCodeCC <- paste0(refCode, "_CC")
 
-      ## CC
-      fileInfo <- file.info(fvtm0, fsam0)[, c("size", "mtime")]
-      dfl_cc <- Cache(
-        calculatePatchMetrics,
-        sam = fsam0,
-        vtm = fvtm0,
-        flm = fflm,
-        summaryPolys = rptPoly,
-        polyCol = rptPolyCol,
-        funList = funList,
-        .cacheExtra = fileInfo
-      )
-      lapply(names(dfl_cc), function(f) {
-        write.csv(
-          dfl_cc[[f]],
-          file.path(outputPath(sim), paste0(refCodeCC, "_", f, "_raw.csv")),
-          row.names = FALSE
+      ## raw per-replicate patch metrics, Cached on the map files they read.
+      pmRaw <- function(vtm, sam) {
+        Cache(
+          calculatePatchMetrics,
+          sam = sam,
+          vtm = vtm,
+          flm = fflm,
+          summaryPolys = rptPoly,
+          polyCol = rptPolyCol,
+          funList = funList,
+          .cacheExtra = file.info(c(vtm, sam))[, c("size", "mtime")]
         )
-      })
+      }
 
-      mod[[refCodeCC]] <- summarizePatchMetrics(dfl_cc)
-      lapply(names(mod[[refCodeCC]]), function(f) {
-        write.csv(
-          mod[[refCodeCC]][[f]],
-          file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")),
-          row.names = FALSE
-        )
-      })
+      ## current conditions
+      mod[[refCodeCC]] <- .buildRepDataset(
+        .nrvAggRoot(sim, refCodeCC),
+        repIDs = "CC",
+        compute_fn = function(repID) pmRaw(fvtm0, fsam0)
+      )
 
       ## simulation results
-      fileInfo <- file.info(fsam, fvtm)[, c("size", "mtime")]
-      dfl <- Cache(
-        calculatePatchMetrics,
-        sam = fsam,
-        vtm = fvtm,
-        flm = fflm,
-        summaryPolys = rptPoly,
-        polyCol = rptPolyCol,
-        funList = funList,
-        .cacheExtra = fileInfo
+      mod[[refCode]] <- .buildRepDataset(
+        .nrvAggRoot(sim, refCode),
+        repIDs = names(vtmByRep),
+        compute_fn = function(repID) pmRaw(vtmByRep[[repID]], samByRep[[repID]])
       )
-      lapply(names(dfl), function(f) {
-        write.csv(
-          dfl[[f]],
-          file.path(outputPath(sim), paste0(refCode, "_", f, "_raw.csv")),
-          row.names = FALSE
-        )
-      })
 
-      mod[[refCode]] <- summarizePatchMetrics(dfl)
-      lapply(names(mod[[refCode]]), function(f) {
-        write.csv(
-          mod[[refCode]][[f]],
-          file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")),
-          row.names = FALSE
-        )
-      })
+      .writeNrvSummaryCSVs(sim, mod[[refCode]], refCode)
+      .writeNrvSummaryCSVs(sim, mod[[refCodeCC]], refCodeCC)
 
       return(invisible(NULL))
     },
@@ -611,7 +633,6 @@ patchMetricsSeralBC <- function(sim) {
   fflm <- mod$flm
   fssm0 <- mod$ssm0
   fssm <- mod$ssm
-  browser()
   studyAreaReporting <- sf::st_as_sf(sim$studyAreaReporting)
 
   funList <- default_patch_metrics_seral() ## TODO: pass further up via parameter funList_bc
@@ -628,6 +649,8 @@ patchMetricsSeralBC <- function(sim) {
   oldPlan <- plan(workers = pemisc::optimalClusterNum(5000, length(fssm)))
   on.exit(future::plan(oldPlan), add = TRUE)
 
+  ssmByRep <- .filesByRep(fssm)
+
   lapply(
     rptPolyNames,
     function(p, reportingPolygons, reportingPolygonCols, studyArea) {
@@ -643,88 +666,63 @@ patchMetricsSeralBC <- function(sim) {
       refCode <- paste0("sspm_", abbreviate(p, minlength = 8)) ## TODO: is this unique enough?
       refCodeCC <- paste0(refCode, "_CC")
 
-      ## CC
-      fileInfo <- file.info(fssm)[, c("size", "mtime")]
-      dfl_cc <- calculatePatchMetricsSeral(
-        ssm = fssm0,
-        flm = fflm,
-        summaryPolys = rptPoly,
-        polyCol = rptPolyCol,
-        funList = funList[[1]] ## TODO: temporarily, only patchAreasSeral
-      ) |>
-        Cache(.cacheExtra = fileInfo)
+      ## raw per-replicate seral patch metrics, Cached on the seral maps read.
+      bcRaw <- function(ssm) {
+        Cache(
+          calculatePatchMetricsSeral,
+          ssm = ssm,
+          flm = fflm,
+          summaryPolys = rptPoly,
+          polyCol = rptPolyCol,
+          funList = funList[[1]], ## TODO: temporarily, only patchAreasSeral
+          .cacheExtra = file.info(ssm)[, c("size", "mtime")]
+        )
+      }
 
-      lapply(names(dfl_cc), function(f) {
-        write.csv(
-          dfl_cc[[f]],
-          file.path(outputPath(sim), paste0(refCodeCC, "_", f, "_raw.csv")),
-          row.names = FALSE
-        )
-      })
-      mod[[refCodeCC]] <- summarizePatchMetricsSeral(dfl_cc)
-      lapply(names(mod[[refCodeCC]]), function(f) {
-        write.csv(
-          mod[[refCodeCC]][[f]],
-          file.path(outputPath(sim), paste0(refCodeCC, "_", f, ".csv")),
-          row.names = FALSE
-        )
-      })
+      ## current conditions
+      mod[[refCodeCC]] <- .buildRepDataset(
+        .nrvAggRoot(sim, refCodeCC),
+        repIDs = "CC",
+        compute_fn = function(repID) bcRaw(fssm0)
+      )
 
       ## simulation results
-      fileInfo <- file.info(mod$ssm)[, c("size", "mtime")]
-      dfl <- Cache(
-        calculatePatchMetricsSeral,
-        ssm = fssm,
-        flm = fflm,
-        summaryPolys = rptPoly,
-        polyCol = rptPolyCol,
-        funList = funList[[1]], ## TODO: temporarily, only patchAreasSeral
-        .cacheExtra = fileInfo
+      mod[[refCode]] <- .buildRepDataset(
+        .nrvAggRoot(sim, refCode),
+        repIDs = names(ssmByRep),
+        compute_fn = function(repID) bcRaw(ssmByRep[[repID]])
       )
-      lapply(names(dfl), function(f) {
-        write.csv(
-          dfl[[f]],
-          file.path(outputPath(sim), paste0(refCode, "_", f, "_raw.csv")),
-          row.names = FALSE
-        )
-      })
-      mod[[refCode]] <- summarizePatchMetricsSeral(dfl)
-      lapply(names(mod[[refCode]]), function(f) {
-        if (refCode == "sspm_NDTBEC" && f == "patchAreasSeral") {
-          seral_table <- mod[[refCode]][[f]] |>
-            na.omit() |>
-            mutate(
-              class = as.factor(class),
-              poly = as.factor(poly),
-              mm = NULL,
-              q1 = NULL,
-              md = NULL,
-              q3 = NULL,
-              mx = NULL,
-              sd = NULL,
-              cv = NULL,
-              se = NULL,
-              ci = NULL,
-              n = NULL
-            ) |>
-            ungroup() |>
-            summarize(area = sum(N * mn, na.rm = TRUE), .by = c("class", "poly", "time")) |>
-            mutate(totalArea = sum(area, na.rm = TRUE), .by = c("poly", "time")) |>
-            summarize(
-              minPctArea = 100 * min(area / totalArea, na.rm = TRUE),
-              meanPctArea = 100 * mean(area / totalArea, na.rm = TRUE),
-              maxPctArea = 100 * max(area / totalArea, na.rm = TRUE),
-              .by = c("class", "poly")
-            )
 
-          write.csv(seral_table, file.path(outputPath(sim), "SeralTable.csv"), row.names = FALSE)
-        }
-        write.csv(
-          mod[[refCode]][[f]],
-          file.path(outputPath(sim), paste0(refCode, "_", f, ".csv")),
-          row.names = FALSE
-        )
-      })
+      .writeNrvSummaryCSVs(sim, mod[[refCode]], refCode)
+      .writeNrvSummaryCSVs(sim, mod[[refCodeCC]], refCodeCC)
+
+      ## SeralTable: range (min/mean/max over time) of each seral class's share of area, for the
+      ## NDTxBEC reporting polygons. area = sum(n_reps * mean) reproduces the former sum(N * mn)
+      ## (total patch area pooled across replicates); the replicate pooling cancels in the
+      ## class/total proportion. `metric == "area"` is the landscapemetrics name for patchAreasSeral.
+      if (refCode == "sspm_NDTBEC") {
+        seral_table <- mod[[refCode]] |>
+          dplyr::filter(.data$metric == "area") |>
+          dplyr::select("class", "poly", "time", "n_reps", "mean") |>
+          na.omit() |>
+          dplyr::mutate(
+            class = factor(.data$class, levels = seral_stages()),
+            poly = as.factor(.data$poly)
+          ) |>
+          dplyr::summarize(
+            area = sum(.data$n_reps * .data$mean, na.rm = TRUE),
+            .by = c("class", "poly", "time")
+          ) |>
+          dplyr::mutate(totalArea = sum(.data$area, na.rm = TRUE), .by = c("poly", "time")) |>
+          dplyr::summarize(
+            minPctArea = 100 * min(.data$area / .data$totalArea, na.rm = TRUE),
+            meanPctArea = 100 * mean(.data$area / .data$totalArea, na.rm = TRUE),
+            maxPctArea = 100 * max(.data$area / .data$totalArea, na.rm = TRUE),
+            .by = c("class", "poly")
+          )
+
+        write.csv(seral_table, file.path(outputPath(sim), "SeralTable.csv"), row.names = FALSE)
+      }
 
       return(invisible(NULL))
     },
@@ -740,187 +738,65 @@ patchMetricsSeralBC <- function(sim) {
 plotFun <- function(sim) {
   # ! ----- EDIT BELOW ----- ! #
 
-  pngs_lm <- pngs_pm <- pngs_bc <- pngs_on <- list()
+  ## Both range-of-variation plot styles are produced per refCode from the summarize_nrv()
+  ## envelope: `type = "ribbon"` (across-replicate mean line + min-max ribbon) and
+  ## `type = "boxplot"` (box-and-whisker showing the median and quartiles the ribbon hides).
+  ## plot_nrv_envelope() facets by whichever of poly/class/metric vary.
+  ## TODO: overlay current conditions (the `<refCode>_CC` envelope in `mod`) as a reference layer;
+  ## re-add per-metric pagination if the faceted panels become too dense.
+  saveNrvPlots <- function(refCode, ylab) {
+    env <- mod[[refCode]]
+    if (is.null(env) || !nrow(env)) {
+      return(character(0))
+    }
+    fRibbon <- file.path(figurePath(sim), paste0(refCode, "_ribbon.png"))
+    fBox <- file.path(figurePath(sim), paste0(refCode, "_boxplot.png"))
+    ggsave(fRibbon, plot_nrv_envelope(env, type = "ribbon", ylab = ylab), height = 10, width = 16)
+    ggsave(fBox, plot_nrv_envelope(env, type = "boxplot", ylab = ylab), height = 10, width = 16)
+    c(fRibbon, fBox)
+  }
+
+  asPolygonSf <- function(rptPoly) {
+    if (is(rptPoly, "Spatial")) {
+      rptPoly <- sf::st_as_sf(rptPoly)
+    } else if (
+      is(rptPoly, "sf") && sf::st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON"
+    ) {
+      rptPoly <- sf::st_collection_extract(rptPoly, "POLYGON")
+    }
+    rptPoly
+  }
+
+  pngs_lm <- pngs_pm <- pngs_bc <- character(0)
 
   if ("lm" %in% tolower(P(sim)$postprocessEvents)) {
-    pngs_lm <- lapply(mod$rptPolyNames, function(p) {
-      rptPoly <- sim$reportingPolygons[[p]]
-
-      if (is(rptPoly, "Spatial")) {
-        rptPoly <- sf::st_as_sf(rptPoly)
-      } else if (
-        is(rptPoly, "sf") && sf::st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON"
-      ) {
-        rptPoly <- sf::st_collection_extract(rptPoly, "POLYGON")
-      }
-
-      rptPolyCol <- "NAME"
-      refCode <- paste0("lm_", rptPoly[["ID"]])
-      refCodeCC <- paste0(refCode, "_CC")
-
-      lapply(names(mod[[refCode]]), function(f) {
-        ## TODO: use Plots
-        gg1 <- plot_over_time(mod[[refCode]][[f]], substr(f, 7, nchar(f))) +
-          geom_hline(
-            data = mod[[refCodeCC]][[f]],
-            aes(yintercept = mn),
-            col = "darkred",
-            linetype = 2
-          )
-        nPages <- n_pages(gg1)
-        lapply(seq_len(nPages), function(pg) {
-          gg <- plot_over_time(mod[[refCode]][[f]], substr(f, 7, nchar(f)), page = pg) +
-            geom_hline(
-              data = mod[[refCodeCC]][[f]],
-              aes(yintercept = mn),
-              col = "darkred",
-              linetype = 2
-            )
-          file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_p", pg, ".png")) |>
-            ggsave(gg, height = 10, width = 16)
-        })
-      }) |>
-        unlist()
-    })
-
-    sim <- registerOutputs(pngs_lm, sim)
+    pngs_lm <- unlist(lapply(mod$rptPolyNames, function(p) {
+      rptPoly <- asPolygonSf(sim$reportingPolygons[[p]])
+      saveNrvPlots(paste0("lm_", rptPoly[["ID"]]), ylab = "landscape metric value")
+    }))
+    if (length(pngs_lm)) {
+      sim <- registerOutputs(pngs_lm, sim)
+    }
   }
 
   if ("pm" %in% tolower(P(sim)$postprocessEvents)) {
-    pngs_pm <- lapply(mod$rptPolyNames, function(p) {
-      rptPoly <- sim$reportingPolygons[[p]]
-
-      if (is(rptPoly, "Spatial")) {
-        rptPoly <- sf::st_as_sf(rptPoly)
-      } else if (
-        is(rptPoly, "sf") && sf::st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON"
-      ) {
-        rptPoly <- sf::st_collection_extract(rptPoly, "POLYGON")
-      }
-
-      rptPolyCol <- "NAME"
-      refCode <- paste0("pm_", rptPoly[["ID"]])
-      refCodeCC <- paste0(refCode, "_CC")
-
-      pngs_pm_a <- lapply(names(mod[[refCode]]), function(f) {
-        ## TODO: use Plots
-        ggbox1 <- plot_by_class(mod[[refCode]][[f]], "box") +
-          geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
-        nPages <- n_pages(ggbox1)
-        lapply(seq_len(nPages), function(pg) {
-          ggbox <- plot_by_class(mod[[refCode]][[f]], "box", page = pg) +
-            geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
-          file.path(
-            figurePath(sim),
-            paste0(f, "_facet_by_", refCode, "_box_plot", "_p", pg, ".png")
-          ) |>
-            ggsave(ggbox, height = 10, width = 16)
-        })
-      }) |>
-        unlist()
-
-      pngs_pm_b <- lapply(names(mod[[refCode]]), function(f) {
-        ## TODO: use Plots
-        ggvio1 <- plot_by_class(mod[[refCode]][[f]], "violin") +
-          geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
-        nPages <- n_pages(ggvio1)
-        lapply(seq_len(nPages), function(pg) {
-          ggvio <- plot_by_class(mod[[refCode]][[f]], "violin", page = pg) +
-            geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
-          ggsave(
-            file.path(
-              figurePath(sim),
-              paste0(f, "_facet_by_", refCode, "_vio_plot", "_p", pg, ".png")
-            ),
-            ggvio,
-            height = 10,
-            width = 16
-          )
-        })
-      }) |>
-        unlist()
-
-      c(pngs_pm_a, pngs_pm_b)
-    })
-
-    sim <- registerOutputs(pngs_pm, sim)
+    pngs_pm <- unlist(lapply(mod$rptPolyNames, function(p) {
+      rptPoly <- asPolygonSf(sim$reportingPolygons[[p]])
+      saveNrvPlots(paste0("pm_", rptPoly[["ID"]]), ylab = "patch metric value")
+    }))
+    if (length(pngs_pm)) {
+      sim <- registerOutputs(pngs_pm, sim)
+    }
   }
 
   if ("bc" %in% tolower(P(sim)$postprocessEvents)) {
-    pngs_bc <- lapply(mod$rptPolyNames, function(p) {
-      rptPoly <- sim$reportingPolygons[[p]]
-
-      if (is(rptPoly, "Spatial")) {
-        rptPoly <- st_as_sf(rptPoly)
-      } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
-        rptPoly <- st_collection_extract(rptPoly, "POLYGON")
-      }
-
-      rptPolyCol <- "NAME"
-      refCode <- paste0("sspm_", rptPoly[["ID"]])
-      refCodeCC <- paste0(refCode, "_CC")
-
-      pngs_bc_a <- lapply(names(mod[[refCode]]), function(f) {
-        ggbox1 <- plot_by_class(mod[[refCode]][[f]], "box") +
-          geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
-        nPages <- n_pages(ggbox1)
-        lapply(seq_len(nPages), function(pg) {
-          ggbox <- plot_by_class(mod[[refCode]][[f]], "box", page = pg) +
-            geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
-          ggsave(
-            file.path(
-              figurePath(sim),
-              paste0(f, "_facet_by_", refCode, "_box_plot", "_p", pg, ".png")
-            ),
-            ggbox,
-            height = 10,
-            width = 16
-          )
-        })
-      }) |>
-        unlist()
-
-      pngs_bc_b <- lapply(names(mod[[refCode]]), function(f) {
-        ggvio1 <- plot_by_class(mod[[refCode]][[f]], "violin") +
-          geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
-        nPages <- n_pages(ggvio1)
-        lapply(seq_len(nPages), function(pg) {
-          ggvio <- plot_by_class(mod[[refCode]][[f]], "violin", page = pg) +
-            geom_point(data = mod[[refCodeCC]][[f]], col = "darkred", size = 2.5)
-          ggsave(
-            file.path(
-              figurePath(sim),
-              paste0(f, "_facet_by_", refCode, "_vio_plot", "_p", pg, ".png")
-            ),
-            ggvio,
-            height = 10,
-            width = 16
-          )
-        })
-      }) |>
-        unlist()
-
-      pngs_bc_c <- lapply(names(mod[[refCode]]), function(f) {
-        gg1 <- plot_over_time_by_class(mod[[refCode]][[f]], f) +
-          geom_hline(data = mod[[refCodeCC]][[f]], aes(yintercept = mn), linetype = 2)
-        nPages <- n_pages(gg1)
-        lapply(seq_len(nPages), function(pg) {
-          gg <- plot_over_time_by_class(mod[[refCode]][[f]], f, page = pg) +
-            geom_hline(data = mod[[refCodeCC]][[f]], aes(yintercept = mn), linetype = 2)
-          ggsave(
-            file.path(figurePath(sim), paste0(f, "_facet_by_", refCode, "_p", pg, ".png")),
-            gg,
-            height = 10,
-            width = 16
-          )
-        })
-      }) |>
-        unlist()
-
-      c(pngs_bc_a, pngs_bc_b, pngs_bc_c)
-    })
-
-    sim <- registerOutputs(pngs_bc, sim)
+    pngs_bc <- unlist(lapply(mod$rptPolyNames, function(p) {
+      ## refCode mirrors patchMetricsSeralBC(): sspm_<abbreviated reporting-poly name>
+      saveNrvPlots(paste0("sspm_", abbreviate(p, minlength = 8)), ylab = "seral patch area (ha)")
+    }))
+    if (length(pngs_bc)) {
+      sim <- registerOutputs(pngs_bc, sim)
+    }
   }
 
   if ("on" %in% tolower(P(sim)$postprocessEvents)) {

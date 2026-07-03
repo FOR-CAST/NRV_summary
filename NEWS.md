@@ -1,5 +1,36 @@
 Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
+# NRV_summary 2.0.0
+
+This is a breaking release that adopts the Arrow-native, memory-bounded NRV
+summary path from `FOR-CAST/nrvtools (>= 0.1.0)` (which removed the former
+in-memory `calculateLandscapeMetrics()` / `summarizePatchMetrics()` /
+`summarizePatchMetricsSeral()`).
+
+* landscape, patch, and seral patch metrics are now computed *raw* per replicate
+  (`nrvtools::nrv_metrics_landscape()`, `calculatePatchMetrics()`,
+  `calculatePatchMetricsSeral()`), written to per-replicate parquet partitions
+  under `<outputPath>/_aggregates/<refCode>/replicate=<rep>/`, and reduced across
+  replicates by `nrvtools::summarize_nrv()`, so the per-replicate rows are never
+  all held in memory at once (the point of the change: large study areas x many
+  replicates no longer blow up RAM).
+* BREAKING output change: the former per-`funList` summary CSVs
+  (`<refCode>_<funList>.csv`) and raw CSVs (`<refCode>_<funList>_raw.csv`) are
+  replaced by a per-`refCode` envelope CSV (`<refCode>.csv`), one CSV per
+  landscapemetrics metric (`<refCode>_<metric>.csv`), and the parquet dataset.
+  The envelope columns are now `n_reps`/`mean`/`sd`/`min`/`q25`/`median`/`q75`/
+  `max`/`se`/`ci` (the former `N`/`mn`/`mm`/`q1`/`md`/`q3`/`mx` are gone).
+  Downstream readers must be updated.
+* NRV plots use `nrvtools::plot_nrv_envelope()`, producing both a min-max ribbon
+  (`<refCode>_ribbon.png`) and a box-and-whisker that shows the median and
+  quartiles (`<refCode>_boxplot.png`) per reporting unit. The former paginated
+  per-metric box/violin/over-time plots and the current-conditions overlay are
+  pending re-addition (the `<refCode>_CC` envelope is still computed and saved).
+* `SeralTable.csv` is unchanged in shape; its pooled total area is now
+  `sum(n_reps * mean)` (identical to the former `sum(N * mn)`).
+* removed the development `browser()` breakpoints from the postprocessing
+  functions; requires `FOR-CAST/nrvtools (>= 0.1.0)`.
+
 # NRV_summary 1.1.3
 
 * current development version; consolidated NRV post-processing module that
