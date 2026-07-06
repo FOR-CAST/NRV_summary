@@ -2,6 +2,15 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+## Landscape + patch metrics keyed on the reporting-polygon layer (`2.0.0.9002`)
+
+* `landscapeMetrics` (lm) and `patchMetrics` (pm) now group by the `"Name"` column that
+  `LandWebUtils::buildReportingPolygons()` sets and key each output `refCode` on the reporting-polygon
+  **layer name** (`abbreviate(p)`), matching the `bc` (seral) event. Previously they hard-coded
+  `polyCol = "NAME"` and keyed on `rptPoly[["ID"]]`, but the built reporting polygons carry neither a
+  `NAME` nor an `ID` column, so a run errored inside `nrv_metrics_landscape`
+  (`'names' attribute [1] must be the same length as the vector [0]`).
+
 ## Current-conditions reference = the saved year-0 state (`2.0.0.9001`)
 
 * The `mode = "multi"` current-conditions (CC) snapshot now reads the simulation's saved year-0

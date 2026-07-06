@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9001"),
+  version = list(NRV_summary = "2.0.0.9002"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -447,8 +447,8 @@ landscapeMetrics <- function(sim) {
       }
       rptPoly <- sf::st_crop(rptPoly, studyArea) ## ensure cropped to studyArea
 
-      rptPolyCol <- "NAME"
-      refCode <- paste0("lm_", rptPoly[["ID"]])
+      rptPolyCol <- "Name" ## label column set by LandWebUtils::buildReportingPolygons()
+      refCode <- paste0("lm_", abbreviate(p, minlength = 8)) ## key output on the layer name (cf. bc event)
       refCodeCC <- paste0(refCode, "_CC")
 
       ## raw per-replicate landscape metrics, Cached on the map file(s) it reads.
@@ -525,8 +525,8 @@ patchMetrics <- function(sim) {
         rptPoly <- st_collection_extract(rptPoly, "POLYGON")
       }
       rptPoly <- st_crop(rptPoly, studyArea) ## ensure cropped to studyArea
-      rptPolyCol <- "NAME"
-      refCode <- paste0("pm_", rptPoly[["ID"]])
+      rptPolyCol <- "Name" ## label column set by LandWebUtils::buildReportingPolygons()
+      refCode <- paste0("pm_", abbreviate(p, minlength = 8)) ## key output on the layer name (cf. bc event)
       refCodeCC <- paste0(refCode, "_CC")
 
       ## raw per-replicate patch metrics, Cached on the map files they read.
