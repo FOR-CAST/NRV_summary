@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0"),
+  version = list(NRV_summary = "2.0.0.9001"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -282,6 +282,13 @@ InitMulti <- function(sim) {
   ## all reps have same flammable map
   mod$flm <- file.path(outputPath(sim), allReps[1], paste0("flammableMap_year", padYearEnd, ".tif"))
 
+  ## current-conditions reference = the sim's saved year-0 state (the deterministic
+  ## initial condition, identical across reps -- read from rep 1). Read directly so
+  ## the CC snapshot needs no regeneration from speciesLayers / no "CC SAM" input,
+  ## and no write-before-read ordering between the landscape + patch metric events.
+  mod$fvtm0 <- file.path(outputPath(sim), allReps[1], paste0("vegTypeMap_year", padYearStart, ".tif"))
+  mod$fsam0 <- file.path(outputPath(sim), allReps[1], paste0("standAgeMap_year", padYearStart, ".tif"))
+
   cdpgm <- fs::dir_ls(
     outputPath(sim),
     regexp = "cohortData|pixelGroupMap",
@@ -411,7 +418,7 @@ InitMulti <- function(sim) {
 
 ## build landscape metric envelopes from vegetation type maps (VTMs)
 landscapeMetrics <- function(sim) {
-  fvtm0 <- file.path(outputPath(sim), paste0("vegTypeMap_year", P(sim)$simTimes[1], ".tif"))
+  fvtm0 <- mod$fvtm0 ## current-conditions VTM = the saved year-0 state (see InitMulti)
   fvtm <- mod$vtm
   studyAreaReporting <- sf::st_as_sf(sim$studyAreaReporting)
 
@@ -486,33 +493,12 @@ landscapeMetrics <- function(sim) {
 
 patchMetrics <- function(sim) {
   fflm <- mod$flm
-  fsam0 <- file.path(outputPath(sim), paste0("standAgeMap_year", P(sim)$simTimes[1], ".tif"))  
+  ## current-conditions reference = the sim's saved year-0 state (see InitMulti):
+  ## read directly, no regeneration from speciesLayers / no "CC SAM" input needed.
+  fsam0 <- mod$fsam0
   fsam <- mod$sam
-  fvtm0 <- file.path(outputPath(sim), paste0("vegTypeMap_year", P(sim)$simTimes[1], ".tif"))
+  fvtm0 <- mod$fvtm0
   fvtm <- mod$vtm
-
-  ## current conditions
-  vtmCC <- Cache(
-    vegTypeMapGenerator,
-    x = sim$speciesLayers,
-    vegLeadingProportion = P(sim)$vegLeadingProportion,
-    mixedType = 2,
-    sppEquiv = sim$sppEquiv,
-    sppEquivCol = P(sim)$sppEquivCol,
-    colors = sim$sppColorVect,
-    doAssertion = FALSE
-  )
-  terra::writeRaster(vtmCC, fvtm0, datatype = "INT1U", overwrite = TRUE)
-
-  samCC <- if (is.null(sim$reportingPolygons[["CC SAM"]])) {
-    sim$reportingPolygons[["CC TSF"]]
-  } else {
-    sim$reportingPolygons[["CC SAM"]]
-  }
-  if (is(samCC, "PackedSpatRaster")) {
-    samCC <- unwrap(samCC) ## TODO: why is this necessary? saveSimList wraps Spat* objects
-  }
-  terra::writeRaster(samCC, fsam0, datatype = "INT1U", overwrite = TRUE)
 
   studyAreaReporting <- sf::st_as_sf(sim$studyAreaReporting)
   funList <- default_patch_metrics() ## TODO: pass this further up via parameter funList_pm

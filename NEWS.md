@@ -1,5 +1,17 @@
 Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
+# NRV_summary (development version)
+
+## Current-conditions reference = the saved year-0 state (`2.0.0.9001`)
+
+* The `mode = "multi"` current-conditions (CC) snapshot now reads the simulation's saved year-0
+  state (`rep01/vegTypeMap_year0000.tif` + `standAgeMap_year0000.tif`, the deterministic initial
+  condition) instead of regenerating a VTM from `speciesLayers` in `patchMetrics` and reading a
+  `reportingPolygons[["CC SAM"]]` stand-age. This removes (a) the write-before-read ordering bug
+  where `landscapeMetrics` read the CC VTM before `patchMetrics` wrote it (a standalone run errored
+  with `file does not exist: .../vegTypeMap_year0.tif`), and (b) the un-wired `"CC SAM"` dependency.
+  The CC file paths are resolved once in `InitMulti`.
+
 # NRV_summary 2.0.0
 
 This is a breaking release that adopts the Arrow-native, memory-bounded NRV
