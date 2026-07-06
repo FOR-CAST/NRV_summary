@@ -2,6 +2,13 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+## Drop reporting-polygon features with no grouping label (`2.0.0.9003`)
+
+* `landscapeMetrics` (lm) + `patchMetrics` (pm) now drop features whose grouping column (`Name`) is
+  `NA` before summarising, and skip a layer entirely if none remain within the study area. An NA
+  `polyName` made the metric producers select an empty subpoly (`summaryPolys[[col]] == NA`), so
+  `crop()` returned NULL and the metric functions errored on `values(NULL)`.
+
 ## Landscape + patch metrics keyed on the reporting-polygon layer (`2.0.0.9002`)
 
 * `landscapeMetrics` (lm) and `patchMetrics` (pm) now group by the `"Name"` column that

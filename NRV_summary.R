@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9002"),
+  version = list(NRV_summary = "2.0.0.9003"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -450,6 +450,12 @@ landscapeMetrics <- function(sim) {
       rptPolyCol <- "Name" ## label column set by LandWebUtils::buildReportingPolygons()
       refCode <- paste0("lm_", abbreviate(p, minlength = 8)) ## key output on the layer name (cf. bc event)
       refCodeCC <- paste0(refCode, "_CC")
+      ## drop features with no grouping label: an NA polyName makes patch/landscape stats
+      ## select an empty subpoly (`summaryPolys[[col]] == NA`) -> crop() NULL -> values(NULL).
+      rptPoly <- rptPoly[!is.na(rptPoly[[rptPolyCol]]), ]
+      if (nrow(rptPoly) == 0) {
+        return(invisible(NULL)) ## no named features in this layer within the study area
+      }
 
       ## raw per-replicate landscape metrics, Cached on the map file(s) it reads.
       lmRaw <- function(vtm) {
@@ -528,6 +534,12 @@ patchMetrics <- function(sim) {
       rptPolyCol <- "Name" ## label column set by LandWebUtils::buildReportingPolygons()
       refCode <- paste0("pm_", abbreviate(p, minlength = 8)) ## key output on the layer name (cf. bc event)
       refCodeCC <- paste0(refCode, "_CC")
+      ## drop features with no grouping label: an NA polyName makes patch/landscape stats
+      ## select an empty subpoly (`summaryPolys[[col]] == NA`) -> crop() NULL -> values(NULL).
+      rptPoly <- rptPoly[!is.na(rptPoly[[rptPolyCol]]), ]
+      if (nrow(rptPoly) == 0) {
+        return(invisible(NULL)) ## no named features in this layer within the study area
+      }
 
       ## raw per-replicate patch metrics, Cached on the map files they read.
       pmRaw <- function(vtm, sam) {
