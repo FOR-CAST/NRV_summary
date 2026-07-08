@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9003"),
+  version = list(NRV_summary = "2.0.0.9004"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -754,23 +754,12 @@ plotFun <- function(sim) {
     c(fRibbon, fBox)
   }
 
-  asPolygonSf <- function(rptPoly) {
-    if (is(rptPoly, "Spatial")) {
-      rptPoly <- sf::st_as_sf(rptPoly)
-    } else if (
-      is(rptPoly, "sf") && sf::st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON"
-    ) {
-      rptPoly <- sf::st_collection_extract(rptPoly, "POLYGON")
-    }
-    rptPoly
-  }
-
   pngs_lm <- pngs_pm <- pngs_bc <- character(0)
 
   if ("lm" %in% tolower(P(sim)$postprocessEvents)) {
     pngs_lm <- unlist(lapply(mod$rptPolyNames, function(p) {
-      rptPoly <- asPolygonSf(sim$reportingPolygons[[p]])
-      saveNrvPlots(paste0("lm_", rptPoly[["ID"]]), ylab = "landscape metric value")
+      ## refCode must match landscapeMetrics()'s store key (lm_<abbreviate(p, 8)>), cf. bc event
+      saveNrvPlots(paste0("lm_", abbreviate(p, minlength = 8)), ylab = "landscape metric value")
     }))
     if (length(pngs_lm)) {
       sim <- registerOutputs(pngs_lm, sim)
@@ -779,8 +768,8 @@ plotFun <- function(sim) {
 
   if ("pm" %in% tolower(P(sim)$postprocessEvents)) {
     pngs_pm <- unlist(lapply(mod$rptPolyNames, function(p) {
-      rptPoly <- asPolygonSf(sim$reportingPolygons[[p]])
-      saveNrvPlots(paste0("pm_", rptPoly[["ID"]]), ylab = "patch metric value")
+      ## refCode must match patchMetrics()'s store key (pm_<abbreviate(p, 8)>), cf. bc event
+      saveNrvPlots(paste0("pm_", abbreviate(p, minlength = 8)), ylab = "patch metric value")
     }))
     if (length(pngs_pm)) {
       sim <- registerOutputs(pngs_pm, sim)
