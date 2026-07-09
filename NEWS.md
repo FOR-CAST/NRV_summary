@@ -2,6 +2,16 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+## LandWeb summaries: Leading + LargePatches (`2.0.0.9005`)
+
+- `postprocess_lw` now runs the ported v2 `LandWeb_summary` analyses via `nrvtools` (>= 0.2.0):
+  leading-vegetation-by-age-class and large-patch counts, keyed `lw_<poly>` (with a `_CC`
+  current-conditions twin). The age basis is **time-since-fire** (`rstTimeSinceFire`, from
+  burnSummaries), matching v2. The NRV distribution pools across replicates **and** summary years
+  (summarized with `time` excluded from the id columns, via a new `.buildRepDataset(id_cols=)`
+  passthrough). `plotFun` renders these as distribution histograms with a current-condition
+  reference line (`plot_nrv_distribution()`) rather than time envelopes.
+
 ## Drop reporting-polygon features with no grouping label (`2.0.0.9003`)
 
 * `landscapeMetrics` (lm) + `patchMetrics` (pm) now drop features whose grouping column (`Name`) is

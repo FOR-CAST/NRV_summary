@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9004"),
+  version = list(NRV_summary = "2.0.0.9005"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -18,7 +18,7 @@ defineModule(sim, list(
     "ggforce", "ggplot2", "googledrive", "landscapemetrics", "qs2", "sf", "terra",
     "PredictiveEcology/LandR@development (>= 1.1.1)",
     "PredictiveEcology/LandWebUtils@development (>= 0.1.5)",
-    "FOR-CAST/nrvtools (>= 0.1.0)",
+    "FOR-CAST/nrvtools (>= 0.2.0)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
     "PredictiveEcology/SpaDES.core@development (>= 3.0.3.9000)"
   ),
@@ -203,7 +203,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       browser() ## TODO
     },
     postprocess_lw = {
-      browser() ## TODO
+      sim <- landWebMetrics(sim)
     },
     postprocess_bc = {
       sim <- makeSeralStageMapsBC(sim)
@@ -288,6 +288,8 @@ InitMulti <- function(sim) {
   ## and no write-before-read ordering between the landscape + patch metric events.
   mod$fvtm0 <- file.path(outputPath(sim), allReps[1], paste0("vegTypeMap_year", padYearStart, ".tif"))
   mod$fsam0 <- file.path(outputPath(sim), allReps[1], paste0("standAgeMap_year", padYearStart, ".tif"))
+  ## current-conditions time-since-fire (burnSummaries output); age basis for the LandWeb summaries.
+  mod$ftsf0 <- file.path(outputPath(sim), allReps[1], paste0("rstTimeSinceFire_year", padYearStart, ".tif"))
 
   cdpgm <- fs::dir_ls(
     outputPath(sim),
@@ -349,6 +351,10 @@ InitMulti <- function(sim) {
   mod$vtm <- gsub(".*standAgeMap.*", NA, mod$allouts2) |>
     grep(paste(mod$analysesOutputsTimes, collapse = "|"), x = _, value = TRUE)
 
+  ## time-since-fire per year (burnSummaries output), aligned with mod$vtm by rep/year path (see
+  ## landWebMetrics(): the LandWeb summaries bin time-since-fire into age classes, matching v2).
+  mod$tsf <- gsub("vegTypeMap", "rstTimeSinceFire", mod$vtm)
+
   mod$samTimeSeries <- gsub(".*vegTypeMap.*", NA, mod$allouts) |>
     grep(paste(P(sim)$timeSeriesTimes, collapse = "|"), x = _, value = TRUE)
   mod$vtmTimeSeries <- gsub(".*standAgeMap.*", NA, mod$allouts) |>
@@ -389,13 +395,15 @@ InitMulti <- function(sim) {
 
 ## Build the parquet dataset for one refCode and return the across-replicate envelope.
 ## `compute_fn(repID)` returns the raw metric list for one replicate (from a raw nrvtools producer).
-.buildRepDataset <- function(root, repIDs, compute_fn, studyArea = NULL, scenario = NULL) {
+.buildRepDataset <- function(root, repIDs, compute_fn, studyArea = NULL, scenario = NULL, id_cols = NULL) {
   unlink(root, recursive = TRUE)
   for (repID in repIDs) {
     tidied <- tidy_nrv_metrics(compute_fn(repID), studyArea = studyArea, scenario = scenario)
     write_nrv_parquet(tidied, root, replicate = repID)
   }
-  summarize_nrv(root)
+  ## id_cols = NULL -> summarize_nrv() default (per-time envelopes); the LandWeb summaries pass an
+  ## explicit set excluding `time` so the NRV distribution pools across replicates AND summary years.
+  summarize_nrv(root, id_cols = id_cols)
 }
 
 ## Write the range-of-variation envelope for one refCode: a combined CSV plus one CSV per metric
@@ -567,6 +575,94 @@ patchMetrics <- function(sim) {
         .nrvAggRoot(sim, refCode),
         repIDs = names(vtmByRep),
         compute_fn = function(repID) pmRaw(vtmByRep[[repID]], samByRep[[repID]])
+      )
+
+      .writeNrvSummaryCSVs(sim, mod[[refCode]], refCode)
+      .writeNrvSummaryCSVs(sim, mod[[refCodeCC]], refCodeCC)
+
+      return(invisible(NULL))
+    },
+    studyArea = studyAreaReporting,
+    reportingPolygons = sim$reportingPolygons
+  )
+
+  return(invisible(sim))
+}
+
+## LandWeb summaries (ported v2 LandWeb_summary): leading-veg-by-age-class + large-patch counts.
+## Age basis = time-since-fire (mod$tsf, from burnSummaries), matching v2. No flammable masking.
+## The NRV distribution pools across replicates AND summary years, so summarize with `time` excluded
+## from the id columns (idCols below); the plots (plotFun) are distributions, not time envelopes.
+landWebMetrics <- function(sim) {
+  ftsf0 <- mod$ftsf0
+  ftsf <- mod$tsf
+  fvtm0 <- mod$fvtm0
+  fvtm <- mod$vtm
+
+  studyAreaReporting <- sf::st_as_sf(sim$studyAreaReporting)
+  funList <- default_landweb_metrics() ## TODO: pass this further up via parameter funList_lw
+  idCols <- c("poly", "level", "class", "metric", "metric.1") ## pool across rep x summary year (no time)
+
+  oldPlan <- future::plan() |>
+    tweak(workers = pemisc::optimalClusterNum(5000, length(fvtm))) |>
+    future::plan()
+  on.exit(future::plan(oldPlan), add = TRUE)
+
+  vtmByRep <- .filesByRep(fvtm)
+  tsfByRep <- .filesByRep(ftsf)
+
+  lapply(
+    mod$rptPolyNames,
+    function(p, reportingPolygons, studyArea) {
+      message(crayon::magenta("Calculating LandWeb summaries for", p, "..."))
+
+      rptPoly <- reportingPolygons[[p]]
+
+      if (is(rptPoly, "Spatial")) {
+        rptPoly <- sf::st_as_sf(rptPoly)
+      } else if (
+        is(rptPoly, "sf") && sf::st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON"
+      ) {
+        rptPoly <- sf::st_collection_extract(rptPoly, "POLYGON")
+      }
+      rptPoly <- sf::st_crop(rptPoly, studyArea) ## ensure cropped to studyArea
+      rptPolyCol <- "Name" ## label column set by LandWebUtils::buildReportingPolygons()
+      refCode <- paste0("lw_", abbreviate(p, minlength = 8)) ## key output on the layer name (cf. bc event)
+      refCodeCC <- paste0(refCode, "_CC")
+      rptPoly <- rptPoly[!is.na(rptPoly[[rptPolyCol]]), ]
+      if (nrow(rptPoly) == 0) {
+        return(invisible(NULL)) ## no named features in this layer within the study area
+      }
+
+      ## raw per-replicate LandWeb summaries, Cached on the map files they read.
+      lwRaw <- function(vtm, tsf) {
+        Cache(
+          calculateLandWebMetrics,
+          summaryPolys = rptPoly,
+          polyCol = rptPolyCol,
+          vtm = vtm,
+          age = tsf,
+          funList = funList,
+          ageClassCutOffs = P(sim)$ageClassCutOffs,
+          ageClasses = P(sim)$ageClasses,
+          .cacheExtra = file.info(c(vtm, tsf))[, c("size", "mtime")]
+        )
+      }
+
+      ## current conditions: a single (year-0) snapshot, treated as one replicate.
+      mod[[refCodeCC]] <- .buildRepDataset(
+        .nrvAggRoot(sim, refCodeCC),
+        repIDs = "CC",
+        compute_fn = function(repID) lwRaw(fvtm0, ftsf0),
+        id_cols = idCols
+      )
+
+      ## simulation results: one parquet partition per replicate (vtm/tsf vectors align by index).
+      mod[[refCode]] <- .buildRepDataset(
+        .nrvAggRoot(sim, refCode),
+        repIDs = names(vtmByRep),
+        compute_fn = function(repID) lwRaw(vtmByRep[[repID]], tsfByRep[[repID]]),
+        id_cols = idCols
       )
 
       .writeNrvSummaryCSVs(sim, mod[[refCode]], refCode)
@@ -754,7 +850,7 @@ plotFun <- function(sim) {
     c(fRibbon, fBox)
   }
 
-  pngs_lm <- pngs_pm <- pngs_bc <- character(0)
+  pngs_lm <- pngs_pm <- pngs_bc <- pngs_lw <- character(0)
 
   if ("lm" %in% tolower(P(sim)$postprocessEvents)) {
     pngs_lm <- unlist(lapply(mod$rptPolyNames, function(p) {
@@ -773,6 +869,44 @@ plotFun <- function(sim) {
     }))
     if (length(pngs_pm)) {
       sim <- registerOutputs(pngs_pm, sim)
+    }
+  }
+
+  if ("lw" %in% tolower(P(sim)$postprocessEvents)) {
+    ## LandWeb summaries are DISTRIBUTIONS across replicates (pooled over the summary period), NOT
+    ## time envelopes: plot histograms of the raw per-replicate values (read from the parquet roots)
+    ## with a current-condition reference line -- one figure per (reporting poly x metric).
+    pngs_lw <- unlist(lapply(mod$rptPolyNames, function(p) {
+      refCode <- paste0("lw_", abbreviate(p, minlength = 8)) ## match landWebMetrics() store key
+      env <- mod[[refCode]]
+      if (is.null(env) || !nrow(env)) {
+        return(character(0))
+      }
+      raw <- open_nrv_dataset(.nrvAggRoot(sim, refCode))
+      raw <- if (!is.null(raw)) as.data.frame(dplyr::collect(raw)) else NULL
+      cc <- open_nrv_dataset(.nrvAggRoot(sim, paste0(refCode, "_CC")))
+      cc <- if (!is.null(cc)) as.data.frame(dplyr::collect(cc)) else NULL
+      if (is.null(raw)) {
+        return(character(0))
+      }
+      vapply(
+        unique(env$metric),
+        function(m) {
+          f <- file.path(figurePath(sim), paste0(refCode, "_", m, "_distribution.png"))
+          gg <- plot_nrv_distribution(
+            raw[raw$metric == m, , drop = FALSE],
+            cc = if (!is.null(cc)) cc[cc$metric == m, , drop = FALSE] else NULL,
+            facet = c("class", "metric.1"),
+            xlab = m
+          )
+          ggsave(f, gg, height = 10, width = 16)
+          f
+        },
+        character(1)
+      )
+    }))
+    if (length(pngs_lw)) {
+      sim <- registerOutputs(pngs_lw, sim)
     }
   }
 
