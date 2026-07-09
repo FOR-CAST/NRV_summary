@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9005"),
+  version = list(NRV_summary = "2.0.0.9006"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -29,6 +29,12 @@ defineModule(sim, list(
                     "defines the age boundaries between age classes"),
     defineParameter("ageClassMaxAge", "integer", 400L, NA, NA,
                     "maximum possible age"),
+    defineParameter("patchDirections", "integer", 4L, 4L, 8L,
+                    paste("patch connectivity for the 'lw' (LandWeb summary) large-patch analysis,",
+                          "passed to `nrvtools::largePatchCounts()` (via `landscapemetrics::get_patches`):",
+                          "`4` = rook / 4-connected (matches v2's GDAL `polygonize`; the default),",
+                          "`8` = queen / 8-connected. NOTE: v2 was fixed at 4-connectivity;",
+                          "exposing 8 (queen) is a departure from v2.")),
     defineParameter("mixedType", "integer", 2L,
                     desc = paste("How to define mixed stands: `0L` for none; `1L` for any species admixture;",
                                  "`2L` for deciduous > conifer. See `LandR::vegTypeMapGenerator`.")),
@@ -645,6 +651,7 @@ landWebMetrics <- function(sim) {
           funList = funList,
           ageClassCutOffs = P(sim)$ageClassCutOffs,
           ageClasses = P(sim)$ageClasses,
+          directions = P(sim)$patchDirections, ## 4 = rook (v2), 8 = queen; -> largePatchCounts()
           .cacheExtra = file.info(c(vtm, tsf))[, c("size", "mtime")]
         )
       }

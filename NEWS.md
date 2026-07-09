@@ -2,6 +2,16 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+## `patchDirections` knob for lw large-patch connectivity (`2.0.0.9006`)
+
+- New `patchDirections` parameter (integer, default `4L`) controls the patch
+  connectivity of the `lw` large-patch analysis, passed through to
+  `nrvtools::largePatchCounts()` / `landscapemetrics::get_patches()`: `4` = rook
+  (4-connected) or `8` = queen (8-connected). **Departure from v2:** the v2
+  `LandWeb_summary` large-patch analysis was fixed at 4-connectivity (GDAL
+  `polygonize`'s default); the default `4L` reproduces v2, and `8L` (queen) is a
+  deliberate v3-only option.
+
 ## LandWeb summaries: Leading + LargePatches (`2.0.0.9005`)
 
 - `postprocess_lw` now runs the ported v2 `LandWeb_summary` analyses via `nrvtools` (>= 0.2.0):
