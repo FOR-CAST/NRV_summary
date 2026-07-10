@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9006"),
+  version = list(NRV_summary = "2.0.0.9007"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -15,7 +15,8 @@ defineModule(sim, list(
   documentation = list("README.md", "NRV_summary.Rmd"), ## .md produced from .Rmd
   reqdPkgs = list(
     "data.table", "dplyr", "fs", "future.apply", "future.callr",
-    "ggforce", "ggplot2", "googledrive", "landscapemetrics", "qs2", "sf", "terra",
+    "ggforce", "ggplot2", "gifski", "googledrive", "landscapemetrics", "qs2",
+    "RColorBrewer", "sf", "terra", "tidyterra",
     "PredictiveEcology/LandR@development (>= 1.1.1)",
     "PredictiveEcology/LandWebUtils@development (>= 0.1.5)",
     "FOR-CAST/nrvtools (>= 0.2.0)",
@@ -44,6 +45,7 @@ defineModule(sim, list(
     defineParameter("postprocessEvents", "character", c("lm", "pm"), NA, NA,
                     paste("Specify which subset of postprocessing events to run.",
                           "At least one of:",
+                          "'am' for the stand-age time-series animation (GIF);",
                           "'bc' for BC seral stage patch metrics;",
                           "'fd' for forest degradation indicators;",
                           "'lm' for default landscape metrics;",
@@ -143,6 +145,10 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
 
         sim <- InitMulti(sim)
 
+        if ("am" %in% tolower(P(sim)$postprocessEvents)) {
+          sim <- scheduleEvent(sim, end(sim), "NRV_summary", "animation", .last())
+        }
+
         if ("lm" %in% tolower(P(sim)$postprocessEvents)) {
           sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_lm", .last())
         }
@@ -218,6 +224,9 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
     postprocess_on = {
       ## TODO finalize implementation
       message("Ontario NRV metrics are not yet fully implemented.")
+    },
+    animation = {
+      sim <- makeAnimation(sim)
     },
     save_single = {
       padYear <- paddedFloatToChar(time(sim), padL = ceiling(log10(end(sim) + 1)))
@@ -832,6 +841,70 @@ patchMetricsSeralBC <- function(sim) {
     reportingPolygonCols = rptPolyCols
   )
 
+  return(invisible(sim))
+}
+
+### stand-age time-series animation (ports the v2 LandWeb_summary `animation` event)
+## Encoded with gifski (pure-Rust; no ImageMagick), so it avoids the ImageMagick
+## cache-exhaustion that broke the v2 `animation::saveGIF` path -- see LandWeb#153.
+## No system (policy.xml) configuration is required.
+makeAnimation <- function(sim) {
+  ## animate replicate 1's saved stand-age time series (the deterministic first rep,
+  ## matching the CC snapshot); frames were masked to studyAreaReporting when saved.
+  samFiles <- grep("rep01", mod$samTimeSeries, value = TRUE)
+  if (length(samFiles) == 0L) {
+    warning("NRV_summary animation: no rep01 standAgeMap time-series files found; skipping.")
+    return(invisible(sim))
+  }
+  yrs <- as.integer(gsub(".*year0*([0-9]+)\\.tif$", "\\1", samFiles))
+  ord <- order(yrs)
+  samFiles <- samFiles[ord]
+  yrs <- yrs[ord]
+
+  ## age-class reclassification + colours (RdYlGn young -> old, matching v2's brewer.pal).
+  ## `ageClassCutOffs` are the LOWER bound of each class (length == n); the final class
+  ## runs to +Inf so old stands are never dropped.
+  cutoffs <- P(sim)$ageClassCutOffs
+  n <- length(cutoffs)
+  ageClasses <- P(sim)$ageClasses[seq_len(n)]
+  rcl <- cbind(cutoffs, c(cutoffs[-1], Inf), seq_len(n))
+  pal <- grDevices::colorRampPalette(
+    RColorBrewer::brewer.pal(min(9L, max(3L, n)), "RdYlGn")
+  )(n)
+  names(pal) <- ageClasses
+
+  ageClassFrame <- function(f) {
+    r <- terra::classify(terra::rast(f), rcl, right = FALSE, include.lowest = TRUE)
+    levels(r) <- data.frame(id = seq_len(n), ageClass = ageClasses)
+    r
+  }
+
+  gifFile <- file.path(figurePath(sim), "standAge_animation.gif")
+  gifski::save_gif(
+    expr = {
+      for (i in seq_along(samFiles)) {
+        gg <- ggplot2::ggplot() +
+          tidyterra::geom_spatraster(data = ageClassFrame(samFiles[i])) +
+          ggplot2::scale_fill_manual(
+            values = pal, na.value = "transparent", drop = FALSE, name = "age class"
+          ) +
+          ggplot2::labs(
+            title = paste0(P(sim)$.studyAreaName, " — stand age"),
+            subtitle = paste("year", yrs[i])
+          ) +
+          ggplot2::coord_sf(expand = FALSE) +
+          ggplot2::theme_minimal()
+        print(gg)
+      }
+    },
+    gif_file = gifFile,
+    width = 1200,
+    height = 1200,
+    delay = 1,
+    progress = FALSE
+  )
+
+  message("NRV_summary: wrote stand-age animation (", length(samFiles), " frames) to ", gifFile)
   return(invisible(sim))
 }
 

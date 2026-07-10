@@ -2,6 +2,16 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+## Stand-age time-series animation (`2.0.0.9007`)
+
+- New `"am"` `postprocessEvents` option (mode `"multi"`) ports the v2 `LandWeb_summary`
+  animation: replicate 1's saved `standAgeMap` layers for the `timeSeriesTimes` years are
+  reclassified into age classes (`ageClassCutOffs` / `ageClasses`, RdYlGn young &rarr; old,
+  ggplot2 + `tidyterra`) and written to `standAge_animation.gif`. Encoded with **`gifski`**
+  (pure-Rust) instead of `animation`/ImageMagick, so it needs no `policy.xml` cache
+  configuration (the v2 path failed with "cache resources exhausted"; see LandWeb #153).
+  Adds `gifski`, `RColorBrewer`, and `tidyterra` to `reqdPkgs`.
+
 ## `patchDirections` knob for lw large-patch connectivity (`2.0.0.9006`)
 
 - New `patchDirections` parameter (integer, default `4L`) controls the patch
