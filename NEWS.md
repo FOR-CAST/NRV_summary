@@ -2,6 +2,19 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+## Post-processing outputs reorganised; v2-form LandWeb-summary plots (`2.0.0.9009`)
+
+- Multi-mode summary outputs now live under `outputs/<studyArea>/postprocess/` (a sibling of the
+  mainSim rep dirs, which are still read from `outputPath(sim)`), with parallel `figures/` and `csv/`
+  trees that mirror the same `<kind>/<layer>/` sub-structure (kind = lm / pm / boxplots / histograms;
+  layer = the reporting-polygon-layer name). This replaces the flat `<refCode>_*.{csv,png}` files
+  under `mainSim/`, so a figure and its data sit side by side and the dir path carries the context.
+- The `lw` LandWeb summaries now render the v2 forms via `nrvtools::plot_leading_boxplot()` /
+  `plot_largepatch_histogram()`: `figures/boxplots/<layer>/<subregion> <species>.png` (age-class
+  boxplots + red CC dot) and `figures/histograms/<layer>/<size>/<subregion> <species>.png` (one file
+  per species, four age-class panels, red CC line), replacing the busy distribution facets.
+- `lm`/`pm` envelope figures relocate to `figures/<kind>/<layer>/{ribbon,boxplot}.png`.
+
 ## Save maps at `timeSeriesTimes` for the animation (`2.0.0.9008`)
 
 - `mode = "single"` now generates and saves the `standAgeMap` / `vegTypeMap` at each

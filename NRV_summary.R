@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9008"),
+  version = list(NRV_summary = "2.0.0.9009"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -416,9 +416,26 @@ InitMulti <- function(sim) {
 ## the raw per-replicate long table (schema: level/class/metric/value/rep/time/poly) which
 ## `tidy_nrv_metrics()` binds and `summarize_nrv()` reduces to the mean/sd/min/max/... envelope.
 
-## `<outputPath>/_aggregates/<refCode>` -- the parquet dataset root for one refCode.
+## Post-processing outputs (parquet aggregates, figures, csv) live under
+## `outputs/<studyArea>/postprocess/` -- a sibling of the mainSim rep dirs, which are still READ from
+## `outputPath(sim)` (= outputs/<studyArea>/mainSim). `figures/` and `csv/` mirror the same
+## `<kind>/<layer>/` sub-structure (kind = lm/pm/boxplots/histograms/...; layer = the full
+## reporting-polygon-layer name), so a human can find a figure and its data side by side.
+.ppRoot <- function(sim) {
+  file.path(dirname(outputPath(sim)), "postprocess")
+}
+
+## `<postprocess>/_aggregates/<refCode>` -- the parquet dataset root for one refCode.
 .nrvAggRoot <- function(sim, refCode) {
-  file.path(outputPath(sim), "_aggregates", refCode)
+  file.path(.ppRoot(sim), "_aggregates", refCode)
+}
+
+## figure / csv output dir for one analysis `kind` and reporting `layer` (created on demand).
+.ppFigDir <- function(sim, kind, layer, ...) {
+  reproducible::checkPath(file.path(.ppRoot(sim), "figures", kind, layer, ...), create = TRUE)
+}
+.ppCsvDir <- function(sim, kind, layer, ...) {
+  reproducible::checkPath(file.path(.ppRoot(sim), "csv", kind, layer, ...), create = TRUE)
 }
 
 ## split a per-replicate map-file vector (`.../rep<NN>/<map>_year<YYYY>.tif`) into a named list by rep.
@@ -439,22 +456,36 @@ InitMulti <- function(sim) {
   summarize_nrv(root, id_cols = id_cols)
 }
 
-## Write the range-of-variation envelope for one refCode: a combined CSV plus one CSV per metric
-## (keyed by the landscapemetrics metric name, replacing the former per-`funList` CSVs).
-.writeNrvSummaryCSVs <- function(sim, env, refCode) {
+## Write the range-of-variation envelope for one refCode + reporting `layer` under csv/<kind>/<layer>/:
+## a combined `<base>.csv` plus one `<base>_<metric>.csv` per metric. `kind` (lm/pm/sspm/lw) and the
+## `_CC` suffix are recovered from `refCode`; the enclosing <kind>/<layer>/ dir supplies the context
+## the flat filenames used to carry, and it mirrors the figure dir structure. The `lw` (LandWeb
+## summary) envelope is split by analysis -- leadingProp -> csv/boxplots/<layer>/ (the leading
+## boxplot data), the large-patch metrics -> csv/histograms/<layer>/.
+.writeNrvSummaryCSVs <- function(sim, env, refCode, layer) {
   if (is.null(env) || !nrow(env)) {
     return(invisible(character(0)))
   }
-  write.csv(env, file.path(outputPath(sim), paste0(refCode, ".csv")), row.names = FALSE)
-  vapply(
-    unique(env$metric),
-    function(m) {
-      f <- file.path(outputPath(sim), paste0(refCode, "_", m, ".csv"))
-      write.csv(env[env$metric == m, ], f, row.names = FALSE)
-      f
-    },
-    character(1)
-  )
+  kind <- sub("_.*$", "", refCode)
+  cc <- if (grepl("_CC$", refCode)) "_CC" else ""
+  writeSet <- function(e, k, base) {
+    if (is.null(e) || !nrow(e)) {
+      return(invisible())
+    }
+    d <- .ppCsvDir(sim, k, layer)
+    write.csv(e, file.path(d, paste0(base, cc, ".csv")), row.names = FALSE)
+    for (m in unique(e$metric)) {
+      write.csv(e[e$metric == m, ], file.path(d, paste0(base, cc, "_", m, ".csv")), row.names = FALSE)
+    }
+  }
+  if (kind == "lw") {
+    isLead <- env$metric == "leadingProp"
+    writeSet(env[isLead, , drop = FALSE], "boxplots", "leading")
+    writeSet(env[!isLead, , drop = FALSE], "histograms", "largePatches")
+  } else {
+    writeSet(env, kind, kind)
+  }
+  invisible()
 }
 
 ## build landscape metric envelopes from vegetation type maps (VTMs)
@@ -526,8 +557,8 @@ landscapeMetrics <- function(sim) {
         compute_fn = function(repID) lmRaw(vtmByRep[[repID]])
       )
 
-      .writeNrvSummaryCSVs(sim, mod[[refCode]], refCode)
-      .writeNrvSummaryCSVs(sim, mod[[refCodeCC]], refCodeCC)
+      .writeNrvSummaryCSVs(sim, mod[[refCode]], refCode, p)
+      .writeNrvSummaryCSVs(sim, mod[[refCodeCC]], refCodeCC, p)
 
       return(invisible(NULL))
     },
@@ -610,8 +641,8 @@ patchMetrics <- function(sim) {
         compute_fn = function(repID) pmRaw(vtmByRep[[repID]], samByRep[[repID]])
       )
 
-      .writeNrvSummaryCSVs(sim, mod[[refCode]], refCode)
-      .writeNrvSummaryCSVs(sim, mod[[refCodeCC]], refCodeCC)
+      .writeNrvSummaryCSVs(sim, mod[[refCode]], refCode, p)
+      .writeNrvSummaryCSVs(sim, mod[[refCodeCC]], refCodeCC, p)
 
       return(invisible(NULL))
     },
@@ -699,8 +730,8 @@ landWebMetrics <- function(sim) {
         id_cols = idCols
       )
 
-      .writeNrvSummaryCSVs(sim, mod[[refCode]], refCode)
-      .writeNrvSummaryCSVs(sim, mod[[refCodeCC]], refCodeCC)
+      .writeNrvSummaryCSVs(sim, mod[[refCode]], refCode, p)
+      .writeNrvSummaryCSVs(sim, mod[[refCodeCC]], refCodeCC, p)
 
       return(invisible(NULL))
     },
@@ -821,8 +852,8 @@ patchMetricsSeralBC <- function(sim) {
         compute_fn = function(repID) bcRaw(ssmByRep[[repID]])
       )
 
-      .writeNrvSummaryCSVs(sim, mod[[refCode]], refCode)
-      .writeNrvSummaryCSVs(sim, mod[[refCodeCC]], refCodeCC)
+      .writeNrvSummaryCSVs(sim, mod[[refCode]], refCode, p)
+      .writeNrvSummaryCSVs(sim, mod[[refCodeCC]], refCodeCC, p)
 
       ## SeralTable: range (min/mean/max over time) of each seral class's share of area, for the
       ## NDTxBEC reporting polygons. area = sum(n_reps * mean) reproduces the former sum(N * mn)
@@ -926,103 +957,123 @@ makeAnimation <- function(sim) {
   return(invisible(sim))
 }
 
+## LandWeb-summary figures for one reporting layer: the v2-form leading boxplots
+## (figures/boxplots/<layer>/<subregion> <species>.png) and large-patch histograms
+## (figures/histograms/<layer>/<size>/<subregion> <species>.png -- one file per species, four
+## age-class panels), read from the raw per-replicate parquet with the current-condition overlay.
+.saveLandWebFigs <- function(sim, p) {
+  refCode <- paste0("lw_", abbreviate(p, minlength = 8))
+  raw <- open_nrv_dataset(.nrvAggRoot(sim, refCode))
+  if (is.null(raw)) {
+    return(character(0))
+  }
+  raw <- as.data.frame(dplyr::collect(raw))
+  if (!nrow(raw)) {
+    return(character(0))
+  }
+  cc <- open_nrv_dataset(.nrvAggRoot(sim, paste0(refCode, "_CC")))
+  cc <- if (!is.null(cc)) as.data.frame(dplyr::collect(cc)) else NULL
+
+  ageClasses <- P(sim)$ageClasses
+  safe <- function(s) gsub("[/\\]", "-", s) ## filename-safe subregion / species
+  ccFor <- function(poly, sp, met) {
+    if (is.null(cc)) {
+      NULL
+    } else {
+      cc[cc$poly == poly & cc$metric.1 == sp & cc$metric == met, , drop = FALSE]
+    }
+  }
+  out <- character(0)
+
+  ## Leading boxplots: one file per (subregion x species)
+  lead <- raw[raw$metric == "leadingProp", , drop = FALSE]
+  if (nrow(lead)) {
+    dBox <- .ppFigDir(sim, "boxplots", p)
+    for (poly in unique(lead$poly)) {
+      for (sp in unique(lead$metric.1)) {
+        d <- lead[lead$poly == poly & lead$metric.1 == sp, , drop = FALSE]
+        if (!nrow(d)) next
+        gg <- nrvtools::plot_leading_boxplot(
+          d,
+          cc = ccFor(poly, sp, "leadingProp"),
+          ageClasses = ageClasses,
+          title = paste(poly, sp)
+        )
+        f <- file.path(dBox, paste0(safe(poly), " ", safe(sp), ".png"))
+        ggsave(f, gg, width = 8, height = 6)
+        out <- c(out, f)
+      }
+    }
+  }
+
+  ## Large-patch histograms: one file per (size x subregion x species), four age-class panels
+  for (met in grep("^Npatch_ge", unique(raw$metric), value = TRUE)) {
+    sz <- sub("^Npatch_ge(\\d+)ha$", "\\1", met)
+    dSz <- .ppFigDir(sim, "histograms", p, sz)
+    lp <- raw[raw$metric == met, , drop = FALSE]
+    for (poly in unique(lp$poly)) {
+      for (sp in unique(lp$metric.1)) {
+        d <- lp[lp$poly == poly & lp$metric.1 == sp, , drop = FALSE]
+        if (!nrow(d)) next
+        gg <- nrvtools::plot_largepatch_histogram(
+          d,
+          cc = ccFor(poly, sp, met),
+          ageClasses = ageClasses,
+          xlab = paste("Number of patches greater than", sz, "ha"),
+          title = paste0(poly, " ", sp, " (>=", sz, " ha)")
+        )
+        f <- file.path(dSz, paste0(safe(poly), " ", safe(sp), ".png"))
+        ggsave(f, gg, width = 9, height = 7)
+        out <- c(out, f)
+      }
+    }
+  }
+  out
+}
+
 ### plotting
 plotFun <- function(sim) {
-  # ! ----- EDIT BELOW ----- ! #
-
-  ## Both range-of-variation plot styles are produced per refCode from the summarize_nrv()
-  ## envelope: `type = "ribbon"` (across-replicate mean line + min-max ribbon) and
-  ## `type = "boxplot"` (box-and-whisker showing the median and quartiles the ribbon hides).
-  ## plot_nrv_envelope() facets by whichever of poly/class/metric vary.
-  ## TODO: overlay current conditions (the `<refCode>_CC` envelope in `mod`) as a reference layer;
-  ## re-add per-metric pagination if the faceted panels become too dense.
-  saveNrvPlots <- function(refCode, ylab) {
-    env <- mod[[refCode]]
+  ## Envelope figures (lm/pm/bc) -> figures/<kind>/<layer>/{ribbon,boxplot}.png (faceted by the
+  ## metric/class columns that vary). The LandWeb summaries (lw) are per-species boxplots / histograms
+  ## via .saveLandWebFigs() -> figures/{boxplots,histograms}/<layer>/...
+  saveNrvPlots <- function(kind, p, ylab) {
+    env <- mod[[paste0(kind, "_", abbreviate(p, minlength = 8))]]
     if (is.null(env) || !nrow(env)) {
       return(character(0))
     }
-    fRibbon <- file.path(figurePath(sim), paste0(refCode, "_ribbon.png"))
-    fBox <- file.path(figurePath(sim), paste0(refCode, "_boxplot.png"))
+    d <- .ppFigDir(sim, kind, p)
+    fRibbon <- file.path(d, "ribbon.png")
+    fBox <- file.path(d, "boxplot.png")
     ggsave(fRibbon, plot_nrv_envelope(env, type = "ribbon", ylab = ylab), height = 10, width = 16)
     ggsave(fBox, plot_nrv_envelope(env, type = "boxplot", ylab = ylab), height = 10, width = 16)
     c(fRibbon, fBox)
   }
 
-  pngs_lm <- pngs_pm <- pngs_bc <- pngs_lw <- character(0)
+  events <- tolower(P(sim)$postprocessEvents)
+  pngs <- character(0)
 
-  if ("lm" %in% tolower(P(sim)$postprocessEvents)) {
-    pngs_lm <- unlist(lapply(mod$rptPolyNames, function(p) {
-      ## refCode must match landscapeMetrics()'s store key (lm_<abbreviate(p, 8)>), cf. bc event
-      saveNrvPlots(paste0("lm_", abbreviate(p, minlength = 8)), ylab = "landscape metric value")
-    }))
-    if (length(pngs_lm)) {
-      sim <- registerOutputs(pngs_lm, sim)
-    }
+  if ("lm" %in% events) {
+    pngs <- c(pngs, unlist(lapply(mod$rptPolyNames, function(p) {
+      saveNrvPlots("lm", p, ylab = "landscape metric value")
+    })))
+  }
+  if ("pm" %in% events) {
+    pngs <- c(pngs, unlist(lapply(mod$rptPolyNames, function(p) {
+      saveNrvPlots("pm", p, ylab = "patch metric value")
+    })))
+  }
+  if ("lw" %in% events) {
+    pngs <- c(pngs, unlist(lapply(mod$rptPolyNames, function(p) .saveLandWebFigs(sim, p))))
+  }
+  if ("bc" %in% events) {
+    pngs <- c(pngs, unlist(lapply(mod$rptPolyNames, function(p) {
+      saveNrvPlots("sspm", p, ylab = "seral patch area (ha)")
+    })))
   }
 
-  if ("pm" %in% tolower(P(sim)$postprocessEvents)) {
-    pngs_pm <- unlist(lapply(mod$rptPolyNames, function(p) {
-      ## refCode must match patchMetrics()'s store key (pm_<abbreviate(p, 8)>), cf. bc event
-      saveNrvPlots(paste0("pm_", abbreviate(p, minlength = 8)), ylab = "patch metric value")
-    }))
-    if (length(pngs_pm)) {
-      sim <- registerOutputs(pngs_pm, sim)
-    }
+  if (length(pngs)) {
+    sim <- registerOutputs(pngs, sim)
   }
-
-  if ("lw" %in% tolower(P(sim)$postprocessEvents)) {
-    ## LandWeb summaries are DISTRIBUTIONS across replicates (pooled over the summary period), NOT
-    ## time envelopes: plot histograms of the raw per-replicate values (read from the parquet roots)
-    ## with a current-condition reference line -- one figure per (reporting poly x metric).
-    pngs_lw <- unlist(lapply(mod$rptPolyNames, function(p) {
-      refCode <- paste0("lw_", abbreviate(p, minlength = 8)) ## match landWebMetrics() store key
-      env <- mod[[refCode]]
-      if (is.null(env) || !nrow(env)) {
-        return(character(0))
-      }
-      raw <- open_nrv_dataset(.nrvAggRoot(sim, refCode))
-      raw <- if (!is.null(raw)) as.data.frame(dplyr::collect(raw)) else NULL
-      cc <- open_nrv_dataset(.nrvAggRoot(sim, paste0(refCode, "_CC")))
-      cc <- if (!is.null(cc)) as.data.frame(dplyr::collect(cc)) else NULL
-      if (is.null(raw)) {
-        return(character(0))
-      }
-      vapply(
-        unique(env$metric),
-        function(m) {
-          f <- file.path(figurePath(sim), paste0(refCode, "_", m, "_distribution.png"))
-          gg <- plot_nrv_distribution(
-            raw[raw$metric == m, , drop = FALSE],
-            cc = if (!is.null(cc)) cc[cc$metric == m, , drop = FALSE] else NULL,
-            facet = c("class", "metric.1"),
-            xlab = m
-          )
-          ggsave(f, gg, height = 10, width = 16)
-          f
-        },
-        character(1)
-      )
-    }))
-    if (length(pngs_lw)) {
-      sim <- registerOutputs(pngs_lw, sim)
-    }
-  }
-
-  if ("bc" %in% tolower(P(sim)$postprocessEvents)) {
-    pngs_bc <- unlist(lapply(mod$rptPolyNames, function(p) {
-      ## refCode mirrors patchMetricsSeralBC(): sspm_<abbreviated reporting-poly name>
-      saveNrvPlots(paste0("sspm_", abbreviate(p, minlength = 8)), ylab = "seral patch area (ha)")
-    }))
-    if (length(pngs_bc)) {
-      sim <- registerOutputs(pngs_bc, sim)
-    }
-  }
-
-  if ("on" %in% tolower(P(sim)$postprocessEvents)) {
-    ## TODO
-  }
-
-  # ! ----- STOP EDITING ----- ! #
   return(invisible(sim))
 }
 
