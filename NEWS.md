@@ -2,6 +2,15 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+## Save maps at `timeSeriesTimes` for the animation (`2.0.0.9008`)
+
+- `mode = "single"` now generates and saves the `standAgeMap` / `vegTypeMap` at each
+  `timeSeriesTimes` year (in addition to the summary times), so the `"am"` animation actually has
+  its frames when read back in `mode = "multi"`. Previously the maps were only saved at
+  `summaryPeriod` / `summaryInterval` times, so `timeSeriesTimes` outside that window produced no
+  frames. The heavier `cohortData` / `pixelGroupMap` are still saved only at the summary analysis
+  times, not at the (many) `timeSeriesTimes` years.
+
 ## Stand-age time-series animation (`2.0.0.9007`)
 
 - New `"am"` `postprocessEvents` option (mode `"multi"`) ports the v2 `LandWeb_summary`

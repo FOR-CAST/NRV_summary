@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9007"),
+  version = list(NRV_summary = "2.0.0.9008"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -140,6 +140,16 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         sim <- scheduleEvent(sim, start(sim), "NRV_summary", "save_single", .last())
         sim <- scheduleEvent(sim, P(sim)$summaryPeriod[1], "NRV_summary", "save_single", .last())
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "save_single", .last())
+
+        ## also generate + save the stand-age / veg-type maps at each timeSeriesTimes
+        ## year, so the animation has its frames (read back in mode = "multi"). These
+        ## typically fall outside summaryPeriod, so they are not covered by the
+        ## summaryInterval reschedule; schedule map_generators before save_single so
+        ## the maps exist when saved.
+        for (tst in P(sim)$timeSeriesTimes) {
+          sim <- scheduleEvent(sim, tst, "NRV_summary", "map_generators", .last())
+          sim <- scheduleEvent(sim, tst, "NRV_summary", "save_single", .last())
+        }
       } else if (P(sim)$mode == "multi") {
         stopifnot(!is.null(sim$reportingPolygons))
 
@@ -247,7 +257,23 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       }
 
       ## objects to save during simulation --------------------------------------------------------
+      ## stand-age + veg-type maps are saved at the summary times AND at each
+      ## timeSeriesTimes year (the animation frames, read back in mode = "multi").
+      ## cohortData + pixelGroupMap are only needed at the summary analysis times,
+      ## so they are NOT written at the (many) timeSeriesTimes years.
       times_during <- c(start(sim), end(sim), mod$analysesOutputsTimes) |> unique() |> sort()
+      times_maps <- c(times_during, P(sim)$timeSeriesTimes) |> unique() |> sort()
+
+      if (time(sim) %in% times_maps) {
+        f_standAgeMap <- file.path(outputPath(sim), paste0("standAgeMap_year", padYear, ".tif"))
+        terra::writeRaster(mod$standAgeMap, f_standAgeMap, datatype = "INT2U", overwrite = TRUE)
+        sim <- registerOutputs(f_standAgeMap, sim)
+
+        f_vegTypeMap <- file.path(outputPath(sim), paste0("vegTypeMap_year", padYear, ".tif"))
+        terra::writeRaster(mod$vegTypeMap, f_vegTypeMap, datatype = "INT2U", overwrite = TRUE)
+        sim <- registerOutputs(f_vegTypeMap, sim)
+      }
+
       if (time(sim) %in% times_during) {
         f_cohortData <- file.path(outputPath(sim), paste0("cohortData_year", padYear, ".qs2"))
         qs2::qs_save(sim$cohortData, f_cohortData)
@@ -256,14 +282,6 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         f_pixelGroupMap <- file.path(outputPath(sim), paste0("pixelGroupMap_year", padYear, ".tif"))
         terra::writeRaster(sim$pixelGroupMap, f_pixelGroupMap, datatype = "INT4U", overwrite = TRUE)
         sim <- registerOutputs(f_pixelGroupMap, sim)
-
-        f_standAgeMap <- file.path(outputPath(sim), paste0("standAgeMap_year", padYear, ".tif"))
-        terra::writeRaster(mod$standAgeMap, f_standAgeMap, datatype = "INT2U", overwrite = TRUE)
-        sim <- registerOutputs(f_standAgeMap, sim)
-
-        f_vegTypeMap <- file.path(outputPath(sim), paste0("vegTypeMap_year", padYear, ".tif"))
-        terra::writeRaster(mod$vegTypeMap, f_vegTypeMap, datatype = "INT2U", overwrite = TRUE)
-        sim <- registerOutputs(f_vegTypeMap, sim)
 
         if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2]) {
           ## fmt: skip
