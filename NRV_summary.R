@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9013"),
+  version = list(NRV_summary = "2.0.0.9014"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -19,7 +19,7 @@ defineModule(sim, list(
     "RColorBrewer", "sf", "terra", "tidyterra",
     "PredictiveEcology/LandR@development (>= 1.1.1)",
     "PredictiveEcology/LandWebUtils@development (>= 0.1.5)",
-    "FOR-CAST/nrvtools (>= 0.2.4)",
+    "FOR-CAST/nrvtools (>= 0.2.5)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
     "PredictiveEcology/SpaDES.core@development (>= 3.0.3.9000)"
   ),
@@ -665,6 +665,14 @@ patchMetrics <- function(sim) {
         repIDs = names(vtmByRep),
         compute_fn = function(repID) pmRaw(vtmByRep[[repID]], samByRep[[repID]])
       )
+
+      ## relabel integer vegType class codes -> species names in the envelope (class-level lsm_c_*
+      ## metrics report raw codes), so CSVs + plots show species. Applied here too (not only at the
+      ## nrvtools source) so a reused/older parquet with integer-coded classes is fixed without
+      ## re-aggregating; idempotent once the parquet already stores labels.
+      vtmRAT <- terra::rast(fvtm0)
+      mod[[refCode]] <- nrvtools::label_vegtype_classes(mod[[refCode]], vtmRAT)
+      mod[[refCodeCC]] <- nrvtools::label_vegtype_classes(mod[[refCodeCC]], vtmRAT)
 
       .writeNrvSummaryCSVs(sim, mod[[refCode]], refCode, p)
       .writeNrvSummaryCSVs(sim, mod[[refCodeCC]], refCodeCC, p)
