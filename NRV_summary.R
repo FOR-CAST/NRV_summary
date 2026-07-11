@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9017"),
+  version = list(NRV_summary = "2.0.0.9018"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -48,6 +48,13 @@ defineModule(sim, list(
                           "parquets to regenerate the envelopes/CSVs/figures. Use to iterate on the",
                           "plots/CSVs without re-running the (~hours) landscape-metric aggregation;",
                           "leave FALSE for a fresh run.")),
+    defineParameter("plotWorkers", "integer", 8L, 1L, NA,
+                    paste("(mode = 'multi') hard cap on the number of local worker processes used to",
+                          "render the postprocess figures in parallel (each figure is an independent",
+                          "`ggsave`). The actual count is RAM-aware (`pemisc::optimalClusterNum`) but",
+                          "never exceeds this cap, so a shared compute node is not swamped; 1 renders",
+                          "sequentially. Uses `future` multisession (not fork; the crew worker is a",
+                          "mirai daemon).")),
     defineParameter("postprocessEvents", "character", c("lm", "pm"), NA, NA,
                     paste("Specify which subset of postprocessing events to run.",
                           "At least one of:",
@@ -990,19 +997,21 @@ makeAnimation <- function(sim) {
   return(invisible(sim))
 }
 
-## LandWeb-summary figures for one reporting layer: the v2-form leading boxplots
+## LandWeb-summary figure TASKS for one reporting layer: the v2-form leading boxplots
 ## (figures/boxplots/<layer>/<subregion> <species>.png) and large-patch histograms
 ## (figures/histograms/<layer>/<size>/<subregion> <species>.png -- one file per species, four
 ## age-class panels), read from the raw per-replicate parquet with the current-condition overlay.
-.saveLandWebFigs <- function(sim, p) {
+## Returns a list of self-contained render tasks (see .renderTasks()) rather than rendering inline,
+## so plotFun can render them in parallel. The output dirs are created here (main worker).
+.saveLandWebFigTasks <- function(sim, p) {
   refCode <- paste0("lw_", abbreviate(p, minlength = 8))
   raw <- open_nrv_dataset(.nrvAggRoot(sim, refCode))
   if (is.null(raw)) {
-    return(character(0))
+    return(list())
   }
   raw <- as.data.frame(dplyr::collect(raw))
   if (!nrow(raw)) {
-    return(character(0))
+    return(list())
   }
   cc <- open_nrv_dataset(.nrvAggRoot(sim, paste0(refCode, "_CC")))
   cc <- if (!is.null(cc)) as.data.frame(dplyr::collect(cc)) else NULL
@@ -1019,9 +1028,9 @@ makeAnimation <- function(sim) {
       cc[cc$poly == poly & cc$metric.1 == sp & cc$metric == met, , drop = FALSE]
     }
   }
-  out <- character(0)
+  tasks <- list()
 
-  ## Leading boxplots: one file per (subregion x species)
+  ## Leading boxplots: one file per (subregion x species), with the forested-area caption
   lead <- raw[raw$metric == "leadingProp", , drop = FALSE]
   if (nrow(lead)) {
     dBox <- .ppFigDir(sim, "boxplots", p)
@@ -1038,7 +1047,7 @@ makeAnimation <- function(sim) {
     ## trailing abbreviation period ("Ltd.") that a (reused/older) parquet stored without, so compare
     ## on a trimmed, trailing-period-stripped key.
     normPoly <- function(x) trimws(sub("\\.\\s*$", "", as.character(x)))
-    areaKey <- normPoly(areas$poly)
+    areaKey <- if (!is.null(areas)) normPoly(areas$poly) else character(0)
     areaHa <- function(poly, sp) {
       if (is.null(areas)) {
         return(NA_real_)
@@ -1056,16 +1065,12 @@ makeAnimation <- function(sim) {
         } else {
           NULL
         }
-        gg <- nrvtools::plot_leading_boxplot(
-          d,
-          cc = ccFor(poly, sp, "leadingProp"),
-          ageClasses = ageClasses,
-          title = paste0(saPrefix, poly, " ", sp),
-          caption = cap
+        tasks[[length(tasks) + 1L]] <- list(
+          plotter = "leading", df = d, cc = ccFor(poly, sp, "leadingProp"),
+          ageClasses = ageClasses, title = paste0(saPrefix, poly, " ", sp), caption = cap,
+          file = file.path(dBox, paste0(safe(poly), " ", safe(sp), ".png")),
+          width = 8, height = 6
         )
-        f <- file.path(dBox, paste0(safe(poly), " ", safe(sp), ".png"))
-        ggsave(f, gg, width = 8, height = 6)
-        out <- c(out, f)
       }
     }
   }
@@ -1079,39 +1084,105 @@ makeAnimation <- function(sim) {
       for (sp in unique(lp$metric.1)) {
         d <- lp[lp$poly == poly & lp$metric.1 == sp, , drop = FALSE]
         if (!nrow(d)) next
-        gg <- nrvtools::plot_largepatch_histogram(
-          d,
-          cc = ccFor(poly, sp, met),
+        tasks[[length(tasks) + 1L]] <- list(
+          plotter = "histogram", df = d, cc = ccFor(poly, sp, met),
           ageClasses = ageClasses,
           xlab = paste("Number of patches greater than", sz, "ha"),
-          title = paste0(saPrefix, poly, " ", sp, " (>=", sz, " ha)")
+          title = paste0(saPrefix, poly, " ", sp, " (>=", sz, " ha)"),
+          file = file.path(dSz, paste0(safe(poly), " ", safe(sp), ".png")),
+          width = 9, height = 7
         )
-        f <- file.path(dSz, paste0(safe(poly), " ", safe(sp), ".png"))
-        ggsave(f, gg, width = 9, height = 7)
-        out <- c(out, f)
       }
     }
   }
-  out
+  tasks
+}
+
+## Number of local worker processes for parallel plot rendering: RAM-aware (optimalClusterNum) but
+## hard-capped by the `plotWorkers` parameter, so a shared node is not swamped. 1 -> render inline.
+.plotWorkers <- function(sim, nTasks) {
+  cap <- P(sim)$plotWorkers
+  if (is.null(cap) || is.na(cap)) cap <- 1L
+  cap <- max(1L, as.integer(cap))
+  if (cap <= 1L || nTasks <= 1L) {
+    return(1L)
+  }
+  n <- tryCatch(pemisc::optimalClusterNum(1500, min(cap, nTasks)), error = function(e) 1L)
+  max(1L, min(as.integer(n), cap, nTasks))
+}
+
+## Render a list of self-contained plot tasks to PNGs, in parallel across .plotWorkers() local
+## `future` multisession processes (each task = one ggsave to its own file, so trivially parallel).
+## Tasks carry only plain data (data.frame + strings + path) -- no sim / SpatRaster -- so they
+## serialize cleanly to workers. multisession (not fork) is used because the crew worker running
+## this target is a mirai daemon. data.table threads are pinned to 1 per worker to avoid
+## oversubscription. Returns the written file paths.
+.renderTasks <- function(sim, tasks) {
+  tasks <- Filter(function(tk) !is.null(tk) && !is.null(tk[["file"]]), tasks)
+  if (!length(tasks)) {
+    return(character(0))
+  }
+
+  render_one <- function(task) {
+    data.table::setDTthreads(1L)
+    gg <- switch(
+      task[["plotter"]],
+      envelope = nrvtools::plot_nrv_envelope(
+        task[["df"]], type = task[["type"]], facet = task[["facet"]],
+        ylab = task[["ylab"]], title = task[["title"]], page = task[["page"]]
+      ),
+      leading = nrvtools::plot_leading_boxplot(
+        task[["df"]], cc = task[["cc"]], ageClasses = task[["ageClasses"]],
+        title = task[["title"]], caption = task[["caption"]]
+      ),
+      histogram = nrvtools::plot_largepatch_histogram(
+        task[["df"]], cc = task[["cc"]], ageClasses = task[["ageClasses"]],
+        xlab = task[["xlab"]], title = task[["title"]]
+      ),
+      NULL
+    )
+    if (is.null(gg)) {
+      return(NA_character_)
+    }
+    ggplot2::ggsave(task[["file"]], gg, width = task[["width"]], height = task[["height"]])
+    task[["file"]]
+  }
+
+  nWorkers <- .plotWorkers(sim, length(tasks))
+  message("NRV_summary: rendering ", length(tasks), " figure(s) across ", nWorkers, " worker(s)")
+  files <- if (nWorkers <= 1L) {
+    lapply(tasks, render_one)
+  } else {
+    oldPlan <- future::plan(future::multisession, workers = nWorkers)
+    on.exit(future::plan(oldPlan), add = TRUE)
+    future.apply::future_lapply(
+      tasks, render_one,
+      future.packages = c("nrvtools", "ggplot2", "data.table"),
+      future.seed = TRUE
+    )
+  }
+  files <- unlist(files, use.names = FALSE)
+  files[!is.na(files) & nzchar(files)]
 }
 
 ### plotting
 plotFun <- function(sim) {
-  ## Envelope figures (lm/pm/bc) -> figures/<kind>/<layer>/{ribbon,boxplot}.png (faceted by the
-  ## metric/class columns that vary). The LandWeb summaries (lw) are per-species boxplots / histograms
-  ## via .saveLandWebFigs() -> figures/{boxplots,histograms}/<layer>/...
+  ## Build a flat list of self-contained render tasks across all enabled kinds, then render them in
+  ## parallel via .renderTasks(). Envelope figures (lm/pm/sspm) -> figures/<kind>/<layer>/...; the
+  ## LandWeb summaries (lw) are per-species boxplots / histograms -> figures/{boxplots,histograms}/...
   saName <- P(sim)$.studyAreaName
   if (is.null(saName) || is.na(saName)) saName <- ""
   saPrefix <- if (nzchar(saName)) paste0(saName, " — ") else ""
   safe <- function(s) gsub("[/\\]", "-", s) ## filename-safe metric / subregion
 
-  saveNrvPlots <- function(kind, p, ylab, perSubregion = FALSE) {
+  ## build envelope render tasks for one kind x layer (see .renderTasks()).
+  envTasks <- function(kind, p, ylab, perSubregion = FALSE) {
     env <- mod[[paste0(kind, "_", abbreviate(p, minlength = 8))]]
     if (is.null(env) || !nrow(env)) {
-      return(character(0))
+      return(list())
     }
-    d <- .ppFigDir(sim, kind, p)
-    out <- character(0)
+    d <- .ppFigDir(sim, kind, p) ## create the output dir on the main worker
+    tasks <- list()
 
     if (perSubregion) {
       ## One plot per (metric x reporting sub-polygon); the sub-polygon name (e.g. the individual
@@ -1126,24 +1197,21 @@ plotFun <- function(sim) {
           if (!nrow(sub)) next
           ttl <- paste0(poly, " — ", met)
           for (type in c("ribbon", "boxplot")) {
-            gg <- plot_nrv_envelope(
-              sub, type = type, facet = c("class", "metric.1"),
-              ylab = ylab, title = ttl
+            tasks[[length(tasks) + 1L]] <- list(
+              plotter = "envelope", df = sub, type = type,
+              facet = c("class", "metric.1"), ylab = ylab, title = ttl, page = NULL,
+              file = file.path(d, paste0(safe(poly), " ", safe(met), "_", type, ".png")),
+              width = 16, height = 10
             )
-            if (is.null(gg)) next
-            f <- file.path(d, paste0(safe(poly), " ", safe(met), "_", type, ".png"))
-            ggsave(f, gg, height = 10, width = 16)
-            out <- c(out, f)
           }
         }
       }
-      return(out)
+      return(tasks)
     }
 
     ## One figure-set per metric: facet the subregion panels and paginate them across pages, so a
-    ## large panel set becomes several PNGs (<metric>_<type>_p<pg>.png) instead of one crammed
-    ## figure. Used for the landscape metrics (lm), where subregions are compared side by side.
-    ## Title carries the study area + metric name.
+    ## large panel set becomes several PNGs (<metric>_<type>_p<pg>.png). Used for the compare-
+    ## subregions layout (sspm). Page count is resolved once here (main worker); one task per page.
     for (met in unique(env$metric)) {
       sub <- env[env$metric == met, , drop = FALSE]
       if (!nrow(sub)) next
@@ -1157,44 +1225,43 @@ plotFun <- function(sim) {
         nPages <- tryCatch(ggforce::n_pages(gg1), error = function(e) 1L)
         if (is.null(nPages) || is.na(nPages)) nPages <- 1L
         for (pg in seq_len(nPages)) {
-          gg <- plot_nrv_envelope(
-            sub, type = type, facet = c("poly", "class", "metric.1"),
-            ylab = ylab, title = ttl, page = pg
+          tasks[[length(tasks) + 1L]] <- list(
+            plotter = "envelope", df = sub, type = type,
+            facet = c("poly", "class", "metric.1"), ylab = ylab, title = ttl, page = pg,
+            file = file.path(d, paste0(safe(met), "_", type, "_p", pg, ".png")),
+            width = 16, height = 10
           )
-          f <- file.path(d, paste0(safe(met), "_", type, "_p", pg, ".png"))
-          ggsave(f, gg, height = 10, width = 16)
-          out <- c(out, f)
         }
       }
     }
-    out
+    tasks
   }
 
   events <- tolower(P(sim)$postprocessEvents)
-  pngs <- character(0)
+  tasks <- list()
 
   if ("lm" %in% events) {
-    ## one plot per (metric x sub-polygon), sub-polygon name in filename + title (lm has no class,
-    ## so each is a single-panel envelope for that sub-polygon).
-    pngs <- c(pngs, unlist(lapply(mod$rptPolyNames, function(p) {
-      saveNrvPlots("lm", p, ylab = "landscape metric value", perSubregion = TRUE)
-    })))
+    for (p in mod$rptPolyNames) {
+      tasks <- c(tasks, envTasks("lm", p, ylab = "landscape metric value", perSubregion = TRUE))
+    }
   }
   if ("pm" %in% events) {
-    ## pm is species/class-resolved -> one plot per (metric x sub-polygon), FMA name in filename.
-    pngs <- c(pngs, unlist(lapply(mod$rptPolyNames, function(p) {
-      saveNrvPlots("pm", p, ylab = "patch metric value", perSubregion = TRUE)
-    })))
+    for (p in mod$rptPolyNames) {
+      tasks <- c(tasks, envTasks("pm", p, ylab = "patch metric value", perSubregion = TRUE))
+    }
   }
   if ("lw" %in% events) {
-    pngs <- c(pngs, unlist(lapply(mod$rptPolyNames, function(p) .saveLandWebFigs(sim, p))))
+    for (p in mod$rptPolyNames) {
+      tasks <- c(tasks, .saveLandWebFigTasks(sim, p))
+    }
   }
   if ("bc" %in% events) {
-    pngs <- c(pngs, unlist(lapply(mod$rptPolyNames, function(p) {
-      saveNrvPlots("sspm", p, ylab = "seral patch area (ha)")
-    })))
+    for (p in mod$rptPolyNames) {
+      tasks <- c(tasks, envTasks("sspm", p, ylab = "seral patch area (ha)"))
+    }
   }
 
+  pngs <- .renderTasks(sim, tasks)
   if (length(pngs)) {
     sim <- registerOutputs(pngs, sim)
   }
