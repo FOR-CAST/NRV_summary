@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9014"),
+  version = list(NRV_summary = "2.0.0.9015"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -1077,16 +1077,44 @@ plotFun <- function(sim) {
   saPrefix <- if (nzchar(saName)) paste0(saName, " — ") else ""
   safe <- function(s) gsub("[/\\]", "-", s) ## filename-safe metric / subregion
 
-  saveNrvPlots <- function(kind, p, ylab) {
+  saveNrvPlots <- function(kind, p, ylab, perSubregion = FALSE) {
     env <- mod[[paste0(kind, "_", abbreviate(p, minlength = 8))]]
     if (is.null(env) || !nrow(env)) {
       return(character(0))
     }
     d <- .ppFigDir(sim, kind, p)
     out <- character(0)
-    ## One figure-set per metric: facet the (subregion x class) panels and paginate them
-    ## across pages, so a large panel set becomes several PNGs (<metric>_<type>_p<pg>.png)
-    ## instead of one crammed figure. Title carries the study area + metric name.
+
+    if (perSubregion) {
+      ## One plot per (metric x reporting sub-polygon), faceted by the species/class dimension; the
+      ## sub-polygon name (e.g. the individual FMA) is in the filename. Used for the class-resolved
+      ## patch metrics (pm) so each FMA is its own figure rather than many FMAs crammed/paginated
+      ## together. Title carries the study area + sub-polygon + metric name.
+      for (met in unique(env$metric)) {
+        em <- env[env$metric == met, , drop = FALSE]
+        for (poly in unique(em$poly)) {
+          sub <- em[em$poly == poly, , drop = FALSE]
+          if (!nrow(sub)) next
+          ttl <- paste0(saPrefix, poly, " — ", met)
+          for (type in c("ribbon", "boxplot")) {
+            gg <- plot_nrv_envelope(
+              sub, type = type, facet = c("class", "metric.1"),
+              ylab = ylab, title = ttl
+            )
+            if (is.null(gg)) next
+            f <- file.path(d, paste0(safe(poly), " ", safe(met), "_", type, ".png"))
+            ggsave(f, gg, height = 10, width = 16)
+            out <- c(out, f)
+          }
+        }
+      }
+      return(out)
+    }
+
+    ## One figure-set per metric: facet the subregion panels and paginate them across pages, so a
+    ## large panel set becomes several PNGs (<metric>_<type>_p<pg>.png) instead of one crammed
+    ## figure. Used for the landscape metrics (lm), where subregions are compared side by side.
+    ## Title carries the study area + metric name.
     for (met in unique(env$metric)) {
       sub <- env[env$metric == met, , drop = FALSE]
       if (!nrow(sub)) next
@@ -1122,8 +1150,9 @@ plotFun <- function(sim) {
     })))
   }
   if ("pm" %in% events) {
+    ## pm is species/class-resolved -> one plot per (metric x sub-polygon), FMA name in filename.
     pngs <- c(pngs, unlist(lapply(mod$rptPolyNames, function(p) {
-      saveNrvPlots("pm", p, ylab = "patch metric value")
+      saveNrvPlots("pm", p, ylab = "patch metric value", perSubregion = TRUE)
     })))
   }
   if ("lw" %in% events) {
