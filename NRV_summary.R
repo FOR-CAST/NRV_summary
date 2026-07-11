@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9015"),
+  version = list(NRV_summary = "2.0.0.9016"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -19,7 +19,7 @@ defineModule(sim, list(
     "RColorBrewer", "sf", "terra", "tidyterra",
     "PredictiveEcology/LandR@development (>= 1.1.1)",
     "PredictiveEcology/LandWebUtils@development (>= 0.1.5)",
-    "FOR-CAST/nrvtools (>= 0.2.5)",
+    "FOR-CAST/nrvtools (>= 0.2.6)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
     "PredictiveEcology/SpaDES.core@development (>= 3.0.3.9000)"
   ),
@@ -1086,16 +1086,17 @@ plotFun <- function(sim) {
     out <- character(0)
 
     if (perSubregion) {
-      ## One plot per (metric x reporting sub-polygon), faceted by the species/class dimension; the
-      ## sub-polygon name (e.g. the individual FMA) is in the filename. Used for the class-resolved
-      ## patch metrics (pm) so each FMA is its own figure rather than many FMAs crammed/paginated
-      ## together. Title carries the study area + sub-polygon + metric name.
+      ## One plot per (metric x reporting sub-polygon); the sub-polygon name (e.g. the individual
+      ## FMA) is in the filename AND the title. Class-resolved metrics (pm) facet by species so each
+      ## sub-polygon is its own figure rather than many crammed/paginated together; landscape metrics
+      ## (lm) have no class, so each is a single-panel envelope for that sub-polygon. Title carries
+      ## the sub-polygon + metric name (the study area is in the output path, not repeated here).
       for (met in unique(env$metric)) {
         em <- env[env$metric == met, , drop = FALSE]
         for (poly in unique(em$poly)) {
           sub <- em[em$poly == poly, , drop = FALSE]
           if (!nrow(sub)) next
-          ttl <- paste0(saPrefix, poly, " — ", met)
+          ttl <- paste0(poly, " — ", met)
           for (type in c("ribbon", "boxplot")) {
             gg <- plot_nrv_envelope(
               sub, type = type, facet = c("class", "metric.1"),
@@ -1145,8 +1146,10 @@ plotFun <- function(sim) {
   pngs <- character(0)
 
   if ("lm" %in% events) {
+    ## one plot per (metric x sub-polygon), sub-polygon name in filename + title (lm has no class,
+    ## so each is a single-panel envelope for that sub-polygon).
     pngs <- c(pngs, unlist(lapply(mod$rptPolyNames, function(p) {
-      saveNrvPlots("lm", p, ylab = "landscape metric value")
+      saveNrvPlots("lm", p, ylab = "landscape metric value", perSubregion = TRUE)
     })))
   }
   if ("pm" %in% events) {
