@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9010"),
+  version = list(NRV_summary = "2.0.0.9011"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -975,6 +975,9 @@ makeAnimation <- function(sim) {
   cc <- if (!is.null(cc)) as.data.frame(dplyr::collect(cc)) else NULL
 
   ageClasses <- P(sim)$ageClasses
+  saName <- P(sim)$.studyAreaName
+  if (is.null(saName) || is.na(saName)) saName <- ""
+  saPrefix <- if (nzchar(saName)) paste0(saName, " — ") else ""
   safe <- function(s) gsub("[/\\]", "-", s) ## filename-safe subregion / species
   ccFor <- function(poly, sp, met) {
     if (is.null(cc)) {
@@ -997,7 +1000,7 @@ makeAnimation <- function(sim) {
           d,
           cc = ccFor(poly, sp, "leadingProp"),
           ageClasses = ageClasses,
-          title = paste(poly, sp)
+          title = paste0(saPrefix, poly, " ", sp)
         )
         f <- file.path(dBox, paste0(safe(poly), " ", safe(sp), ".png"))
         ggsave(f, gg, width = 8, height = 6)
@@ -1020,7 +1023,7 @@ makeAnimation <- function(sim) {
           cc = ccFor(poly, sp, met),
           ageClasses = ageClasses,
           xlab = paste("Number of patches greater than", sz, "ha"),
-          title = paste0(poly, " ", sp, " (>=", sz, " ha)")
+          title = paste0(saPrefix, poly, " ", sp, " (>=", sz, " ha)")
         )
         f <- file.path(dSz, paste0(safe(poly), " ", safe(sp), ".png"))
         ggsave(f, gg, width = 9, height = 7)
@@ -1036,17 +1039,45 @@ plotFun <- function(sim) {
   ## Envelope figures (lm/pm/bc) -> figures/<kind>/<layer>/{ribbon,boxplot}.png (faceted by the
   ## metric/class columns that vary). The LandWeb summaries (lw) are per-species boxplots / histograms
   ## via .saveLandWebFigs() -> figures/{boxplots,histograms}/<layer>/...
+  saName <- P(sim)$.studyAreaName
+  if (is.null(saName) || is.na(saName)) saName <- ""
+  saPrefix <- if (nzchar(saName)) paste0(saName, " — ") else ""
+  safe <- function(s) gsub("[/\\]", "-", s) ## filename-safe metric / subregion
+
   saveNrvPlots <- function(kind, p, ylab) {
     env <- mod[[paste0(kind, "_", abbreviate(p, minlength = 8))]]
     if (is.null(env) || !nrow(env)) {
       return(character(0))
     }
     d <- .ppFigDir(sim, kind, p)
-    fRibbon <- file.path(d, "ribbon.png")
-    fBox <- file.path(d, "boxplot.png")
-    ggsave(fRibbon, plot_nrv_envelope(env, type = "ribbon", ylab = ylab), height = 10, width = 16)
-    ggsave(fBox, plot_nrv_envelope(env, type = "boxplot", ylab = ylab), height = 10, width = 16)
-    c(fRibbon, fBox)
+    out <- character(0)
+    ## One figure-set per metric: facet the (subregion x class) panels and paginate them
+    ## across pages, so a large panel set becomes several PNGs (<metric>_<type>_p<pg>.png)
+    ## instead of one crammed figure. Title carries the study area + metric name.
+    for (met in unique(env$metric)) {
+      sub <- env[env$metric == met, , drop = FALSE]
+      if (!nrow(sub)) next
+      ttl <- paste0(saPrefix, met)
+      for (type in c("ribbon", "boxplot")) {
+        gg1 <- plot_nrv_envelope(
+          sub, type = type, facet = c("poly", "class", "metric.1"),
+          ylab = ylab, title = ttl, page = 1
+        )
+        if (is.null(gg1)) next
+        nPages <- tryCatch(ggforce::n_pages(gg1), error = function(e) 1L)
+        if (is.null(nPages) || is.na(nPages)) nPages <- 1L
+        for (pg in seq_len(nPages)) {
+          gg <- plot_nrv_envelope(
+            sub, type = type, facet = c("poly", "class", "metric.1"),
+            ylab = ylab, title = ttl, page = pg
+          )
+          f <- file.path(d, paste0(safe(met), "_", type, "_p", pg, ".png"))
+          ggsave(f, gg, height = 10, width = 16)
+          out <- c(out, f)
+        }
+      }
+    }
+    out
   }
 
   events <- tolower(P(sim)$postprocessEvents)
