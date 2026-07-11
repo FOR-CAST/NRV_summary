@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9018"),
+  version = list(NRV_summary = "2.0.0.9019"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -1147,16 +1147,27 @@ makeAnimation <- function(sim) {
     ggplot2::ggsave(task[["file"]], gg, width = task[["width"]], height = task[["height"]])
     task[["file"]]
   }
+  ## Detach render_one from this frame: a closure carries its enclosing environment, so left as-is
+  ## `future` would serialize the entire (multi-hundred-MB) `tasks` list *with the function* to every
+  ## worker. The body only calls namespaced / base functions, so a fresh env under globalenv()
+  ## resolves everything; each task's data is shipped on its own as the mapped argument. (globalenv,
+  ## not baseenv -- the latter trips future's "cycles in parent chains" during serialization.)
+  environment(render_one) <- new.env(parent = globalenv())
 
   nWorkers <- .plotWorkers(sim, length(tasks))
   message("NRV_summary: rendering ", length(tasks), " figure(s) across ", nWorkers, " worker(s)")
   files <- if (nWorkers <= 1L) {
     lapply(tasks, render_one)
   } else {
+    ## per-worker task chunks can be sizeable (raw per-rep data); the nodes have >500 GB, so lift the
+    ## default 500 MiB transfer guard. future.globals = FALSE: render_one is self-contained.
+    oldOpt <- options(future.globals.maxSize = 4 * 1024^3)
+    on.exit(options(oldOpt), add = TRUE)
     oldPlan <- future::plan(future::multisession, workers = nWorkers)
     on.exit(future::plan(oldPlan), add = TRUE)
     future.apply::future_lapply(
       tasks, render_one,
+      future.globals = FALSE,
       future.packages = c("nrvtools", "ggplot2", "data.table"),
       future.seed = TRUE
     )
