@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9011"),
+  version = list(NRV_summary = "2.0.0.9012"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -42,6 +42,12 @@ defineModule(sim, list(
     defineParameter("mode", "character", "single", NA, NA,
                     paste("use 'single' to run part of a simulation;",
                           "use 'multi' to run as part of postprocessing multiple runs.")),
+    defineParameter("reuseAggregates", "logical", FALSE, NA, NA,
+                    paste("(mode = 'multi') if TRUE, reuse a complete per-replicate `_aggregates`",
+                          "parquet dataset instead of recomputing it, re-summarizing the surviving",
+                          "parquets to regenerate the envelopes/CSVs/figures. Use to iterate on the",
+                          "plots/CSVs without re-running the (~hours) landscape-metric aggregation;",
+                          "leave FALSE for a fresh run.")),
     defineParameter("postprocessEvents", "character", c("lm", "pm"), NA, NA,
                     paste("Specify which subset of postprocessing events to run.",
                           "At least one of:",
@@ -152,6 +158,10 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         }
       } else if (P(sim)$mode == "multi") {
         stopifnot(!is.null(sim$reportingPolygons))
+
+        ## reuse complete _aggregates parquet datasets (skip the ~2h landscape-metric recompute) so
+        ## the postprocess events can iterate on plots/CSVs; read by .buildRepDataset() (process-local).
+        options(NRV_summary.reuseAggregates = isTRUE(P(sim)$reuseAggregates))
 
         sim <- InitMulti(sim)
 
@@ -443,13 +453,28 @@ InitMulti <- function(sim) {
   split(files, basename(dirname(files)))
 }
 
+## TRUE iff `root` already holds a `replicate=<id>/*.parquet` partition for EVERY requested repID,
+## i.e. the parquet dataset is complete and can be reused instead of recomputed.
+.aggComplete <- function(root, repIDs) {
+  dir.exists(root) &&
+    all(vapply(repIDs, function(r) {
+      length(list.files(file.path(root, paste0("replicate=", r)), pattern = "\\.parquet$")) > 0L
+    }, logical(1L)))
+}
+
 ## Build the parquet dataset for one refCode and return the across-replicate envelope.
 ## `compute_fn(repID)` returns the raw metric list for one replicate (from a raw nrvtools producer).
-.buildRepDataset <- function(root, repIDs, compute_fn, studyArea = NULL, scenario = NULL, id_cols = NULL) {
-  unlink(root, recursive = TRUE)
-  for (repID in repIDs) {
-    tidied <- tidy_nrv_metrics(compute_fn(repID), studyArea = studyArea, scenario = scenario)
-    write_nrv_parquet(tidied, root, replicate = repID)
+## `reuse = TRUE` skips the (expensive) recompute + rewrite when the dataset is already complete for
+## `repIDs` (see `.aggComplete()`), re-summarizing the surviving parquets -- useful for iterating on
+## the plots/CSVs without re-running the landscape-metric aggregation.
+.buildRepDataset <- function(root, repIDs, compute_fn, studyArea = NULL, scenario = NULL,
+                             id_cols = NULL, reuse = getOption("NRV_summary.reuseAggregates", FALSE)) {
+  if (!(reuse && .aggComplete(root, repIDs))) {
+    unlink(root, recursive = TRUE)
+    for (repID in repIDs) {
+      tidied <- tidy_nrv_metrics(compute_fn(repID), studyArea = studyArea, scenario = scenario)
+      write_nrv_parquet(tidied, root, replicate = repID)
+    }
   }
   ## id_cols = NULL -> summarize_nrv() default (per-time envelopes); the LandWeb summaries pass an
   ## explicit set excluding `time` so the NRV distribution pools across replicates AND summary years.
