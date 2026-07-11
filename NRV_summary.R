@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9009"),
+  version = list(NRV_summary = "2.0.0.9010"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -992,7 +992,7 @@ makeAnimation <- function(sim) {
     for (poly in unique(lead$poly)) {
       for (sp in unique(lead$metric.1)) {
         d <- lead[lead$poly == poly & lead$metric.1 == sp, , drop = FALSE]
-        if (!nrow(d)) next
+        if (!nrow(d) || all(d$value == 0, na.rm = TRUE)) next ## skip empty subregions / absent species
         gg <- nrvtools::plot_leading_boxplot(
           d,
           cc = ccFor(poly, sp, "leadingProp"),
