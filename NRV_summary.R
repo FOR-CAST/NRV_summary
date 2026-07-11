@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9016"),
+  version = list(NRV_summary = "2.0.0.9017"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -19,7 +19,7 @@ defineModule(sim, list(
     "RColorBrewer", "sf", "terra", "tidyterra",
     "PredictiveEcology/LandR@development (>= 1.1.1)",
     "PredictiveEcology/LandWebUtils@development (>= 0.1.5)",
-    "FOR-CAST/nrvtools (>= 0.2.6)",
+    "FOR-CAST/nrvtools (>= 0.2.7)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
     "PredictiveEcology/SpaDES.core@development (>= 3.0.3.9000)"
   ),
@@ -1025,15 +1025,43 @@ makeAnimation <- function(sim) {
   lead <- raw[raw$metric == "leadingProp", , drop = FALSE]
   if (nrow(lead)) {
     dBox <- .ppFigDir(sim, "boxplots", p)
+    ## forested area (ha) per subregion x leading species from the CC (year-0) VTM, for the boxplot
+    ## captions (v2 / NW_AB form); computed once per layer. NA lookups -> no caption.
+    areas <- tryCatch(
+      nrvtools::subregion_forested_area(terra::rast(mod$fvtm0), sim$reportingPolygons[[p]], "Name"),
+      error = function(e) {
+        message("NRV_summary: forested-area calc failed for '", p, "': ", conditionMessage(e))
+        NULL
+      }
+    )
+    ## match the reporting-polygon Name to the parquet `poly` robustly: the source Names may carry a
+    ## trailing abbreviation period ("Ltd.") that a (reused/older) parquet stored without, so compare
+    ## on a trimmed, trailing-period-stripped key.
+    normPoly <- function(x) trimws(sub("\\.\\s*$", "", as.character(x)))
+    areaKey <- normPoly(areas$poly)
+    areaHa <- function(poly, sp) {
+      if (is.null(areas)) {
+        return(NA_real_)
+      }
+      a <- areas$area_ha[areaKey == normPoly(poly) & areas$vegCover == sp]
+      if (length(a)) a[[1L]] else NA_real_
+    }
     for (poly in unique(lead$poly)) {
       for (sp in unique(lead$metric.1)) {
         d <- lead[lead$poly == poly & lead$metric.1 == sp, , drop = FALSE]
         if (!nrow(d) || all(d$value == 0, na.rm = TRUE)) next ## skip empty subregions / absent species
+        a <- areaHa(poly, sp)
+        cap <- if (!is.na(a)) {
+          paste0("Total ", sp, "-leading area in ", poly, ": ", format(round(a), big.mark = ","), " ha")
+        } else {
+          NULL
+        }
         gg <- nrvtools::plot_leading_boxplot(
           d,
           cc = ccFor(poly, sp, "leadingProp"),
           ageClasses = ageClasses,
-          title = paste0(saPrefix, poly, " ", sp)
+          title = paste0(saPrefix, poly, " ", sp),
+          caption = cap
         )
         f <- file.path(dBox, paste0(safe(poly), " ", safe(sp), ".png"))
         ggsave(f, gg, width = 8, height = 6)
