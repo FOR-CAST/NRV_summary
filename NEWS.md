@@ -2,6 +2,21 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+## Stable output keys via curated short names (`2.0.0.9020`)
+
+- `refCode` (which names the `_aggregates/<refCode>/` parquet directory and the figure/CSV
+  filenames) is now `LandWebUtils::refCodeFor(kind, layer)` = `<kind>_<slug(layer name)>`, instead
+  of `paste0("<kind>_", abbreviate(layer, minlength = 8))`. `abbreviate()` was called one name at a
+  time, and R only guarantees unique abbreviations *within a single call's vector* -- with the
+  restored tenure x sub-region crossings, 68 of the 399 crossed FMA x ANSR names collided (e.g.
+  `Canadian Forest Products Ltd. Alpine` and `Crowsnest Forest Products Ltd. Alpine` both ->
+  `CFPLtd.A`), silently overwriting each other's aggregates and figures.
+- Reporting-polygon layer names are now curated short names (`LandWebUtils::reportingPolygonLayers()$NAME_SHORT`,
+  e.g. `ANSR`, or `SprayLake ANSR` for a crossed unit), so the on-disk key equals the label shown in
+  figure titles and facet strips. **Existing `_aggregates/` and `figures/` directories carry the old
+  keys and will be rebuilt.**
+- Requires `LandWebUtils >= 1.0.3.9016`.
+
 ## Post-processing outputs reorganised; v2-form LandWeb-summary plots (`2.0.0.9009`)
 
 - Multi-mode summary outputs now live under `outputs/<studyArea>/postprocess/` (a sibling of the

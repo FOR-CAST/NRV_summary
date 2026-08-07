@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9019"),
+  version = list(NRV_summary = "2.0.0.9020"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -18,7 +18,7 @@ defineModule(sim, list(
     "ggforce", "ggplot2", "gifski", "googledrive", "landscapemetrics", "qs2",
     "RColorBrewer", "sf", "terra", "tidyterra",
     "PredictiveEcology/LandR@development (>= 1.1.1)",
-    "PredictiveEcology/LandWebUtils@development (>= 0.1.5)",
+    "PredictiveEcology/LandWebUtils@development (>= 1.0.3.9016)",
     "FOR-CAST/nrvtools (>= 0.2.7)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
     "PredictiveEcology/SpaDES.core@development (>= 3.0.3.9000)"
@@ -552,7 +552,7 @@ landscapeMetrics <- function(sim) {
       rptPoly <- sf::st_crop(rptPoly, studyArea) ## ensure cropped to studyArea
 
       rptPolyCol <- "Name" ## label column set by LandWebUtils::buildReportingPolygons()
-      refCode <- paste0("lm_", abbreviate(p, minlength = 8)) ## key output on the layer name (cf. bc event)
+      refCode <- LandWebUtils::refCodeFor("lm", p) ## key output on the layer name (cf. bc event)
       refCodeCC <- paste0(refCode, "_CC")
       ## drop features with no grouping label: an NA polyName makes patch/landscape stats
       ## select an empty subpoly (`summaryPolys[[col]] == NA`) -> crop() NULL -> values(NULL).
@@ -636,7 +636,7 @@ patchMetrics <- function(sim) {
       }
       rptPoly <- st_crop(rptPoly, studyArea) ## ensure cropped to studyArea
       rptPolyCol <- "Name" ## label column set by LandWebUtils::buildReportingPolygons()
-      refCode <- paste0("pm_", abbreviate(p, minlength = 8)) ## key output on the layer name (cf. bc event)
+      refCode <- LandWebUtils::refCodeFor("pm", p) ## key output on the layer name (cf. bc event)
       refCodeCC <- paste0(refCode, "_CC")
       ## drop features with no grouping label: an NA polyName makes patch/landscape stats
       ## select an empty subpoly (`summaryPolys[[col]] == NA`) -> crop() NULL -> values(NULL).
@@ -731,7 +731,7 @@ landWebMetrics <- function(sim) {
       }
       rptPoly <- sf::st_crop(rptPoly, studyArea) ## ensure cropped to studyArea
       rptPolyCol <- "Name" ## label column set by LandWebUtils::buildReportingPolygons()
-      refCode <- paste0("lw_", abbreviate(p, minlength = 8)) ## key output on the layer name (cf. bc event)
+      refCode <- LandWebUtils::refCodeFor("lw", p) ## key output on the layer name (cf. bc event)
       refCodeCC <- paste0(refCode, "_CC")
       rptPoly <- rptPoly[!is.na(rptPoly[[rptPolyCol]]), ]
       if (nrow(rptPoly) == 0) {
@@ -862,7 +862,7 @@ patchMetricsSeralBC <- function(sim) {
       }
       rptPoly <- sf::st_crop(rptPoly, studyArea) ## ensure cropped to studyArea
       rptPolyCol <- reportingPolygonCols[[p]]
-      refCode <- paste0("sspm_", abbreviate(p, minlength = 8)) ## TODO: is this unique enough?
+      refCode <- LandWebUtils::refCodeFor("sspm", p)
       refCodeCC <- paste0(refCode, "_CC")
 
       ## raw per-replicate seral patch metrics, Cached on the seral maps read.
@@ -1004,7 +1004,7 @@ makeAnimation <- function(sim) {
 ## Returns a list of self-contained render tasks (see .renderTasks()) rather than rendering inline,
 ## so plotFun can render them in parallel. The output dirs are created here (main worker).
 .saveLandWebFigTasks <- function(sim, p) {
-  refCode <- paste0("lw_", abbreviate(p, minlength = 8))
+  refCode <- LandWebUtils::refCodeFor("lw", p)
   raw <- open_nrv_dataset(.nrvAggRoot(sim, refCode))
   if (is.null(raw)) {
     return(list())
@@ -1188,7 +1188,7 @@ plotFun <- function(sim) {
 
   ## build envelope render tasks for one kind x layer (see .renderTasks()).
   envTasks <- function(kind, p, ylab, perSubregion = FALSE) {
-    env <- mod[[paste0(kind, "_", abbreviate(p, minlength = 8))]]
+    env <- mod[[LandWebUtils::refCodeFor(kind, p)]]
     if (is.null(env) || !nrow(env)) {
       return(list())
     }
