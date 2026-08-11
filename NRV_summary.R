@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9020"),
+  version = list(NRV_summary = "2.0.0.9021"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -19,7 +19,15 @@ defineModule(sim, list(
     "RColorBrewer", "sf", "terra", "tidyterra",
     "PredictiveEcology/LandR@development (>= 1.1.1)",
     "PredictiveEcology/LandWebUtils@development (>= 1.0.3.9016)",
-    "FOR-CAST/nrvtools (>= 0.2.7)",
+    ## 0.2.10 floor, not 0.2.7: the LandWeb#118 tenure x sub-region crossings mint refCodes of the
+    ## form <kind>_<slug> whose subregion names themselves contain "_", and nrvtools < 0.2.10 aborts
+    ## calculatePatchMetrics()/calculatePatchMetricsSeral()/nrv_metrics_landscape() on those with
+    ## "polyName contains too many underscores". 0.2.10 also gives summarize_nrv() rptPoly
+    ## auto-detection, so metrics summarised over SEVERAL reporting layers aggregate without
+    ## collapsing across them -- exactly the crossed-layer case -- and fixes nrv_metrics_landscape()
+    ## stamping rep/time/poly from full-length vectors onto the already row-bound table, which
+    ## shifted every later row's identifiers by one subregion whenever a subregion came back empty.
+    "FOR-CAST/nrvtools (>= 0.2.10)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
     "PredictiveEcology/SpaDES.core@development (>= 3.0.3.9000)"
   ),
