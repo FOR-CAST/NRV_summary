@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9021"),
+  version = list(NRV_summary = "2.0.0.9022"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -27,7 +27,12 @@ defineModule(sim, list(
     ## collapsing across them -- exactly the crossed-layer case -- and fixes nrv_metrics_landscape()
     ## stamping rep/time/poly from full-length vectors onto the already row-bound table, which
     ## shifted every later row's identifiers by one subregion whenever a subregion came back empty.
-    "FOR-CAST/nrvtools (>= 0.2.10)",
+    ## 0.2.11, not 0.2.10: calculateLandWebMetrics() (the `lw` path) still split result names on
+    ## "_" and purrr::transpose()d them, so a reporting layer mixing 1- and 2-token polygon
+    ## names (the tenure layer holds both "ANC" and "DawsonCreek_TSA") recombined into the
+    ## cartesian product of tokens -- 45 fabricated tenures in place of 11, 6 dropped. Wrong
+    ## but non-blank labels, and the run completes, so nothing catches it downstream.
+    "FOR-CAST/nrvtools (>= 0.2.11)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
     "PredictiveEcology/SpaDES.core@development (>= 3.0.3.9000)"
   ),
