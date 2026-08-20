@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9023"),
+  version = list(NRV_summary = "2.0.0.9024"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -451,6 +451,30 @@ InitMulti <- function(sim) {
 ## `outputPath(sim)` (= outputs/<studyArea>/mainSim). `figures/` and `csv/` mirror the same
 ## `<kind>/<layer>/` sub-structure (kind = lm/pm/boxplots/histograms/...; layer = the full
 ## reporting-polygon-layer name), so a human can find a figure and its data side by side.
+## Clip reporting polygons to the study area.
+##
+## terra::crop(), NOT sf::st_crop(): st_crop() clips to the study area's BOUNDING BOX, so for a
+## non-rectangular study area it keeps polygon area lying outside it. Clipping ANSR by the
+## WF_Hinton FMA gives 15,428 km2 / 23 features by bbox versus 9,594 km2 / 22 by geometry -- a 61%
+## overstatement that every per-reporting-polygon metric would inherit. terra::crop() intersects
+## GEOMETRY, and as a side benefit does not emit sf's "attribute variables are assumed to be
+## spatially constant" warning (138 per summaries run); the attributes here are labels (Name), so
+## there was never anything to re-apportion.
+##
+## Returns sf: callers index the result as a data frame (`rptPoly[[col]]`, `rptPoly[cond, ]`), and
+## `[[` on a SpatVector returns a one-column data.frame rather than a vector.
+.cropToStudyArea <- function(x, y) {
+  ## vect() errors on SpatVector input, so only convert what is not already one.
+  xv <- if (inherits(x, "SpatVector")) x else terra::vect(x)
+  yv <- if (inherits(y, "SpatVector")) y else terra::vect(y)
+  ## a CRS mismatch makes terra::crop() return an empty SpatVector rather than erroring, which
+  ## downstream reads as "this layer has no polygons in the study area" -- reproject instead.
+  if (!terra::same.crs(xv, yv)) {
+    yv <- terra::project(yv, terra::crs(xv))
+  }
+  sf::st_as_sf(terra::crop(xv, yv))
+}
+
 .ppRoot <- function(sim) {
   file.path(dirname(outputPath(sim)), "postprocess")
 }
@@ -562,14 +586,7 @@ landscapeMetrics <- function(sim) {
       ) {
         rptPoly <- sf::st_collection_extract(rptPoly, "POLYGON")
       }
-      ## st_agr<-"constant" first: st_crop() otherwise warns "attribute variables are assumed to be
-      ## spatially constant" once per call (138 per summaries run). Setting it asserts what is already
-      ## true here -- these are labels (Name), not density-like values that would need re-apportioning
-      ## when a polygon is cut. NB st_crop() clips to the BBOX of studyArea, whereas terra::crop()
-      ## intersects GEOMETRY (verified: 15,428 km2 vs 9,594 km2 clipping ANSR by one FMA), so the two
-      ## are NOT interchangeable; this keeps sf semantics and only silences the noise.
-      sf::st_agr(rptPoly) <- "constant"
-      rptPoly <- sf::st_crop(rptPoly, studyArea) ## ensure cropped to studyArea
+      rptPoly <- .cropToStudyArea(rptPoly, studyArea) ## geometry, not bbox
 
       rptPolyCol <- "Name" ## label column set by LandWebUtils::buildReportingPolygons()
       refCode <- LandWebUtils::refCodeFor("lm", p) ## key output on the layer name (cf. bc event)
@@ -654,8 +671,7 @@ patchMetrics <- function(sim) {
       } else if (is(rptPoly, "sf") && st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
         rptPoly <- st_collection_extract(rptPoly, "POLYGON")
       }
-      st_agr(rptPoly) <- "constant" ## see the st_crop note above
-      rptPoly <- st_crop(rptPoly, studyArea) ## ensure cropped to studyArea
+      rptPoly <- .cropToStudyArea(rptPoly, studyArea) ## geometry, not bbox
       rptPolyCol <- "Name" ## label column set by LandWebUtils::buildReportingPolygons()
       refCode <- LandWebUtils::refCodeFor("pm", p) ## key output on the layer name (cf. bc event)
       refCodeCC <- paste0(refCode, "_CC")
@@ -750,14 +766,7 @@ landWebMetrics <- function(sim) {
       ) {
         rptPoly <- sf::st_collection_extract(rptPoly, "POLYGON")
       }
-      ## st_agr<-"constant" first: st_crop() otherwise warns "attribute variables are assumed to be
-      ## spatially constant" once per call (138 per summaries run). Setting it asserts what is already
-      ## true here -- these are labels (Name), not density-like values that would need re-apportioning
-      ## when a polygon is cut. NB st_crop() clips to the BBOX of studyArea, whereas terra::crop()
-      ## intersects GEOMETRY (verified: 15,428 km2 vs 9,594 km2 clipping ANSR by one FMA), so the two
-      ## are NOT interchangeable; this keeps sf semantics and only silences the noise.
-      sf::st_agr(rptPoly) <- "constant"
-      rptPoly <- sf::st_crop(rptPoly, studyArea) ## ensure cropped to studyArea
+      rptPoly <- .cropToStudyArea(rptPoly, studyArea) ## geometry, not bbox
       rptPolyCol <- "Name" ## label column set by LandWebUtils::buildReportingPolygons()
       refCode <- LandWebUtils::refCodeFor("lw", p) ## key output on the layer name (cf. bc event)
       refCodeCC <- paste0(refCode, "_CC")
@@ -814,10 +823,9 @@ makeSeralStageMapsBC <- function(sim) {
   message(crayon::magenta("Creating seral stage maps ..."))
 
   studyAreaReporting <- sf::st_as_sf(sim$studyAreaReporting)
-  NDTBEC <- sim$reportingPolygons[["ecoregionLayer"]] |>
-    sf::st_as_sf() |>
-    (\(x) { sf::st_agr(x) <- "constant"; x })() |> ## see the st_crop note above
-    sf::st_crop(studyAreaReporting)
+  NDTBEC <- .cropToStudyArea(
+    sim$reportingPolygons[["ecoregionLayer"]], studyAreaReporting  ## geometry, not bbox
+  )
   fNDTBEC <- file.path(outputPath(sim), "NDTBEC.shp")
   sf::st_write(NDTBEC, fNDTBEC, append = FALSE, quiet = TRUE)
   rm(studyAreaReporting, NDTBEC)
@@ -889,14 +897,7 @@ patchMetricsSeralBC <- function(sim) {
       if (is(rptPoly, "sf") && sf::st_geometry_type(rptPoly, by_geometry = FALSE) != "POLYGON") {
         rptPoly <- sf::st_collection_extract(rptPoly, "POLYGON")
       }
-      ## st_agr<-"constant" first: st_crop() otherwise warns "attribute variables are assumed to be
-      ## spatially constant" once per call (138 per summaries run). Setting it asserts what is already
-      ## true here -- these are labels (Name), not density-like values that would need re-apportioning
-      ## when a polygon is cut. NB st_crop() clips to the BBOX of studyArea, whereas terra::crop()
-      ## intersects GEOMETRY (verified: 15,428 km2 vs 9,594 km2 clipping ANSR by one FMA), so the two
-      ## are NOT interchangeable; this keeps sf semantics and only silences the noise.
-      sf::st_agr(rptPoly) <- "constant"
-      rptPoly <- sf::st_crop(rptPoly, studyArea) ## ensure cropped to studyArea
+      rptPoly <- .cropToStudyArea(rptPoly, studyArea) ## geometry, not bbox
       rptPolyCol <- reportingPolygonCols[[p]]
       refCode <- LandWebUtils::refCodeFor("sspm", p)
       refCodeCC <- paste0(refCode, "_CC")
