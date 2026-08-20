@@ -74,6 +74,7 @@ jobs:
             any::kableExtra
             any::knitr
             any::openxlsx
+            any::pak
             any::pander
             any::rmarkdown
             github::PredictiveEcology/SpaDES.core@development
