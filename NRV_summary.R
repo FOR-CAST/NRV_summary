@@ -112,6 +112,13 @@ defineModule(sim, list(
   inputObjects = bindrows(
     expectsInput("cohortData", "data.table",
                  desc = "Required in single mode."),
+    expectsInput("LandTypeCC_reporting", "SpatRaster",
+                 desc = paste("Current-conditions land cover (Canada LCC 2020) with urban RETAINED.",
+                              "Used to correct the year-0 current-condition snapshot: the simulation",
+                              "imputes urban to its nearest forest type (pre-industrial state), so the",
+                              "year-0 rasters would otherwise report imputed forest as real current",
+                              "forest. Only urban differs between the sim and reporting layers --",
+                              "water/barren/snow are already NA on both sides.")),
     expectsInput("flammableMap", "SpatRaster",
                  desc = "binary flammability map (required with `type = 'single'`)"),
     expectsInput("pixelGroupMap", "SpatRaster",
@@ -354,6 +361,29 @@ InitMulti <- function(sim) {
   ## current-conditions time-since-fire (burnSummaries output); age basis for the LandWeb summaries.
   mod$ftsf0 <- file.path(outputPath(sim), allReps[1], paste0("rstTimeSinceFire_year", padYearStart, ".tif"))
 
+  ## The year-0 rasters are the SIMULATION's initial state, in which urban has been imputed to its
+  ## nearest forest type so the run approximates a pre-industrial landscape. Reporting current
+  ## condition from them unchanged would count that imputed forest as real forest today. Re-remove
+  ## urban here, using the reporting copy of the current-conditions land cover.
+  ## Urban is the ONLY class that differs between the sim and reporting layers: water/barren/
+  ## snow-ice are sent to NA by `remapDT` on both sides, so nothing else needs correcting.
+  ## The NRV envelope (built from the replicates) is deliberately NOT masked -- the envelope is the
+  ## pre-industrial landscape, the marker is today's, and that difference IS the land-conversion
+  ## component of the departure.
+  ccrep <- sim$LandTypeCC_reporting
+  if (is.null(ccrep)) {
+    ## do not fail silently: a missing layer here would look identical to "no urban present".
+    warning("NRV_summary: `LandTypeCC_reporting` is absent; current-condition metrics will ",
+            "report simulation year-0 state, counting urban imputed to forest as current forest.",
+            call. = FALSE)
+  } else {
+    urbanMask <- terra::ifel(ccrep == 17L, NA, 1L) ## 17 = urban (LCC 2020)
+    ccDir <- checkPath(file.path(outputPath(sim), "_cc"), create = TRUE)
+    mod$fvtm0 <- .maskCC(mod$fvtm0, urbanMask, file.path(ccDir, "cc_vegTypeMap.tif"))
+    mod$fsam0 <- .maskCC(mod$fsam0, urbanMask, file.path(ccDir, "cc_standAgeMap.tif"))
+    mod$ftsf0 <- .maskCC(mod$ftsf0, urbanMask, file.path(ccDir, "cc_rstTimeSinceFire.tif"))
+  }
+
   cdpgm <- fs::dir_ls(
     outputPath(sim),
     regexp = "cohortData|pixelGroupMap",
@@ -451,6 +481,23 @@ InitMulti <- function(sim) {
 ## `outputPath(sim)` (= outputs/<studyArea>/mainSim). `figures/` and `csv/` mirror the same
 ## `<kind>/<layer>/` sub-structure (kind = lm/pm/boxplots/histograms/...; layer = the full
 ## reporting-polygon-layer name), so a human can find a figure and its data side by side.
+## Mask a year-0 current-condition raster by `urbanMask` (NA where urban) and write it to
+## `outFile`, returning that path. Returns the ORIGINAL path unchanged if the source is missing or
+## the geometries do not line up, so a grid mismatch degrades to "uncorrected" loudly rather than
+## producing a silently wrong current-condition value.
+.maskCC <- function(f, urbanMask, outFile) {
+  if (!file.exists(f)) return(f)
+  r <- terra::rast(f)
+  if (!isTRUE(terra::compareGeom(r, urbanMask, stopOnError = FALSE))) {
+    warning("NRV_summary: current-condition layer does not match ", basename(f),
+            "; leaving it uncorrected (urban will count as forest).", call. = FALSE)
+    return(f)
+  }
+  terra::mask(r, urbanMask, filename = outFile, overwrite = TRUE,
+              wopt = list(datatype = terra::datatype(r)))
+  outFile
+}
+
 ## Clip reporting polygons to the study area.
 ##
 ## terra::crop(), NOT sf::st_crop(): st_crop() clips to the study area's BOUNDING BOX, so for a
