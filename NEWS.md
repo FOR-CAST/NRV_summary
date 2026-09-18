@@ -2,6 +2,9 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+* **Replaced the never-run test stub with metadata tests, and added testthat CI.** `tests/testthat/test-template.R` was the SpaDES boilerplate, unedited: paths from another machine, calls to `Event1`/`Event2` functions this module does not define, and assertions against placeholder strings. It had never been run and would have failed instantly, while making the module look tested. In its place, characterization tests over the module's public contract -- the input and output object names and classes, and the parameter names -- which is what a project binds to and what nothing checked until now. The expectations are GENERATED from the module's live metadata rather than transcribed, and were verified to fail when the contract changes.
+* The contract test records that this module declares **no output objects**, which is by design rather than omission: everything it produces -- the per-refCode parquet aggregates, the envelope CSVs and the figures -- is written to `outputPath(sim)`, and nothing is handed back through the simList. A `createsOutput()` appearing later would be a real change in how it is consumed.
+
 ## Stable output keys via curated short names (`2.0.0.9020`)
 
 - `refCode` (which names the `_aggregates/<refCode>/` parquet directory and the figure/CSV
