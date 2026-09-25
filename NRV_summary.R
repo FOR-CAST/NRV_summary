@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9024"),
+  version = list(NRV_summary = "2.0.0.9025"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -249,8 +249,11 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         sim <- scheduleEvent(sim, time(sim) + P(sim)$summaryInterval, "NRV_summary", "map_generators", .last())
       }
     },
+    postprocess = {
+      sim <- .registerPostprocessOutputs(sim)
+    },
     plot = {
-      plotFun(sim)
+      sim <- plotFun(sim) ## plotFun() registers the PNGs, so its sim must be kept
     },
     postprocess_lm = {
       sim <- landscapeMetrics(sim) ## TODO: warning: Number of classes must be >= 3, IJI = NA.
@@ -342,6 +345,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
 # event functions -------------------------------------------------------------------
 
 InitMulti <- function(sim) {
+  mod$ppFiles <- character(0) ## files the postprocess events write; see .registerPostprocessOutputs()
   ## check for necessary output files -----------------------------------------------
   ## NOTE: don't load simLists -- slow and unreliable
   allReps <- sprintf("rep%02d", P(sim)$reps)
@@ -526,6 +530,20 @@ InitMulti <- function(sim) {
   file.path(dirname(outputPath(sim)), "postprocess")
 }
 
+## Register every file the postprocess events wrote (parquet aggregates, envelope CSVs, the
+## stand-age animation) as module outputs, so the stage's `_files` target in a targets pipeline
+## tracks them; unregistered, it tracked nothing. Figures are registered by plotFun(), which runs
+## after this.
+.registerPostprocessOutputs <- function(sim) {
+  f <- unique(mod$ppFiles)
+  f <- f[file.exists(f)]
+  mod$ppFiles <- character(0)
+  if (length(f)) {
+    sim <- registerOutputs(f, sim)
+  }
+  sim
+}
+
 ## `<postprocess>/_aggregates/<refCode>` -- the parquet dataset root for one refCode.
 .nrvAggRoot <- function(sim, refCode) {
   file.path(.ppRoot(sim), "_aggregates", refCode)
@@ -567,6 +585,7 @@ InitMulti <- function(sim) {
       write_nrv_parquet(tidied, root, replicate = repID)
     }
   }
+  mod$ppFiles <- c(mod$ppFiles, list.files(root, "\\.parquet$", recursive = TRUE, full.names = TRUE))
   ## id_cols = NULL -> summarize_nrv() default (per-time envelopes); the LandWeb summaries pass an
   ## explicit set excluding `time` so the NRV distribution pools across replicates AND summary years.
   summarize_nrv(root, id_cols = id_cols)
@@ -589,10 +608,14 @@ InitMulti <- function(sim) {
       return(invisible())
     }
     d <- .ppCsvDir(sim, k, layer)
-    write.csv(e, file.path(d, paste0(base, cc, ".csv")), row.names = FALSE)
+    fs <- file.path(d, paste0(base, cc, ".csv"))
+    write.csv(e, fs, row.names = FALSE)
     for (m in unique(e$metric)) {
-      write.csv(e[e$metric == m, ], file.path(d, paste0(base, cc, "_", m, ".csv")), row.names = FALSE)
+      fm <- file.path(d, paste0(base, cc, "_", m, ".csv"))
+      write.csv(e[e$metric == m, ], fm, row.names = FALSE)
+      fs <- c(fs, fm)
     }
+    mod$ppFiles <- c(mod$ppFiles, fs)
   }
   if (kind == "lw") {
     isLead <- env$metric == "leadingProp"
@@ -1077,6 +1100,7 @@ makeAnimation <- function(sim) {
     progress = FALSE
   )
 
+  mod$ppFiles <- c(mod$ppFiles, gifFile)
   message("NRV_summary: wrote stand-age animation (", length(samFiles), " frames) to ", gifFile)
   return(invisible(sim))
 }
