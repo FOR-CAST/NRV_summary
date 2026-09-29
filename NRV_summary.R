@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9025"),
+  version = list(NRV_summary = "2.0.0.9026"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -383,9 +383,9 @@ InitMulti <- function(sim) {
   } else {
     urbanMask <- terra::ifel(ccrep == 17L, NA, 1L) ## 17 = urban (LCC 2020)
     ccDir <- checkPath(file.path(outputPath(sim), "_cc"), create = TRUE)
-    mod$fvtm0 <- .maskCC(mod$fvtm0, urbanMask, file.path(ccDir, "cc_vegTypeMap.tif"))
-    mod$fsam0 <- .maskCC(mod$fsam0, urbanMask, file.path(ccDir, "cc_standAgeMap.tif"))
-    mod$ftsf0 <- .maskCC(mod$ftsf0, urbanMask, file.path(ccDir, "cc_rstTimeSinceFire.tif"))
+    mod$fvtm0 <- .maskCC(mod$fvtm0, urbanMask, ccDir)
+    mod$fsam0 <- .maskCC(mod$fsam0, urbanMask, ccDir)
+    mod$ftsf0 <- .maskCC(mod$ftsf0, urbanMask, ccDir)
   }
 
   cdpgm <- fs::dir_ls(
@@ -485,12 +485,19 @@ InitMulti <- function(sim) {
 ## `outputPath(sim)` (= outputs/<studyArea>/mainSim). `figures/` and `csv/` mirror the same
 ## `<kind>/<layer>/` sub-structure (kind = lm/pm/boxplots/histograms/...; layer = the full
 ## reporting-polygon-layer name), so a human can find a figure and its data side by side.
-## Mask a year-0 current-condition raster by `urbanMask` (NA where urban) and write it to
-## `outFile`, returning that path. Returns the ORIGINAL path unchanged if the source is missing or
+## Mask a year-0 current-condition raster by `urbanMask` (NA where urban) and write it under
+## `ccDir`, returning the new path. Returns the ORIGINAL path unchanged if the source is missing or
 ## the geometries do not line up, so a grid mismatch degrades to "uncorrected" loudly rather than
 ## producing a silently wrong current-condition value.
-.maskCC <- function(f, urbanMask, outFile) {
+##
+## The copy keeps the source's `<rep>/<prefix>_year<YYYY>.tif` tail (`<ccDir>/rep01/vegTypeMap_year0000.tif`):
+## nrvtools labels every per-map result from that path and errors on anything else, so the
+## `_cc/cc_vegTypeMap.tif` name this used to write stopped the lm/pm summaries the first time the
+## correction actually ran.
+.maskCC <- function(f, urbanMask, ccDir) {
   if (!file.exists(f)) return(f)
+  outFile <- file.path(ccDir, basename(dirname(f)), basename(f))
+  dir.create(dirname(outFile), recursive = TRUE, showWarnings = FALSE)
   r <- terra::rast(f)
   if (!isTRUE(terra::compareGeom(r, urbanMask, stopOnError = FALSE))) {
     warning("NRV_summary: current-condition layer does not match ", basename(f),

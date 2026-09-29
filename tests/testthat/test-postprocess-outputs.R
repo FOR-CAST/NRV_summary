@@ -65,3 +65,29 @@ test_that("the plot event keeps the sim plotFun() returns", {
   }
   expect_true(any(grepl("sim <- plotFun(sim)", body, fixed = TRUE)))
 })
+
+test_that("the masked current-condition maps keep the <rep>/<prefix>_year<YYYY>.tif path nrvtools parses", {
+  ## nrvtools labels each per-map result `<rep>.<prefix>_year<YYYY>_<polyName>` from the file path
+  ## and stops on anything else; `_cc/cc_vegTypeMap.tif` stopped the summaries in 2.0.0.9025.
+  src <- file.path(testPaths$outputPath, "maskCC", "rep01", "vegTypeMap_year0000.tif")
+  dir.create(dirname(src), recursive = TRUE, showWarnings = FALSE)
+  r <- terra::rast(nrows = 2, ncols = 2, xmin = 0, xmax = 2, ymin = 0, ymax = 2, crs = "EPSG:3857",
+                   vals = 1:4)
+  terra::writeRaster(r, src, overwrite = TRUE, datatype = "INT2U")
+  urbanMask <- terra::rast(r, vals = c(1L, NA, 1L, 1L)) ## cell 2 is urban
+
+  maskCC <- moduleFn(".maskCC", new.env())
+  ccDir <- file.path(testPaths$outputPath, "maskCC", "_cc")
+  out <- maskCC(src, urbanMask, ccDir)
+
+  expect_identical(normalizePath(out), normalizePath(file.path(ccDir, "rep01", "vegTypeMap_year0000.tif")))
+  label <- paste0(basename(dirname(out)), ".", tools::file_path_sans_ext(basename(out)), "_ANC")
+  expect_match(label, "^(.*?)\\.(.*)_year([0-9]+)_(.*)$") ## nrvtools' .parse_metric_labels() pattern
+  expect_identical(terra::values(terra::rast(out), mat = FALSE), c(1L, NA, 3L, 4L))
+
+  ## a grid mismatch leaves the map uncorrected, loudly, and returns the original path
+  other <- terra::rast(nrows = 3, ncols = 3, xmin = 0, xmax = 3, ymin = 0, ymax = 3, crs = "EPSG:3857",
+                       vals = 1L)
+  expect_warning(same <- maskCC(src, other, ccDir), "does not match")
+  expect_identical(same, src)
+})
