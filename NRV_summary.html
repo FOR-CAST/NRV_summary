@@ -2972,8 +2972,8 @@ border-radius: 0px;
 
 
 <h1 class="title toc-ignore">NRV_summary Manual</h1>
-<h3 class="subtitle">v.2.0.0.9026</h3>
-<h4 class="date">Last updated: 2026-09-29</h4>
+<h3 class="subtitle">v.2.0.0.9028</h3>
+<h4 class="date">Last updated: 2026-10-02</h4>
 
 </div>
 
@@ -3353,7 +3353,7 @@ NA
 NA
 </td>
 <td style="text-align:left;">
-Specify which subset of postprocessing events to run. At least one of: ‘am’ for the stand-age time-series animation (GIF); ‘bc’ for BC seral stage patch metrics; ‘fd’ for forest degradation indicators; ‘lm’ for default landscape metrics; ‘lw’ for default LandWeb summaries ‘pm’ for default patch metrics; ‘on’ for ON patch metrics.
+Specify which subset of postprocessing events to run. At least one of: ‘am’ for the stand-age time-series animation (GIF); ‘bc’ for BC seral stage patch metrics; ‘lm’ for default landscape metrics; ‘lw’ for default LandWeb summaries ‘pm’ for default patch metrics; ‘on’ for ON patch metrics. Any other value is an error (‘fd’, forest degradation indicators, is not implemented).
 </td>
 </tr>
 <tr>
@@ -3504,7 +3504,7 @@ vegLeadingProportion
 numeric
 </td>
 <td style="text-align:left;">
-0.8
+0.75
 </td>
 <td style="text-align:left;">
 0
@@ -3513,7 +3513,7 @@ numeric
 1
 </td>
 <td style="text-align:left;">
-a number that defines whether a species is leading for a given pixel
+A number that defines whether a species is leading for a given pixel. Default: <code>LandR::leadingSpeciesProp()</code>, i.e. option <code>LandR.leadingSpeciesProp</code>, which takes <code>LandR.mixedwoodProp</code> (0.75) unless set. Setting it in one place moves every module and LandR function together.
 </td>
 </tr>
 <tr>
