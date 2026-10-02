@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9026"),
+  version = list(NRV_summary = "2.0.0.9027"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -73,11 +73,12 @@ defineModule(sim, list(
                           "At least one of:",
                           "'am' for the stand-age time-series animation (GIF);",
                           "'bc' for BC seral stage patch metrics;",
-                          "'fd' for forest degradation indicators;",
                           "'lm' for default landscape metrics;",
                           "'lw' for default LandWeb summaries",
                           "'pm' for default patch metrics;",
-                          "'on' for ON patch metrics.")),
+                          "'on' for ON patch metrics.",
+                          "Any other value is an error ('fd', forest degradation indicators, is not",
+                          "implemented).")),
     defineParameter("reps", "integer", 1L:10L, 1L, NA_integer_,
                     paste("number of replicates/runs per study area.")),
     defineParameter("sieveThresh", "integer", 1L, NA_integer_, NA_integer_,
@@ -190,6 +191,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         ## the postprocess events can iterate on plots/CSVs; read by .buildRepDataset() (process-local).
         options(NRV_summary.reuseAggregates = isTRUE(P(sim)$reuseAggregates))
 
+        .checkPostprocessEvents(P(sim)$postprocessEvents)
         sim <- InitMulti(sim)
 
         if ("am" %in% tolower(P(sim)$postprocessEvents)) {
@@ -202,10 +204,6 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
 
         if ("pm" %in% tolower(P(sim)$postprocessEvents)) {
           sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_pm", .last())
-        }
-
-        if ("fd" %in% tolower(P(sim)$postprocessEvents)) {
-          sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_fd", .last())
         }
 
         if ("lw" %in% tolower(P(sim)$postprocessEvents)) {
@@ -260,9 +258,6 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
     },
     postprocess_pm = {
       sim <- patchMetrics(sim)
-    },
-    postprocess_fd = {
-      browser() ## TODO
     },
     postprocess_lw = {
       sim <- landWebMetrics(sim)
@@ -533,6 +528,21 @@ InitMulti <- function(sim) {
   sf::st_as_sf(terra::crop(xv, yv))
 }
 
+## Stop before any work if `postprocessEvents` asks for an event this module does not implement:
+## an unknown value would otherwise be skipped without a word, and 'fd' (forest degradation) was
+## scheduled as a stub that stopped in browser() after the other summaries had run.
+.checkPostprocessEvents <- function(events) {
+  known <- c("am", "bc", "lm", "lw", "on", "pm")
+  bad <- setdiff(tolower(events), known)
+  if (length(bad)) {
+    stop(
+      "postprocessEvents not implemented: ", paste0("'", bad, "'", collapse = ", "),
+      ". Use any of: ", paste0("'", known, "'", collapse = ", "), "."
+    )
+  }
+  invisible(events)
+}
+
 .ppRoot <- function(sim) {
   file.path(dirname(outputPath(sim)), "postprocess")
 }
@@ -642,9 +652,7 @@ landscapeMetrics <- function(sim) {
 
   funList <- default_landscape_metrics() ## TODO: pass this further up via parameter funList_lm
 
-  oldPlan <- future::plan() |>
-    tweak(workers = pemisc::optimalClusterNum(5000, length(fvtm))) |>
-    future::plan()
+  oldPlan <- .planWithWorkers(pemisc::optimalClusterNum(5000, length(fvtm)))
   on.exit(future::plan(oldPlan), add = TRUE)
 
   vtmByRep <- .filesByRep(fvtm)
@@ -727,9 +735,7 @@ patchMetrics <- function(sim) {
   studyAreaReporting <- sf::st_as_sf(sim$studyAreaReporting)
   funList <- default_patch_metrics() ## TODO: pass this further up via parameter funList_pm
 
-  oldPlan <- future::plan() |>
-    tweak(workers = pemisc::optimalClusterNum(5000, length(fvtm))) |>
-    future::plan()
+  oldPlan <- .planWithWorkers(pemisc::optimalClusterNum(5000, length(fvtm)))
   on.exit(future::plan(oldPlan), add = TRUE)
 
   ## one parquet partition per replicate (the vtm/sam file vectors align by index).
@@ -821,9 +827,7 @@ landWebMetrics <- function(sim) {
   funList <- default_landweb_metrics() ## TODO: pass this further up via parameter funList_lw
   idCols <- c("poly", "level", "class", "metric", "metric.1") ## pool across rep x summary year (no time)
 
-  oldPlan <- future::plan() |>
-    tweak(workers = pemisc::optimalClusterNum(5000, length(fvtm))) |>
-    future::plan()
+  oldPlan <- .planWithWorkers(pemisc::optimalClusterNum(5000, length(fvtm)))
   on.exit(future::plan(oldPlan), add = TRUE)
 
   vtmByRep <- .filesByRep(fvtm)
@@ -959,7 +963,7 @@ patchMetricsSeralBC <- function(sim) {
   )
   rptPolyNames <- names(sim$reportingPolygons)
 
-  oldPlan <- plan(workers = pemisc::optimalClusterNum(5000, length(fssm)))
+  oldPlan <- .planWithWorkers(pemisc::optimalClusterNum(5000, length(fssm)))
   on.exit(future::plan(oldPlan), add = TRUE)
 
   ssmByRep <- .filesByRep(fssm)
@@ -1215,6 +1219,24 @@ makeAnimation <- function(sim) {
 
 ## Number of local worker processes for parallel plot rendering: RAM-aware (optimalClusterNum) but
 ## hard-capped by the `plotWorkers` parameter, so a shared node is not swamped. 1 -> render inline.
+## Set the current future plan's `workers` to `nWorkers`, keeping its backend; returns the previous
+## plan, for on.exit(). A backend without `workers` (sequential) is left alone: tweaking it only
+## warns. future (<= 1.76.0) appends a tweak rather than replacing it, so re-tweaking `workers` on a
+## plan set as `plan(<backend>, workers = n)` failed with 'formal argument "workers" matched by
+## multiple actual arguments'; only the latest value of each tweak is kept.
+.planWithWorkers <- function(nWorkers) {
+  strategy <- future::plan()
+  if (!"workers" %in% names(formals(strategy))) {
+    return(strategy)
+  }
+  strategy <- future::tweak(strategy, workers = nWorkers)
+  tweaks <- attr(strategy, "tweaks")
+  if (is.list(tweaks) && anyDuplicated(names(tweaks))) {
+    attr(strategy, "tweaks") <- tweaks[!duplicated(names(tweaks), fromLast = TRUE)]
+  }
+  future::plan(strategy)
+}
+
 .plotWorkers <- function(sim, nTasks) {
   cap <- P(sim)$plotWorkers
   if (is.null(cap) || is.na(cap)) cap <- 1L
