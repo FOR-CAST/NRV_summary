@@ -27,6 +27,7 @@ test_that("inputs are the expected names and classes", {
       "reportingPolygons"    = "list",
       "speciesLayers"        = "SpatRaster",
       "sppColorVect"         = "character",
+      "sppColorVectReporting" = "character",
       "sppEquiv"             = "data.table",
       "studyAreaReporting"   = "SpatVector"
 )
@@ -50,7 +51,7 @@ test_that("parameters are the expected names", {
       ".plotInitialTime", ".plotInterval", ".plots", ".seed", ".studyAreaName",
       ".useCache", "ageClassCutOffs", "ageClasses", "ageClassMaxAge", "mixedType",
       "mode", "patchDirections", "plotWorkers", "postprocessEvents", "reps",
-      "reuseAggregates", "sieveThresh", "simTimes", "sppEquivCol", "summaryInterval",
+      "reuseAggregates", "sieveThresh", "simTimes", "sppEquivCol", "sppEquivColReporting", "summaryInterval",
       "summaryPeriod", "timeSeriesTimes", "vegLeadingProportion"
 )
   )

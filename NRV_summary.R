@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9028"),
+  version = list(NRV_summary = "2.0.0.9029"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -88,6 +88,15 @@ defineModule(sim, list(
                     "Simulation start and end times when running in 'multi' mode."),
     defineParameter("sppEquivCol", "character", "LandR", NA, NA,
                     "The column in `sim$sppEquiv` data.table to use as a naming convention"),
+    defineParameter("sppEquivColReporting", "character", NA_character_, NA, NA,
+                    paste("(mode = 'multi') column of `sim$sppEquiv` that groups the simulated species",
+                          "(`sppEquivCol`) for reporting. When set, the vegetation-type maps that the",
+                          "'lm', 'lw' and 'pm' analyses read, for the simulated years and for current",
+                          "conditions, are rebuilt from the saved `cohortData` and `pixelGroupMap` with",
+                          "each species recoded to its group, so biomass is summed within a group",
+                          "before the leading type is decided. `LandR::vegTypeMapGenerator()` sums only",
+                          "within a code, so relabelling the species-level maps would not give this.",
+                          "`NA` (the default) analyses the species-level maps the simulation saved.")),
     defineParameter("summaryInterval", "integer", 100L, NA, NA,
                     "simulation time interval at which to take 'snapshots' used for summary analyses."),
     defineParameter("summaryPeriod", "integer", start(sim) + c(700L, 1000L), NA, NA,
@@ -135,6 +144,10 @@ defineModule(sim, list(
                  desc = paste("A named vector of colors to use for plotting.",
                               "The names must be in `sim$sppEquiv[[P(sim)$sppEquivCol]]`,",
                               "and should also contain a color for 'Mixed'")),
+    expectsInput("sppColorVectReporting", "character",
+                 desc = paste("(mode = 'multi', with `sppEquivColReporting`) named colours for the",
+                              "reporting groups and 'Mixed'. If absent, `LandR::sppColors()` on the",
+                              "reporting column.")),
     expectsInput("sppEquiv", "data.table", NA, NA, NA,
                  desc = "table of species equivalencies. See `LandR::sppEquivalencies_CA`."),
     expectsInput("studyAreaReporting", "SpatVector",
@@ -372,6 +385,8 @@ InitMulti <- function(sim) {
   ## The NRV envelope (built from the replicates) is deliberately NOT masked -- the envelope is the
   ## pre-industrial landscape, the marker is today's, and that difference IS the land-conversion
   ## component of the departure.
+  fvtm0src <- mod$fvtm0 ## the species-level year-0 map, before the urban mask (see below)
+  urbanMask <- NULL
   ccrep <- sim$LandTypeCC_reporting
   if (is.null(ccrep)) {
     ## do not fail silently: a missing layer here would look identical to "no urban present".
@@ -459,6 +474,28 @@ InitMulti <- function(sim) {
   mod$cd <- grep("cohortData", cdpgm, value = TRUE)
   mod$pgm <- grep("pixelGroupMap", cdpgm, value = TRUE)
 
+  ## Reporting groups: the lm/lw/pm analyses read maps of the groups rather than of the simulated
+  ## species, rebuilt from the saved cohorts (see .buildReportingVegTypeMaps()). Only the maps they
+  ## read change: time since fire (mod$tsf, mod$ftsf0) and stand age (mod$sam, mod$fsam0) stay those
+  ## of the replicate folders, and mod$tsf was derived from the species-level paths above.
+  if (!is.na(P(sim)$sppEquivColReporting)) {
+    grp <- .reportingGroups(sim$sppEquiv, P(sim)$sppEquivCol, P(sim)$sppEquivColReporting)
+    maps <- .buildReportingVegTypeMaps(
+      c(fvtm0src, mod$vtm),
+      outRoot = file.path(.ppRoot(sim), "_reportingMaps"),
+      grp = grp,
+      colors = .reportingColors(sim$sppColorVectReporting, grp),
+      vegLeadingProportion = P(sim)$vegLeadingProportion,
+      mixedType = P(sim)$mixedType
+    )
+    mod$vtm <- maps[-1L]
+    mod$fvtm0 <- maps[[1L]]
+    if (!is.null(urbanMask)) {
+      mod$fvtm0 <- .maskCC(maps[[1L]], urbanMask, file.path(.ppRoot(sim), "_reportingMaps", "_cc"))
+    }
+    mod$ppFiles <- c(mod$ppFiles, maps, mod$fvtm0)
+  }
+
   ## extract the reporting polygons to run the analyses on
   mod$rptPolyNames <- names(sim$reportingPolygons)
 
@@ -505,6 +542,112 @@ InitMulti <- function(sim) {
   terra::mask(r, urbanMask, filename = outFile, overwrite = TRUE,
               wopt = list(datatype = terra::datatype(r)))
   outFile
+}
+
+## Reporting groups (P(sim)$sppEquivColReporting): the group of each simulated species code, and the
+## group table LandR::vegTypeMapGenerator() needs, one `Type` per group (it reads `Type` to find
+## mixedwood stands under mixedType = 2). Stops if a code falls in two groups, or a group holds both
+## conifers and broadleaves: either would give a wrong map without an error.
+.reportingGroups <- function(sppEquiv, sppEquivCol, reportCol) {
+  need <- c(sppEquivCol, reportCol, "Type")
+  miss <- setdiff(need, names(sppEquiv))
+  if (length(miss)) {
+    stop("NRV_summary: `sppEquiv` lacks column(s) ", paste(miss, collapse = ", "), ".", call. = FALSE)
+  }
+  eq <- unique(data.table::as.data.table(sppEquiv)[, need, with = FALSE])
+  eq <- eq[!is.na(eq[[sppEquivCol]]) & nzchar(eq[[sppEquivCol]])]
+  pairs <- unique(eq[, c(sppEquivCol, reportCol), with = FALSE])
+  noGroup <- pairs[[sppEquivCol]][is.na(pairs[[reportCol]]) | !nzchar(pairs[[reportCol]])]
+  if (length(noGroup)) {
+    stop("NRV_summary: no reporting group in `", reportCol, "` for: ",
+         paste(unique(noGroup), collapse = ", "), ".", call. = FALSE)
+  }
+  twoGroups <- unique(pairs[[sppEquivCol]][duplicated(pairs[[sppEquivCol]])])
+  if (length(twoGroups)) {
+    stop("NRV_summary: simulated code(s) in more than one reporting group: ",
+         paste(twoGroups, collapse = ", "), ".", call. = FALSE)
+  }
+  typed <- !is.na(eq[["Type"]]) & nzchar(eq[["Type"]])
+  types <- unique(eq[typed, c(reportCol, "Type"), with = FALSE])
+  mixed <- unique(types[[reportCol]][duplicated(types[[reportCol]])])
+  if (length(mixed)) {
+    stop("NRV_summary: reporting group(s) holding both conifers and broadleaves: ",
+         paste(mixed, collapse = ", "), ".", call. = FALSE)
+  }
+  untyped <- setdiff(unique(pairs[[reportCol]]), types[[reportCol]])
+  if (length(untyped)) {
+    stop("NRV_summary: no `Type` for reporting group(s): ", paste(untyped, collapse = ", "), ".",
+         call. = FALSE)
+  }
+  list(
+    map = stats::setNames(pairs[[reportCol]], pairs[[sppEquivCol]]),
+    groups = types[order(types[[reportCol]])],
+    col = reportCol
+  )
+}
+
+## Colours for the reporting groups and "Mixed", named exactly as LandR::vegTypeMapGenerator()
+## asserts: the groups in `grp$groups` plus "Mixed".
+.reportingColors <- function(colors, grp) {
+  want <- c(grp$groups[[grp$col]], "Mixed")
+  if (is.null(colors)) {
+    colors <- LandR::sppColors(grp$groups, grp$col, newVals = "Mixed", palette = "Accent")
+  }
+  miss <- setdiff(want, names(colors))
+  if (length(miss)) {
+    stop("NRV_summary: `sppColorVectReporting` has no colour for: ", paste(miss, collapse = ", "),
+         ".", call. = FALSE)
+  }
+  colors[want]
+}
+
+## One vegetation-type map by reporting group: a copy of `cohortData` with each species recoded to
+## its group, so that LandR::vegTypeMapGenerator(), which sums B within a species code, sums it
+## within a group before deciding the leading type.
+.reportingVegTypeMap <- function(cohortData, pixelGroupMap, grp, colors, vegLeadingProportion,
+                                 mixedType) {
+  cd <- data.table::as.data.table(cohortData)[, c("pixelGroup", "speciesCode", "B"), with = FALSE]
+  code <- as.character(cd[["speciesCode"]])
+  group <- unname(grp$map[code])
+  if (anyNA(group)) {
+    stop("NRV_summary: no reporting group for species: ", paste(unique(code[is.na(group)]), collapse = ", "),
+         ".", call. = FALSE)
+  }
+  data.table::set(cd, j = "speciesCode", value = group)
+  LandR::vegTypeMapGenerator(
+    cd,
+    pixelGroupMap,
+    vegLeadingProportion,
+    mixedType = mixedType,
+    sppEquiv = grp$groups,
+    sppEquivCol = grp$col,
+    colors = colors,
+    doAssertion = getOption("LandR.assertions", TRUE)
+  )
+}
+
+## Rebuild species-level vegetation-type maps (`<dir>/<rep>/vegTypeMap_year<YYYY>.tif`) by reporting
+## group, from the cohortData and pixelGroupMap saved beside each. Written to
+## `<outRoot>/<rep>/vegTypeMap_year<YYYY>.tif`, keeping the `<rep>/<prefix>_year<YYYY>` tail nrvtools
+## labels its results from; `outRoot` is cleared first. Returns the new paths in the order of `vtm`.
+.buildReportingVegTypeMaps <- function(vtm, outRoot, grp, colors, vegLeadingProportion, mixedType) {
+  stopifnot(all(grepl("^vegTypeMap_year[0-9]+\\.tif$", basename(vtm))))
+  cd <- file.path(dirname(vtm), sub("^vegTypeMap(_year[0-9]+)\\.tif$", "cohortData\\1.qs2", basename(vtm)))
+  pgm <- file.path(dirname(vtm), sub("^vegTypeMap", "pixelGroupMap", basename(vtm)))
+  miss <- c(cd, pgm)[!file.exists(c(cd, pgm))]
+  if (length(miss)) {
+    stop("NRV_summary: cannot build the reporting-group maps; missing:\n", paste(miss, collapse = "\n"),
+         call. = FALSE)
+  }
+  out <- file.path(outRoot, basename(dirname(vtm)), basename(vtm))
+  unlink(outRoot, recursive = TRUE)
+  for (i in seq_along(vtm)) {
+    m <- .reportingVegTypeMap(qs2::qs_read(cd[i]), terra::rast(pgm[i]), grp, colors,
+                              vegLeadingProportion, mixedType)
+    dir.create(dirname(out[i]), recursive = TRUE, showWarnings = FALSE)
+    terra::writeRaster(m, out[i], datatype = "INT1U", overwrite = TRUE) ## a few classes; keeps the colour table
+  }
+  out
 }
 
 ## Clip reporting polygons to the study area.
