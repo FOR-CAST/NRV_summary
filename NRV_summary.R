@@ -18,7 +18,7 @@ defineModule(sim, list(
     "ggforce", "ggplot2", "gifski", "googledrive", "landscapemetrics", "qs2",
     "RColorBrewer", "sf", "terra", "tidyterra",
     "PredictiveEcology/LandR@development (>= 1.2.0.9024)", ## leadingSpeciesProp()
-    "PredictiveEcology/LandWebUtils@development (>= 1.0.3.9016)",
+    "PredictiveEcology/LandWebUtils@development (>= 1.0.3.9045)", ## sppEquiv_groups(), recode_cohorts()
     ## 0.2.10 floor, not 0.2.7: the LandWeb#118 tenure x sub-region crossings mint refCodes of the
     ## form <kind>_<slug> whose subregion names themselves contain "_", and nrvtools < 0.2.10 aborts
     ## calculatePatchMetrics()/calculatePatchMetricsSeral()/nrv_metrics_landscape() on those with
@@ -479,7 +479,7 @@ InitMulti <- function(sim) {
   ## read change: time since fire (mod$tsf, mod$ftsf0) and stand age (mod$sam, mod$fsam0) stay those
   ## of the replicate folders, and mod$tsf was derived from the species-level paths above.
   if (!is.na(P(sim)$sppEquivColReporting)) {
-    grp <- .reportingGroups(sim$sppEquiv, P(sim)$sppEquivCol, P(sim)$sppEquivColReporting)
+    grp <- LandWebUtils::sppEquiv_groups(sim$sppEquiv, P(sim)$sppEquivCol, P(sim)$sppEquivColReporting)
     maps <- .buildReportingVegTypeMaps(
       c(fvtm0src, mod$vtm),
       outRoot = file.path(.ppRoot(sim), "_reportingMaps"),
@@ -544,48 +544,6 @@ InitMulti <- function(sim) {
   outFile
 }
 
-## Reporting groups (P(sim)$sppEquivColReporting): the group of each simulated species code, and the
-## group table LandR::vegTypeMapGenerator() needs, one `Type` per group (it reads `Type` to find
-## mixedwood stands under mixedType = 2). Stops if a code falls in two groups, or a group holds both
-## conifers and broadleaves: either would give a wrong map without an error.
-.reportingGroups <- function(sppEquiv, sppEquivCol, reportCol) {
-  need <- c(sppEquivCol, reportCol, "Type")
-  miss <- setdiff(need, names(sppEquiv))
-  if (length(miss)) {
-    stop("NRV_summary: `sppEquiv` lacks column(s) ", paste(miss, collapse = ", "), ".", call. = FALSE)
-  }
-  eq <- unique(data.table::as.data.table(sppEquiv)[, need, with = FALSE])
-  eq <- eq[!is.na(eq[[sppEquivCol]]) & nzchar(eq[[sppEquivCol]])]
-  pairs <- unique(eq[, c(sppEquivCol, reportCol), with = FALSE])
-  noGroup <- pairs[[sppEquivCol]][is.na(pairs[[reportCol]]) | !nzchar(pairs[[reportCol]])]
-  if (length(noGroup)) {
-    stop("NRV_summary: no reporting group in `", reportCol, "` for: ",
-         paste(unique(noGroup), collapse = ", "), ".", call. = FALSE)
-  }
-  twoGroups <- unique(pairs[[sppEquivCol]][duplicated(pairs[[sppEquivCol]])])
-  if (length(twoGroups)) {
-    stop("NRV_summary: simulated code(s) in more than one reporting group: ",
-         paste(twoGroups, collapse = ", "), ".", call. = FALSE)
-  }
-  typed <- !is.na(eq[["Type"]]) & nzchar(eq[["Type"]])
-  types <- unique(eq[typed, c(reportCol, "Type"), with = FALSE])
-  mixed <- unique(types[[reportCol]][duplicated(types[[reportCol]])])
-  if (length(mixed)) {
-    stop("NRV_summary: reporting group(s) holding both conifers and broadleaves: ",
-         paste(mixed, collapse = ", "), ".", call. = FALSE)
-  }
-  untyped <- setdiff(unique(pairs[[reportCol]]), types[[reportCol]])
-  if (length(untyped)) {
-    stop("NRV_summary: no `Type` for reporting group(s): ", paste(untyped, collapse = ", "), ".",
-         call. = FALSE)
-  }
-  list(
-    map = stats::setNames(pairs[[reportCol]], pairs[[sppEquivCol]]),
-    groups = types[order(types[[reportCol]])],
-    col = reportCol
-  )
-}
-
 ## Colours for the reporting groups and "Mixed", named exactly as LandR::vegTypeMapGenerator()
 ## asserts: the groups in `grp$groups` plus "Mixed".
 .reportingColors <- function(colors, grp) {
@@ -602,20 +560,12 @@ InitMulti <- function(sim) {
 }
 
 ## One vegetation-type map by reporting group: a copy of `cohortData` with each species recoded to
-## its group, so that LandR::vegTypeMapGenerator(), which sums B within a species code, sums it
-## within a group before deciding the leading type.
+## its group (`grp` from LandWebUtils::sppEquiv_groups()), so that LandR::vegTypeMapGenerator(),
+## which sums B within a species code, sums it within a group before deciding the leading type.
 .reportingVegTypeMap <- function(cohortData, pixelGroupMap, grp, colors, vegLeadingProportion,
                                  mixedType) {
-  cd <- data.table::as.data.table(cohortData)[, c("pixelGroup", "speciesCode", "B"), with = FALSE]
-  code <- as.character(cd[["speciesCode"]])
-  group <- unname(grp$map[code])
-  if (anyNA(group)) {
-    stop("NRV_summary: no reporting group for species: ", paste(unique(code[is.na(group)]), collapse = ", "),
-         ".", call. = FALSE)
-  }
-  data.table::set(cd, j = "speciesCode", value = group)
   LandR::vegTypeMapGenerator(
-    cd,
+    LandWebUtils::recode_cohorts(cohortData, grp$map),
     pixelGroupMap,
     vegLeadingProportion,
     mixedType = mixedType,

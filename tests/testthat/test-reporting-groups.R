@@ -41,42 +41,9 @@ cellLabels <- function(r) {
   as.character(lv[[2L]][match(terra::values(r, mat = FALSE), lv[[1L]])])
 }
 
-test_that("each simulated code gets one reporting group, and each group one Type", {
-  withr::local_package("data.table")
-  reportingGroups <- moduleFn(".reportingGroups", new.env())
-
-  grp <- reportingGroups(reportingEquiv(), "LandWeb", "LandWebReport")
-  expect_identical(grp$col, "LandWebReport")
-  expect_identical(unname(grp$map[c("Lari_lar", "Betu_pap", "Pinu_con")]), c("Bl_Spruce", "Decid", "Pine"))
-  expect_setequal(grp$groups[["LandWebReport"]], c("Bl_Spruce", "Pine", "Decid", "Wh_Spruce"))
-  expect_identical(anyDuplicated(grp$groups[["LandWebReport"]]), 0L)
-
-  ## varieties sharing a code collapse to one row, as LandR lists Pinus contorta twice
-  twice <- rbind(reportingEquiv(), data.table::data.table(LandWeb = "Pinu_con", LandWebReport = "Pine", Type = "Conifer"))
-  expect_identical(reportingGroups(twice, "LandWeb", "LandWebReport")$map, grp$map)
-})
-
-test_that("a code in two groups, a group of conifers and broadleaves, or a missing column stop", {
-  withr::local_package("data.table")
-  reportingGroups <- moduleFn(".reportingGroups", new.env())
-
-  twoGroups <- rbind(reportingEquiv(), data.table::data.table(LandWeb = "Pinu_con", LandWebReport = "Fir", Type = "Conifer"))
-  expect_error(reportingGroups(twoGroups, "LandWeb", "LandWebReport"), "more than one reporting group: Pinu_con")
-
-  mixed <- reportingEquiv()
-  mixed[LandWeb == "Lari_lar", Type := "Deciduous"]
-  expect_error(reportingGroups(mixed, "LandWeb", "LandWebReport"), "both conifers and broadleaves: Bl_Spruce")
-
-  noGroup <- reportingEquiv()
-  noGroup[LandWeb == "Pice_gla", LandWebReport := NA_character_]
-  expect_error(reportingGroups(noGroup, "LandWeb", "LandWebReport"), "no reporting group .* Pice_gla")
-
-  expect_error(reportingGroups(reportingEquiv(), "LandWeb", "Report"), "lacks column")
-})
-
 test_that("the group map sums biomass within a group before deciding the leading type", {
   withr::local_package("data.table")
-  grp <- moduleFn(".reportingGroups", new.env())(reportingEquiv(), "LandWeb", "LandWebReport")
+  grp <- LandWebUtils::sppEquiv_groups(reportingEquiv(), "LandWeb", "LandWebReport")
   colors <- moduleFn(".reportingColors", new.env())(NULL, grp)
   reportingVegTypeMap <- moduleFn(".reportingVegTypeMap", new.env())
 
@@ -98,7 +65,7 @@ test_that("the group map sums biomass within a group before deciding the leading
 
 test_that("colours default from LandR and must cover every group plus Mixed", {
   withr::local_package("data.table")
-  grp <- moduleFn(".reportingGroups", new.env())(reportingEquiv(), "LandWeb", "LandWebReport")
+  grp <- LandWebUtils::sppEquiv_groups(reportingEquiv(), "LandWeb", "LandWebReport")
   reportingColors <- moduleFn(".reportingColors", new.env())
 
   expect_identical(names(reportingColors(NULL, grp)), c(grp$groups[["LandWebReport"]], "Mixed"))
@@ -110,7 +77,7 @@ test_that("colours default from LandR and must cover every group plus Mixed", {
 
 test_that("the rebuilt maps keep the <rep>/vegTypeMap_year<YYYY>.tif path nrvtools parses", {
   withr::local_package("data.table")
-  grp <- moduleFn(".reportingGroups", new.env())(reportingEquiv(), "LandWeb", "LandWebReport")
+  grp <- LandWebUtils::sppEquiv_groups(reportingEquiv(), "LandWeb", "LandWebReport")
   colors <- moduleFn(".reportingColors", new.env())(NULL, grp)
   buildMaps <- moduleFn(".buildReportingVegTypeMaps", new.env())
 
