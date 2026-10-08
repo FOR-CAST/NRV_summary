@@ -2972,8 +2972,8 @@ border-radius: 0px;
 
 
 <h1 class="title toc-ignore">NRV_summary Manual</h1>
-<h3 class="subtitle">v.2.0.0.9028</h3>
-<h4 class="date">Last updated: 2026-10-02</h4>
+<h3 class="subtitle">v.2.0.0.9029</h3>
+<h4 class="date">Last updated: 2026-10-08</h4>
 
 </div>
 
@@ -3113,6 +3113,20 @@ character
 </td>
 <td style="text-align:left;">
 A named vector of colors to use for plotting. The names must be in <code>sim$sppEquiv[[P(sim)$sppEquivCol]]</code>, and should also contain a color for ‘Mixed’
+</td>
+<td style="text-align:left;">
+NA
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+sppColorVectReporting
+</td>
+<td style="text-align:left;">
+character
+</td>
+<td style="text-align:left;">
+(mode = ‘multi’, with <code>sppEquivColReporting</code>) named colours for the reporting groups and ‘Mixed’. If absent, <code>LandR::sppColors()</code> on the reporting column.
 </td>
 <td style="text-align:left;">
 NA
@@ -3434,6 +3448,26 @@ NA
 </td>
 <td style="text-align:left;">
 The column in <code>sim$sppEquiv</code> data.table to use as a naming convention
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+sppEquivColReporting
+</td>
+<td style="text-align:left;">
+character
+</td>
+<td style="text-align:left;">
+NA
+</td>
+<td style="text-align:left;">
+NA
+</td>
+<td style="text-align:left;">
+NA
+</td>
+<td style="text-align:left;">
+(mode = ‘multi’) column of <code>sim$sppEquiv</code> that groups the simulated species (<code>sppEquivCol</code>) for reporting. When set, the vegetation-type maps that the ‘lm’, ‘lw’ and ‘pm’ analyses read, for the simulated years and for current conditions, are rebuilt from the saved <code>cohortData</code> and <code>pixelGroupMap</code> with each species recoded to its group, so biomass is summed within a group before the leading type is decided. <code>LandR::vegTypeMapGenerator()</code> sums only within a code, so relabelling the species-level maps would not give this. <code>NA</code> (the default) analyses the species-level maps the simulation saved.
 </td>
 </tr>
 <tr>
