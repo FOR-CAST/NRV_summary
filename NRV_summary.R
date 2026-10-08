@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9029"),
+  version = list(NRV_summary = "2.0.0.9030"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -182,23 +182,22 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
           !is.null(sim$studyAreaReporting)
         )
 
-        sim <- scheduleEvent(sim, start(sim), "NRV_summary", "map_generators", .last())
-        ## fmt: skip
-        sim <- scheduleEvent(sim, P(sim)$summaryPeriod[1], "NRV_summary", "map_generators", .last())
-        sim <- scheduleEvent(sim, end(sim), "NRV_summary", "map_generators", .last())
+        ## Year 0 is the current condition that mode = "multi" reports today's values from, so it
+        ## is taken before any time-0 dynamics: after every module's init (SpaDES.core schedules
+        ## those at .first()), before e.g. Biomass_core's growth and mortality (priority 6) when its
+        ## growthInitialTime is start(sim). At .last(), it held a simulated year of both.
+        sim <- scheduleEvent(sim, start(sim), "NRV_summary", "map_generators", .first() + 1)
+        sim <- scheduleEvent(sim, start(sim), "NRV_summary", "save_single", .first() + 1)
 
-        sim <- scheduleEvent(sim, start(sim), "NRV_summary", "save_single", .last())
-        sim <- scheduleEvent(sim, P(sim)$summaryPeriod[1], "NRV_summary", "save_single", .last())
-        sim <- scheduleEvent(sim, end(sim), "NRV_summary", "save_single", .last())
-
-        ## also generate + save the stand-age / veg-type maps at each timeSeriesTimes
-        ## year, so the animation has its frames (read back in mode = "multi"). These
-        ## typically fall outside summaryPeriod, so they are not covered by the
-        ## summaryInterval reschedule; schedule map_generators before save_single so
-        ## the maps exist when saved.
-        for (tst in P(sim)$timeSeriesTimes) {
-          sim <- scheduleEvent(sim, tst, "NRV_summary", "map_generators", .last())
-          sim <- scheduleEvent(sim, tst, "NRV_summary", "save_single", .last())
+        ## The later years at the end of their year, also each timeSeriesTimes year so the
+        ## animation has its frames (read back in mode = "multi"); those typically fall outside
+        ## summaryPeriod, so the summaryInterval reschedule does not cover them. A time equal to
+        ## start(sim) is left out: a second year-0 save would overwrite the one above.
+        ## map_generators before save_single, so the maps exist when saved.
+        later <- c(P(sim)$summaryPeriod[1], end(sim), P(sim)$timeSeriesTimes)
+        for (t in later[later != start(sim)]) {
+          sim <- scheduleEvent(sim, t, "NRV_summary", "map_generators", .last())
+          sim <- scheduleEvent(sim, t, "NRV_summary", "save_single", .last())
         }
       } else if (P(sim)$mode == "multi") {
         stopifnot(!is.null(sim$reportingPolygons))
