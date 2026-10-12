@@ -1819,7 +1819,7 @@ stabilityCheck <- function(sim) {
 ## One row of landscape scalars from `cohortData` and `nPerGroup`, the number of reporting-area pixels in each
 ## pixel group (`tabulate()` of the pixelGroupMap values; no rasters are made). The forested pixels are those of
 ## the pixel groups in `cohortData`. Same definitions as the maps of `.landscapeMaps()`: leading species from
-## `LandR::vegTypeGenerator()` (the data.table path of `vegTypeMapGenerator()`), stand age biomass-weighted
+## `LandR::leadingByPixelGroup()` (what `vegTypeMapGenerator()` uses), stand age biomass-weighted
 ## and floored to 10 years as `standAgeMapGenerator()` does. propYoung and propOld: stand age below the first
 ## positive and at or above the last of the `ageClassCutOffs` (the module's first and last age classes);
 ## totalBiomassTg: B (g/m2) times pixels times `pixelHa`; lead_<species>: proportion of the forested pixels
@@ -1833,9 +1833,8 @@ stabilityCheck <- function(sim) {
   }
   w <- rowsum(cbind(ageB = cohortData$age * cohortData$B, B = cohortData$B), cohortData$pixelGroup)
   age <- data.frame(pixelGroup = as.integer(rownames(w)), age = floor(w[, "ageB"] / w[, "B"] / 10) * 10)
-  lead <- LandR::vegTypeGenerator(cohortData, vegLeadingProportion, mixedType = mixedType, sppEquiv = sppEquiv,
-                                  sppEquivCol = sppEquivCol, doAssertion = FALSE)
-  lead <- lead[!duplicated(lead$pixelGroup), ]
+  lead <- LandR::leadingByPixelGroup(cohortData, vegLeadingProportion, mixedType = mixedType, sppEquiv = sppEquiv,
+                                     sppEquivCol = sppEquivCol)
   nAge <- weightN(age$pixelGroup)
   nLead <- weightN(lead$pixelGroup)
   nForest <- sum(nAge)
