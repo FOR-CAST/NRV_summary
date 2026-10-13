@@ -7,6 +7,11 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 - Mode 'single' no longer fails in init when `cohortData`, `pixelGroupMap` etc. are not yet made by the vegetation
   modules' init (cold cache); the objects are checked at the first `map_generators`, `save_single` or `annual_series`
   event, with an error naming the missing ones.
+## Faster annual row
+
+- The annual event takes the leading species per pixelGroup from `LandR::leadingByPixelGroup()` instead of
+  `LandR::vegTypeGenerator()` plus a join onto every cohort row and `!duplicated()`; the row is identical.
+  Needs the LandR with `leadingByPixelGroup()`.
 
 ## Autocorrelation time sets the thinning of the snapshots
 
