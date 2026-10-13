@@ -17,7 +17,7 @@ defineModule(sim, list(
     "crayon", "data.table", "dplyr", "fs", "future", "future.apply", "future.callr",
     "ggforce", "ggplot2", "gifski", "googledrive", "landscapemetrics", "qs2",
     "RColorBrewer", "reproducible", "sf", "terra", "tidyterra",
-    "PredictiveEcology/LandR@development (>= 1.2.0.9024)",
+    "PredictiveEcology/LandR@development (>= 1.2.0.9054)",
     "PredictiveEcology/LandWebUtils@development (>= 1.0.3.9016)",
     ## 0.2.10 floor, not 0.2.7: the LandWeb#118 tenure x sub-region crossings mint refCodes of the
     ## form <kind>_<slug> whose subregion names themselves contain "_", and nrvtools < 0.2.10 aborts
