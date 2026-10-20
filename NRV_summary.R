@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9031"),
+  version = list(NRV_summary = "2.0.0.9032"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -35,7 +35,10 @@ defineModule(sim, list(
     ## 0.3.4.9000, not 0.2.11: the figures draw the current condition over the NRV
     ## (plot_nrv_envelope(cc =), plot_by_class(cc =)) and the per-class pages read
     ## nrv_replicate_values().
-    "FOR-CAST/nrvtools (>= 0.3.4.9000)",
+    ## 0.3.4.9001, not 0.3.4.9000: summarize_nrv() takes the per-replicate values that the patch
+    ## metric envelopes are built from and returns exact quartiles; nrv_metric_info() names the
+    ## axes; the plot functions take captions.
+    "FOR-CAST/nrvtools (>= 0.3.4.9001)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
     "PredictiveEcology/SpaDES.core@development (>= 3.0.3.9000)"
   ),
@@ -686,13 +689,13 @@ InitMulti <- function(sim) {
     }, logical(1L)))
 }
 
-## Build the parquet dataset for one refCode and return the across-replicate envelope.
-## `compute_fn(repID)` returns the raw metric list for one replicate (from a raw nrvtools producer).
-## `reuse = TRUE` skips the (expensive) recompute + rewrite when the dataset is already complete for
-## `repIDs` (see `.aggComplete()`), re-summarizing the surviving parquets -- useful for iterating on
-## the plots/CSVs without re-running the landscape-metric aggregation.
-.buildRepDataset <- function(root, repIDs, compute_fn, studyArea = NULL, scenario = NULL,
-                             id_cols = NULL, reuse = getOption("NRV_summary.reuseAggregates", FALSE)) {
+## Build the parquet dataset for one refCode: one partition per replicate. `compute_fn(repID)`
+## returns the raw metric list for one replicate (from a raw nrvtools producer). `reuse = TRUE` skips
+## the (expensive) recompute + rewrite when the dataset is already complete for `repIDs` (see
+## `.aggComplete()`) -- useful for iterating on the plots/CSVs without re-running the
+## landscape-metric aggregation.
+.writeRepDataset <- function(root, repIDs, compute_fn, studyArea = NULL, scenario = NULL,
+                             reuse = getOption("NRV_summary.reuseAggregates", FALSE)) {
   if (!(reuse && .aggComplete(root, repIDs))) {
     unlink(root, recursive = TRUE)
     for (repID in repIDs) {
@@ -700,10 +703,97 @@ InitMulti <- function(sim) {
       write_nrv_parquet(tidied, root, replicate = repID)
     }
   }
+  invisible(root)
+}
+
+## The across-replicate envelope of one refCode's dataset, registering its parquet files.
+## id_cols = NULL -> summarize_nrv() default (per-time envelopes); the LandWeb summaries pass an
+## explicit set excluding `time` so the NRV distribution pools across replicates AND summary years.
+## `perReplicate = TRUE` first reduces each replicate's patches to their mean
+## (nrvtools::nrv_replicate_values()), so that a patch-level metric's envelope is, like a class- or
+## landscape-level one's, the range of the replicates rather than of every patch of every
+## replicate; class- and landscape-level metrics pass through unchanged. A replicate without a
+## value there (an undefined metric, such as the standard deviation of a single patch) is then left
+## out, so the envelope's n_reps counts the replicates that have one.
+.summarizeRepDataset <- function(root, id_cols = NULL, perReplicate = FALSE) {
   mod$ppFiles <- c(mod$ppFiles, list.files(root, "\\.parquet$", recursive = TRUE, full.names = TRUE))
-  ## id_cols = NULL -> summarize_nrv() default (per-time envelopes); the LandWeb summaries pass an
-  ## explicit set excluding `time` so the NRV distribution pools across replicates AND summary years.
-  summarize_nrv(root, id_cols = id_cols)
+  if (!perReplicate) {
+    return(summarize_nrv(root, id_cols = id_cols))
+  }
+  v <- nrvtools::nrv_replicate_values(root)
+  if (nrow(v)) {
+    v <- v[!is.na(v$value), , drop = FALSE]
+  }
+  summarize_nrv(v, id_cols = id_cols)
+}
+
+## Build the parquet dataset for one refCode and return the across-replicate envelope.
+.buildRepDataset <- function(root, repIDs, compute_fn, studyArea = NULL, scenario = NULL,
+                             id_cols = NULL, reuse = getOption("NRV_summary.reuseAggregates", FALSE),
+                             perReplicate = FALSE) {
+  .writeRepDataset(root, repIDs, compute_fn, studyArea = studyArea, scenario = scenario,
+                   reuse = reuse)
+  .summarizeRepDataset(root, id_cols = id_cols, perReplicate = perReplicate)
+}
+
+## Class area (`ca`) of 0 ha for each class that a subregion shows -- in its current condition or
+## in any replicate-year -- but lacks in a replicate-year, the current condition included.
+## landscapemetrics returns no row for a class absent from a map, so the class-area envelopes and
+## boxes summarised only the replicate-years where the class occurs, and a class absent from most
+## of them looked as common as one present in all. Patch size, shape and age metrics stay undefined
+## for an absent class, so only `ca` is filled. `roots` are the dataset roots of one reporting
+## layer (replicates and current condition). The zeros go to `replicate=<id>/<zerosFile>`, rebuilt
+## from the other files on every call, so a reused dataset is filled the same way. Returns the
+## files written.
+.fillClassAreaZeros <- function(roots, zerosFile = "ca_zeros.parquet") {
+  parts <- lapply(roots, function(root) {
+    f <- list.files(root, "\\.parquet$", recursive = TRUE, full.names = TRUE)
+    unlink(f[basename(f) == zerosFile])
+    f <- f[basename(f) != zerosFile]
+    if (!length(f)) {
+      return(NULL)
+    }
+    ds <- arrow::open_dataset(f)
+    yearCols <- intersect(c("studyArea", "scenario", "rptPoly", "replicate", "rep", "time"), names(ds))
+    list(
+      root = root,
+      schema = ds$schema,
+      ## every replicate-year of the dataset, whether or not a subregion has a class area in it
+      years = as.data.frame(dplyr::collect(dplyr::distinct(ds, !!!rlang::syms(yearCols)))),
+      ca = as.data.frame(dplyr::collect(dplyr::filter(ds, .data$level == "class", .data$metric == "ca")))
+    )
+  })
+  parts <- Filter(Negate(is.null), parts)
+  seen <- unique(do.call(rbind, lapply(parts, function(p) p$ca[c("poly", "class")])))
+  if (is.null(seen) || !nrow(seen)) {
+    return(invisible(character(0)))
+  }
+  written <- character(0)
+  for (p in parts) {
+    if (!nrow(p$ca)) next ## a dataset without class areas (another funList) gets none
+    grid <- merge(p$years, seen, by = NULL)
+    keyCols <- c(names(p$years), "poly", "class")
+    key <- function(d) do.call(paste, c(lapply(d[keyCols], as.character), sep = "\r"))
+    miss <- grid[!key(grid) %in% key(p$ca), , drop = FALSE]
+    if (!nrow(miss)) next
+    ## zero rows shaped like the dataset's own class-area rows
+    z <- p$ca[rep(1L, nrow(miss)), , drop = FALSE]
+    z[keyCols] <- miss[keyCols]
+    z$value[] <- 0
+    if ("id" %in% names(z)) z$id[] <- NA
+    z <- z[names(p$schema)]
+    for (r in unique(z$replicate)) {
+      dst <- file.path(p$root, paste0("replicate=", r), zerosFile)
+      tmp <- tempfile(tmpdir = dirname(dst), fileext = ".parquet.tmp")
+      arrow::write_parquet(arrow::arrow_table(z[z$replicate == r, , drop = FALSE], schema = p$schema), tmp)
+      if (!file.rename(tmp, dst)) {
+        unlink(tmp)
+        stop("NRV_summary: failed to write ", dst, call. = FALSE)
+      }
+      written <- c(written, dst)
+    }
+  }
+  invisible(written)
 }
 
 ## Write the range-of-variation envelope for one refCode + reporting `layer` under csv/<kind>/<layer>/:
@@ -794,11 +884,13 @@ landscapeMetrics <- function(sim) {
       }
 
       ## current conditions: a single snapshot, summarised as one replicate.
+      ## perReplicate: the envelopes count only the replicates with a value, as for pm
       mod[[refCodeCC]] <- suppressWarnings(
         .buildRepDataset(
           .nrvAggRoot(sim, refCodeCC),
           repIDs = "CC",
-          compute_fn = function(repID) lmRaw(fvtm0)
+          compute_fn = function(repID) lmRaw(fvtm0),
+          perReplicate = TRUE
         )
       )
 
@@ -806,7 +898,8 @@ landscapeMetrics <- function(sim) {
       mod[[refCode]] <- .buildRepDataset(
         .nrvAggRoot(sim, refCode),
         repIDs = names(vtmByRep),
-        compute_fn = function(repID) lmRaw(vtmByRep[[repID]])
+        compute_fn = function(repID) lmRaw(vtmByRep[[repID]]),
+        perReplicate = TRUE
       )
 
       .writeNrvSummaryCSVs(sim, mod[[refCode]], refCode, p)
@@ -877,19 +970,23 @@ patchMetrics <- function(sim) {
         )
       }
 
-      ## current conditions
-      mod[[refCodeCC]] <- .buildRepDataset(
-        .nrvAggRoot(sim, refCodeCC),
-        repIDs = "CC",
-        compute_fn = function(repID) pmRaw(fvtm0, fsam0)
-      )
-
-      ## simulation results
-      mod[[refCode]] <- .buildRepDataset(
-        .nrvAggRoot(sim, refCode),
+      ## current conditions, then the simulation results; then 0 ha of each class a subregion lacks
+      ccRoot <- .nrvAggRoot(sim, refCodeCC)
+      simRoot <- .nrvAggRoot(sim, refCode)
+      .writeRepDataset(ccRoot, repIDs = "CC", compute_fn = function(repID) pmRaw(fvtm0, fsam0))
+      .writeRepDataset(
+        simRoot,
         repIDs = names(vtmByRep),
         compute_fn = function(repID) pmRaw(vtmByRep[[repID]], samByRep[[repID]])
       )
+      .fillClassAreaZeros(c(simRoot, ccRoot))
+
+      ## a patch-level metric's envelope spans the replicates' means over their patches, as the
+      ## per-class pages do. Pooling every patch of every replicate ran the band from a single cell
+      ## to the largest patch, and the current condition's patch mean and median (the lines of the
+      ## ribbon and box figures) were up to 51 times apart.
+      mod[[refCodeCC]] <- .summarizeRepDataset(ccRoot, perReplicate = TRUE)
+      mod[[refCode]] <- .summarizeRepDataset(simRoot, perReplicate = TRUE)
 
       ## relabel integer vegType class codes -> species names in the envelope (class-level lsm_c_*
       ## metrics report raw codes), so CSVs + plots show species. Applied here too (not only at the
@@ -1338,6 +1435,113 @@ makeAnimation <- function(sim) {
   if (nPages > 1L) paste0(title, " (page ", page, " of ", nPages, ")") else title
 }
 
+## Panel grid and canvas (inches) of a figure of `nPanels` panels, four to a row. A page holds at
+## most three rows (`paginate`), and the height follows the rows, so a page of fewer panels has no
+## empty rows. A single panel gets a smaller canvas. `extra` adds height, e.g. for x axis labels
+## that stand on end.
+.figLayout <- function(nPanels, paginate = FALSE, extra = 0) {
+  if (nPanels <= 1L) {
+    return(list(ncol = 1L, nrow = 1L, width = 8, height = 5 + extra))
+  }
+  ncol <- min(4L, as.integer(nPanels))
+  nrow <- as.integer(ceiling(nPanels / ncol))
+  if (paginate) {
+    nrow <- min(3L, nrow)
+  }
+  list(ncol = ncol, nrow = nrow, width = max(8, 4 * ncol), height = 2 + 2.75 * nrow + extra)
+}
+
+## Panels of a figure of `d` faceted by the columns `facet`: one per combination of their values.
+.nPanels <- function(d, facet) {
+  facet <- intersect(facet, names(d))
+  if (length(facet)) nrow(unique(d[facet])) else 1L
+}
+
+## The level of the rows of one metric ("patch", "class" or "landscape"); NA if not one level.
+.levelOf <- function(d) {
+  lv <- unique(d$level)
+  if (length(lv) == 1L) as.character(lv) else NA_character_
+}
+
+## The y title of a figure of metric `met`: its plain name and unit (nrvtools::nrv_metric_info()),
+## for a patch-level metric with how a replicate's value comes from its patches.
+.metricTitle <- function(met, level) {
+  lab <- nrvtools::nrv_metric_info(met, level)$label
+  if (identical(level, "patch")) paste0(lab, ", mean over patches") else lab
+}
+
+## Display names of vegetation types: the labels of LandWeb's reporting groups
+## (LandWebUtils::landweb_report_groups(); "Bl Spruce" for Bl_Spruce), else the code with its
+## underscores as spaces.
+.vegTypeLabels <- function(x) {
+  x <- as.character(x)
+  g <- LandWebUtils::landweb_report_groups()
+  lab <- g$label[match(x, g$code)]
+  ifelse(is.na(lab), gsub("_", " ", x, fixed = TRUE), lab)
+}
+
+## "15 replicates", "1 replicate", or "3-15 replicates" when the counts `n` differ.
+.countText <- function(n, what) {
+  n <- n[!is.na(n)]
+  if (length(n) && min(n) < max(n)) {
+    return(paste0(min(n), "-", max(n), " ", what, "s"))
+  }
+  n <- max(c(n, 0))
+  paste(n, if (n == 1) what else paste0(what, "s"))
+}
+
+## The caption of an NRV figure: what its marks show, with the replicate and year counts of the
+## data drawn. `type` is "ribbon" or "boxplot" for an envelope (`df` from summarize_nrv(), whose
+## n_reps count the replicates with a value), "box" or "violin" for a per-class page (`df` of
+## per-replicate values). `cc` holds the figure's current-condition rows, if any; the caption names
+## the current condition when one of them has a value to draw. Wrapped to `width` inches.
+.figCaption <- function(type, df, cc = NULL, perPatch = FALSE, width = 16) {
+  fewer <- " (fewer where a class is absent or the metric undefined)"
+  if (type %in% c("ribbon", "boxplot")) {
+    n <- .countText(df$n_reps, "replicate")
+    varies <- length(unique(df$n_reps)) > 1L
+    parts <- if (type == "ribbon") {
+      c(paste0("Grey band: range of ", n, " at each simulation year", if (varies) fewer), "line: mean")
+    } else {
+      c(
+        paste0("Boxes: median and quartiles of ", n, " at each simulation year", if (varies) fewer),
+        "whiskers: minimum to maximum"
+      )
+    }
+    ccCol <- if (type == "ribbon") "mean" else "median"
+    if (!is.null(cc) && any(is.finite(cc[[ccCol]]))) {
+      parts <- c(parts, "red dashed line: current condition (simulation year 0)")
+    }
+  } else {
+    fin <- df[is.finite(df$value), , drop = FALSE]
+    n <- length(unique(fin$replicate))
+    k <- length(unique(fin$time))
+    nk <- paste(.countText(n, "replicate"), "x", .countText(k, "simulation year"))
+    perBox <- table(paste(fin$poly, fin$class))
+    varies <- any(perBox < n * k)
+    parts <- if (type == "box") {
+      c(
+        paste0("Boxes: median and quartiles of ", nk, if (varies) fewer),
+        "whiskers: to the furthest value within 1.5 x IQR of the box, with values beyond as points"
+      )
+    } else {
+      paste0("Violins: distribution of ", nk, if (varies) fewer)
+    }
+    drawn <- if (!is.null(cc)) cc[cc$poly %in% fin$poly & is.finite(cc$value), , drop = FALSE]
+    if (!is.null(drawn) && nrow(drawn)) {
+      parts <- c(parts, "red points: current condition (simulation year 0)")
+      if (any(!paste(drawn$poly, drawn$class) %in% names(perBox))) {
+        parts <- c(parts, "a red point without a box has no simulated value")
+      }
+    }
+  }
+  txt <- paste0(paste(parts, collapse = "; "), ".")
+  if (perPatch) {
+    txt <- paste(txt, "A replicate's value is the mean over its patches.")
+  }
+  paste(strwrap(txt, width = floor(14 * width)), collapse = "\n")
+}
+
 ## Envelope figure TASKS (see .renderTasks()) for one analysis `kind` (lm/pm/sspm) x reporting
 ## `layer`, from the envelope in `mod`, each with the current-condition envelope (`<refCode>_CC`)
 ## drawn over it as a reference line:
@@ -1347,33 +1551,56 @@ makeAnimation <- function(sim) {
 ## - layout "metric": one figure-set per metric with a panel per subregion (and class), paginated
 ##   across PNGs (`<metric>_<type>_p<pg>.png`, in `subdir` of the layer's figure dir when given).
 ##   A layer with fewer than `minSubregions` subregions gets none.
-## The output dirs are created here (main worker).
-.envelopeFigTasks <- function(sim, kind, p, ylab, layout = c("subregion", "metric"), subdir = NULL,
-                              titlePrefix = "", minSubregions = 1L) {
+## Only units with a value get a panel, so the panels and pages counted here are those drawn. The
+## y title is the metric's plain name and unit unless `ylab` is given; `classLabels` maps the class
+## codes to the names shown; `captions = FALSE` omits the captions, which describe replicate
+## envelopes. The output dirs are created here (main worker).
+.envelopeFigTasks <- function(sim, kind, p, ylab = NULL, layout = c("subregion", "metric"),
+                              subdir = NULL, titlePrefix = "", minSubregions = 1L,
+                              classLabels = NULL, captions = TRUE) {
   layout <- match.arg(layout)
   refCode <- LandWebUtils::refCodeFor(kind, p)
   env <- mod[[refCode]]
   if (is.null(env) || !nrow(env)) {
     return(list())
   }
+  env <- env[is.finite(env$mean) & is.finite(env$min) & is.finite(env$max), , drop = FALSE]
   cc <- mod[[paste0(refCode, "_CC")]]
+  if (!is.null(classLabels)) {
+    env$class <- classLabels(env$class)
+    if (!is.null(cc) && nrow(cc)) {
+      cc$class <- classLabels(cc$class)
+    }
+  }
   safe <- function(s) gsub("[/\\]", "-", s) ## filename-safe metric / subregion
+  task <- function(sub, ccSub, type, facet, title, page, lay, file) {
+    lev <- .levelOf(sub)
+    list(
+      plotter = "envelope", df = sub, cc = ccSub, type = type, facet = facet,
+      ylab = if (is.null(ylab)) .metricTitle(unique(sub$metric), lev) else ylab,
+      xlab = "Simulation year", title = title,
+      caption = if (captions) {
+        .figCaption(type, sub, cc = ccSub, perPatch = identical(lev, "patch"), width = lay$width)
+      },
+      page = page, ncol = lay$ncol, nrow = if (is.null(page)) NULL else lay$nrow,
+      file = file, width = lay$width, height = lay$height
+    )
+  }
   tasks <- list()
 
   if (layout == "subregion") {
     d <- .ppFigDir(sim, kind, p)
+    facet <- c("class", "metric.1")
     for (met in unique(env$metric)) {
       em <- env[env$metric == met, , drop = FALSE]
       for (poly in unique(em$poly)) {
         sub <- em[em$poly == poly, , drop = FALSE]
-        if (!nrow(sub)) next
+        lay <- .figLayout(.nPanels(sub, facet))
         for (type in c("ribbon", "boxplot")) {
-          tasks[[length(tasks) + 1L]] <- list(
-            plotter = "envelope", df = sub, cc = .ccFor(cc, met, poly), type = type,
-            facet = c("class", "metric.1"), ylab = ylab, title = paste0(poly, " — ", met),
-            page = NULL,
-            file = file.path(d, paste0(safe(poly), " ", safe(met), "_", type, ".png")),
-            width = 16, height = 10
+          tasks[[length(tasks) + 1L]] <- task(
+            sub, .ccFor(cc, met, poly), type, facet,
+            title = paste0(poly, " — ", met), page = NULL, lay = lay,
+            file = file.path(d, paste0(safe(poly), " ", safe(met), "_", type, ".png"))
           )
         }
       }
@@ -1388,16 +1615,15 @@ makeAnimation <- function(sim) {
   facet <- c("poly", "class", "metric.1")
   for (met in unique(env$metric)) {
     sub <- env[env$metric == met, , drop = FALSE]
-    if (!nrow(sub)) next
-    nPages <- .nPages(nrow(unique(sub[intersect(facet, names(sub))]))) ## one panel per combination
+    nPanels <- .nPanels(sub, facet)
+    lay <- .figLayout(nPanels, paginate = TRUE)
+    nPages <- .nPages(nPanels)
     for (type in c("ribbon", "boxplot")) {
       for (pg in seq_len(nPages)) {
-        tasks[[length(tasks) + 1L]] <- list(
-          plotter = "envelope", df = sub, cc = .ccFor(cc, met), type = type,
-          facet = facet, ylab = ylab, title = .pageTitle(paste0(titlePrefix, met), pg, nPages),
-          page = pg,
-          file = file.path(d, paste0(safe(met), "_", type, "_p", pg, ".png")),
-          width = 16, height = 10
+        tasks[[length(tasks) + 1L]] <- task(
+          sub, .ccFor(cc, met), type, facet,
+          title = .pageTitle(paste0(titlePrefix, met), pg, nPages), page = pg, lay = lay,
+          file = file.path(d, paste0(safe(met), "_", type, "_p", pg, ".png"))
         )
       }
     }
@@ -1410,9 +1636,16 @@ makeAnimation <- function(sim) {
 ## (`<metric>_<box|violin>_p<pg>.png` in `subdir`), with the current-condition values as red
 ## points. The values are those of each replicate and summary year, read from the raw parquet
 ## aggregates (nrvtools::nrv_replicate_values(), which averages a patch-level metric over each
-## replicate's patches), so a box spans the variation across replicates and time.
-.byClassFigTasks <- function(sim, kind, p, xlab = "class", subdir = "per-metric", titlePrefix = "") {
+## replicate's patches), so a box spans the variation across replicates and time. A layer this run
+## did not summarise gets none: what is on disk may be another run's. Patch area has no pages of
+## its own: a replicate's mean patch area is the class's mean patch area, area_mn. Only subregions
+## with a value get a panel, so the pages counted here are those drawn.
+.byClassFigTasks <- function(sim, kind, p, xlab = "class", subdir = "per-metric", titlePrefix = "",
+                             classLabels = NULL) {
   refCode <- LandWebUtils::refCodeFor(kind, p)
+  if (is.null(mod[[refCode]]) || !nrow(mod[[refCode]])) {
+    return(list())
+  }
   reps <- nrvtools::nrv_replicate_values(.nrvAggRoot(sim, refCode))
   if (!nrow(reps)) {
     return(list())
@@ -1424,21 +1657,35 @@ makeAnimation <- function(sim) {
     reps <- nrvtools::label_vegtype_classes(reps, vtmRAT)
     cc <- nrvtools::label_vegtype_classes(cc, vtmRAT)
   }
+  if (!is.null(classLabels)) {
+    reps$class <- classLabels(reps$class)
+    if (nrow(cc)) {
+      cc$class <- classLabels(cc$class)
+    }
+  }
   d <- .ppFigDir(sim, kind, p, subdir)
   safe <- function(s) gsub("[/\\]", "-", s) ## filename-safe metric
   tasks <- list()
   for (met in unique(reps$metric)) {
     sub <- reps[reps$metric == met, , drop = FALSE]
-    perPatch <- "level" %in% names(sub) && all(sub$level == "patch", na.rm = TRUE)
-    ylab <- if (perPatch) paste(met, "(mean over patches)") else met
-    nPages <- .nPages(length(unique(sub$poly)))
+    lev <- .levelOf(sub)
+    if (met == "area" && identical(lev, "patch") && "area_mn" %in% reps$metric) next
+    sub <- sub[sub$poly %in% sub$poly[is.finite(sub$value)], , drop = FALSE]
+    if (!nrow(sub)) next
+    nPanels <- length(unique(sub$poly))
+    lay <- .figLayout(nPanels, paginate = TRUE, extra = 0.5)
+    nPages <- .nPages(nPanels)
+    ccMet <- .ccFor(cc, met)
     for (type in c("box", "violin")) {
       for (pg in seq_len(nPages)) {
         tasks[[length(tasks) + 1L]] <- list(
-          plotter = "byclass", df = sub, cc = .ccFor(cc, met), type = type, page = pg,
-          xlab = xlab, ylab = ylab, title = .pageTitle(paste0(titlePrefix, met), pg, nPages),
+          plotter = "byclass", df = sub, cc = ccMet, type = type, page = pg,
+          ncol = lay$ncol, nrow = lay$nrow, xlab = xlab, ylab = .metricTitle(met, lev),
+          title = .pageTitle(paste0(titlePrefix, met), pg, nPages),
+          caption = .figCaption(type, sub, cc = ccMet, perPatch = identical(lev, "patch"),
+                                width = lay$width),
           file = file.path(d, paste0(safe(met), "_", type, "_p", pg, ".png")),
-          width = 16, height = 10
+          width = lay$width, height = lay$height
         )
       }
     }
@@ -1482,7 +1729,8 @@ makeAnimation <- function(sim) {
 ## Tasks carry only plain data (data.frame + strings + path) -- no sim / SpatRaster -- so they
 ## serialize cleanly to workers. multisession (not fork) is used because the crew worker running
 ## this target is a mirai daemon. data.table threads are pinned to 1 per worker to avoid
-## oversubscription. Returns the written file paths.
+## oversubscription. A figure that fails to render warns with its file name, and the others are
+## still rendered. Returns the written file paths.
 .renderTasks <- function(sim, tasks) {
   tasks <- Filter(function(tk) !is.null(tk) && !is.null(tk[["file"]]), tasks)
   if (!length(tasks)) {
@@ -1491,32 +1739,55 @@ makeAnimation <- function(sim) {
 
   render_one <- function(task) {
     data.table::setDTthreads(1L)
-    gg <- switch(
-      task[["plotter"]],
-      envelope = nrvtools::plot_nrv_envelope(
-        task[["df"]], type = task[["type"]], facet = task[["facet"]],
-        ylab = task[["ylab"]], title = task[["title"]], page = task[["page"]], cc = task[["cc"]]
-      ),
-      byclass = nrvtools::plot_by_class(
-        task[["df"]], type = task[["type"]], page = task[["page"]], cc = task[["cc"]],
-        value_col = "value", facet = "poly", scales = "free_y",
-        xlab = task[["xlab"]], ylab = task[["ylab"]], title = task[["title"]]
-      ),
-      leading = nrvtools::plot_leading_boxplot(
-        task[["df"]], cc = task[["cc"]], ageClasses = task[["ageClasses"]],
-        title = task[["title"]], caption = task[["caption"]]
-      ),
-      histogram = nrvtools::plot_largepatch_histogram(
-        task[["df"]], cc = task[["cc"]], ageClasses = task[["ageClasses"]],
-        xlab = task[["xlab"]], title = task[["title"]]
-      ),
-      NULL
+    tryCatch(
+      {
+        gg <- switch(
+          task[["plotter"]],
+          envelope = nrvtools::plot_nrv_envelope(
+            task[["df"]], type = task[["type"]], facet = task[["facet"]],
+            ylab = task[["ylab"]], title = task[["title"]], ncol = task[["ncol"]],
+            nrow = task[["nrow"]], page = task[["page"]], cc = task[["cc"]],
+            xlab = task[["xlab"]], caption = task[["caption"]]
+          ),
+          byclass = nrvtools::plot_by_class(
+            task[["df"]], type = task[["type"]], page = task[["page"]], cc = task[["cc"]],
+            value_col = "value", facet = "poly", ncol = task[["ncol"]], nrow = task[["nrow"]],
+            scales = "free_y", xlab = task[["xlab"]], ylab = task[["ylab"]],
+            title = task[["title"]], caption = task[["caption"]]
+          ),
+          leading = nrvtools::plot_leading_boxplot(
+            task[["df"]], cc = task[["cc"]], ageClasses = task[["ageClasses"]],
+            title = task[["title"]], caption = task[["caption"]]
+          ),
+          histogram = nrvtools::plot_largepatch_histogram(
+            task[["df"]], cc = task[["cc"]], ageClasses = task[["ageClasses"]],
+            xlab = task[["xlab"]], title = task[["title"]]
+          ),
+          NULL
+        )
+        if (!is.null(gg) && task[["plotter"]] %in% c("envelope", "byclass")) {
+          ## one strip size on every envelope and per-class figure; captions read from the left
+          gg <- gg +
+            ggplot2::theme(
+              strip.text = ggplot2::element_text(size = 11),
+              strip.text.x = ggplot2::element_text(size = 11),
+              plot.caption = ggplot2::element_text(hjust = 0),
+              plot.caption.position = "plot"
+            )
+        }
+        if (is.null(gg)) {
+          NA_character_
+        } else {
+          ggplot2::ggsave(task[["file"]], gg, width = task[["width"]], height = task[["height"]])
+          task[["file"]]
+        }
+      },
+      error = function(e) {
+        warning("NRV_summary: could not render ", task[["file"]], ": ", conditionMessage(e),
+                call. = FALSE)
+        NA_character_
+      }
     )
-    if (is.null(gg)) {
-      return(NA_character_)
-    }
-    ggplot2::ggsave(task[["file"]], gg, width = task[["width"]], height = task[["height"]])
-    task[["file"]]
   }
   ## Detach render_one from this frame: a closure carries its enclosing environment, so left as-is
   ## `future` would serialize the entire (multi-hundred-MB) `tasks` list *with the function* to every
@@ -1562,13 +1833,13 @@ plotFun <- function(sim) {
   events <- tolower(P(sim)$postprocessEvents)
   tasks <- list()
 
+  ## y titles name each metric and its unit; vegetation types are shown by their display names
   if ("lm" %in% events) {
-    ylab <- "landscape metric value"
     for (p in mod$rptPolyNames) {
       tasks <- c(
         tasks,
-        .envelopeFigTasks(sim, "lm", p, ylab),
-        .envelopeFigTasks(sim, "lm", p, ylab, layout = "metric", subdir = "per-metric",
+        .envelopeFigTasks(sim, "lm", p),
+        .envelopeFigTasks(sim, "lm", p, layout = "metric", subdir = "per-metric",
                           titlePrefix = paste0(p, " — "), minSubregions = 2L)
       )
     }
@@ -1577,8 +1848,9 @@ plotFun <- function(sim) {
     for (p in mod$rptPolyNames) {
       tasks <- c(
         tasks,
-        .envelopeFigTasks(sim, "pm", p, ylab = "patch metric value"),
-        .byClassFigTasks(sim, "pm", p, xlab = "vegetation type", titlePrefix = paste0(p, " — "))
+        .envelopeFigTasks(sim, "pm", p, classLabels = .vegTypeLabels),
+        .byClassFigTasks(sim, "pm", p, xlab = "Vegetation type",
+                         titlePrefix = paste0(p, " — "), classLabels = .vegTypeLabels)
       )
     }
   }
@@ -1588,9 +1860,12 @@ plotFun <- function(sim) {
     }
   }
   if ("bc" %in% events) {
+    ## the seral envelopes pool every patch of every replicate (SeralTable sums them), which the
+    ## replicate captions would misdescribe
     for (p in mod$rptPolyNames) {
       tasks <- c(tasks, .envelopeFigTasks(sim, "sspm", p, ylab = "seral patch area (ha)",
-                                          layout = "metric", titlePrefix = saPrefix))
+                                          layout = "metric", titlePrefix = saPrefix,
+                                          captions = FALSE))
     }
   }
 
