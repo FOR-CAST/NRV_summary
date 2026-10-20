@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9030"),
+  version = list(NRV_summary = "2.0.0.9031"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -32,7 +32,10 @@ defineModule(sim, list(
     ## names (the tenure layer holds both "ANC" and "DawsonCreek_TSA") recombined into the
     ## cartesian product of tokens -- 45 fabricated tenures in place of 11, 6 dropped. Wrong
     ## but non-blank labels, and the run completes, so nothing catches it downstream.
-    "FOR-CAST/nrvtools (>= 0.2.11)",
+    ## 0.3.4.9000, not 0.2.11: the figures draw the current condition over the NRV
+    ## (plot_nrv_envelope(cc =), plot_by_class(cc =)) and the per-class pages read
+    ## nrv_replicate_values().
+    "FOR-CAST/nrvtools (>= 0.3.4.9000)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
     "PredictiveEcology/SpaDES.core@development (>= 3.0.3.9000)"
   ),
@@ -1312,6 +1315,137 @@ makeAnimation <- function(sim) {
   tasks
 }
 
+## Current-condition rows of one metric (and subregion) from a `<refCode>_CC` table, drawn over that
+## metric's figures as the reference. NULL when there are none.
+.ccFor <- function(cc, met, poly = NULL) {
+  if (is.null(cc) || !nrow(cc)) {
+    return(NULL)
+  }
+  keep <- cc$metric == met
+  if (!is.null(poly)) {
+    keep <- keep & cc$poly == poly
+  }
+  cc <- cc[which(keep), , drop = FALSE]
+  if (nrow(cc)) cc else NULL
+}
+
+## Pages that nrvtools' paginated figures (4 x 3 panels per page) take for `nPanels` panels.
+.nPages <- function(nPanels, perPage = 12L) {
+  max(1L, as.integer(ceiling(nPanels / perPage)))
+}
+
+.pageTitle <- function(title, page, nPages) {
+  if (nPages > 1L) paste0(title, " (page ", page, " of ", nPages, ")") else title
+}
+
+## Envelope figure TASKS (see .renderTasks()) for one analysis `kind` (lm/pm/sspm) x reporting
+## `layer`, from the envelope in `mod`, each with the current-condition envelope (`<refCode>_CC`)
+## drawn over it as a reference line:
+## - layout "subregion": one figure per (metric x subregion), the subregion in the filename and the
+##   title (the study area is in the output path); class-resolved metrics (pm) facet by class, and
+##   landscape metrics (lm), which have no class, are a single panel.
+## - layout "metric": one figure-set per metric with a panel per subregion (and class), paginated
+##   across PNGs (`<metric>_<type>_p<pg>.png`, in `subdir` of the layer's figure dir when given).
+##   A layer with fewer than `minSubregions` subregions gets none.
+## The output dirs are created here (main worker).
+.envelopeFigTasks <- function(sim, kind, p, ylab, layout = c("subregion", "metric"), subdir = NULL,
+                              titlePrefix = "", minSubregions = 1L) {
+  layout <- match.arg(layout)
+  refCode <- LandWebUtils::refCodeFor(kind, p)
+  env <- mod[[refCode]]
+  if (is.null(env) || !nrow(env)) {
+    return(list())
+  }
+  cc <- mod[[paste0(refCode, "_CC")]]
+  safe <- function(s) gsub("[/\\]", "-", s) ## filename-safe metric / subregion
+  tasks <- list()
+
+  if (layout == "subregion") {
+    d <- .ppFigDir(sim, kind, p)
+    for (met in unique(env$metric)) {
+      em <- env[env$metric == met, , drop = FALSE]
+      for (poly in unique(em$poly)) {
+        sub <- em[em$poly == poly, , drop = FALSE]
+        if (!nrow(sub)) next
+        for (type in c("ribbon", "boxplot")) {
+          tasks[[length(tasks) + 1L]] <- list(
+            plotter = "envelope", df = sub, cc = .ccFor(cc, met, poly), type = type,
+            facet = c("class", "metric.1"), ylab = ylab, title = paste0(poly, " — ", met),
+            page = NULL,
+            file = file.path(d, paste0(safe(poly), " ", safe(met), "_", type, ".png")),
+            width = 16, height = 10
+          )
+        }
+      }
+    }
+    return(tasks)
+  }
+
+  if (length(unique(env$poly)) < minSubregions) {
+    return(list())
+  }
+  d <- if (is.null(subdir)) .ppFigDir(sim, kind, p) else .ppFigDir(sim, kind, p, subdir)
+  facet <- c("poly", "class", "metric.1")
+  for (met in unique(env$metric)) {
+    sub <- env[env$metric == met, , drop = FALSE]
+    if (!nrow(sub)) next
+    nPages <- .nPages(nrow(unique(sub[intersect(facet, names(sub))]))) ## one panel per combination
+    for (type in c("ribbon", "boxplot")) {
+      for (pg in seq_len(nPages)) {
+        tasks[[length(tasks) + 1L]] <- list(
+          plotter = "envelope", df = sub, cc = .ccFor(cc, met), type = type,
+          facet = facet, ylab = ylab, title = .pageTitle(paste0(titlePrefix, met), pg, nPages),
+          page = pg,
+          file = file.path(d, paste0(safe(met), "_", type, "_p", pg, ".png")),
+          width = 16, height = 10
+        )
+      }
+    }
+  }
+  tasks
+}
+
+## Per-class distribution figure TASKS for one analysis `kind` (pm) x reporting `layer`: for each
+## metric, box and violin plots of its values for each class, one panel per subregion, paginated
+## (`<metric>_<box|violin>_p<pg>.png` in `subdir`), with the current-condition values as red
+## points. The values are those of each replicate and summary year, read from the raw parquet
+## aggregates (nrvtools::nrv_replicate_values(), which averages a patch-level metric over each
+## replicate's patches), so a box spans the variation across replicates and time.
+.byClassFigTasks <- function(sim, kind, p, xlab = "class", subdir = "per-metric", titlePrefix = "") {
+  refCode <- LandWebUtils::refCodeFor(kind, p)
+  reps <- nrvtools::nrv_replicate_values(.nrvAggRoot(sim, refCode))
+  if (!nrow(reps)) {
+    return(list())
+  }
+  cc <- nrvtools::nrv_replicate_values(.nrvAggRoot(sim, paste0(refCode, "_CC")))
+  ## integer class codes -> labels, as for the envelopes (a no-op once the parquet stores labels)
+  if (!is.null(mod$fvtm0) && file.exists(mod$fvtm0)) {
+    vtmRAT <- terra::rast(mod$fvtm0)
+    reps <- nrvtools::label_vegtype_classes(reps, vtmRAT)
+    cc <- nrvtools::label_vegtype_classes(cc, vtmRAT)
+  }
+  d <- .ppFigDir(sim, kind, p, subdir)
+  safe <- function(s) gsub("[/\\]", "-", s) ## filename-safe metric
+  tasks <- list()
+  for (met in unique(reps$metric)) {
+    sub <- reps[reps$metric == met, , drop = FALSE]
+    perPatch <- "level" %in% names(sub) && all(sub$level == "patch", na.rm = TRUE)
+    ylab <- if (perPatch) paste(met, "(mean over patches)") else met
+    nPages <- .nPages(length(unique(sub$poly)))
+    for (type in c("box", "violin")) {
+      for (pg in seq_len(nPages)) {
+        tasks[[length(tasks) + 1L]] <- list(
+          plotter = "byclass", df = sub, cc = .ccFor(cc, met), type = type, page = pg,
+          xlab = xlab, ylab = ylab, title = .pageTitle(paste0(titlePrefix, met), pg, nPages),
+          file = file.path(d, paste0(safe(met), "_", type, "_p", pg, ".png")),
+          width = 16, height = 10
+        )
+      }
+    }
+  }
+  tasks
+}
+
 ## Number of local worker processes for parallel plot rendering: RAM-aware (optimalClusterNum) but
 ## hard-capped by the `plotWorkers` parameter, so a shared node is not swamped. 1 -> render inline.
 ## Set the current future plan's `workers` to `nWorkers`, keeping its backend; returns the previous
@@ -1361,7 +1495,12 @@ makeAnimation <- function(sim) {
       task[["plotter"]],
       envelope = nrvtools::plot_nrv_envelope(
         task[["df"]], type = task[["type"]], facet = task[["facet"]],
-        ylab = task[["ylab"]], title = task[["title"]], page = task[["page"]]
+        ylab = task[["ylab"]], title = task[["title"]], page = task[["page"]], cc = task[["cc"]]
+      ),
+      byclass = nrvtools::plot_by_class(
+        task[["df"]], type = task[["type"]], page = task[["page"]], cc = task[["cc"]],
+        value_col = "value", facet = "poly", scales = "free_y",
+        xlab = task[["xlab"]], ylab = task[["ylab"]], title = task[["title"]]
       ),
       leading = nrvtools::plot_leading_boxplot(
         task[["df"]], cc = task[["cc"]], ageClasses = task[["ageClasses"]],
@@ -1411,86 +1550,36 @@ makeAnimation <- function(sim) {
 ### plotting
 plotFun <- function(sim) {
   ## Build a flat list of self-contained render tasks across all enabled kinds, then render them in
-  ## parallel via .renderTasks(). Envelope figures (lm/pm/sspm) -> figures/<kind>/<layer>/...; the
-  ## LandWeb summaries (lw) are per-species boxplots / histograms -> figures/{boxplots,histograms}/...
+  ## parallel via .renderTasks(). Envelope figures (lm/pm/sspm) -> figures/<kind>/<layer>/..., each
+  ## with the current condition drawn over it; lm and pm add pages comparing a layer's subregions
+  ## metric by metric -> figures/<kind>/<layer>/per-metric/... (lm: envelopes; pm: per-class box and
+  ## violin plots). The LandWeb summaries (lw) are per-species boxplots / histograms ->
+  ## figures/{boxplots,histograms}/...
   saName <- P(sim)$.studyAreaName
   if (is.null(saName) || is.na(saName)) saName <- ""
   saPrefix <- if (nzchar(saName)) paste0(saName, " — ") else ""
-  safe <- function(s) gsub("[/\\]", "-", s) ## filename-safe metric / subregion
-
-  ## build envelope render tasks for one kind x layer (see .renderTasks()).
-  envTasks <- function(kind, p, ylab, perSubregion = FALSE) {
-    env <- mod[[LandWebUtils::refCodeFor(kind, p)]]
-    if (is.null(env) || !nrow(env)) {
-      return(list())
-    }
-    d <- .ppFigDir(sim, kind, p) ## create the output dir on the main worker
-    tasks <- list()
-
-    if (perSubregion) {
-      ## One plot per (metric x reporting sub-polygon); the sub-polygon name (e.g. the individual
-      ## FMA) is in the filename AND the title. Class-resolved metrics (pm) facet by species so each
-      ## sub-polygon is its own figure rather than many crammed/paginated together; landscape metrics
-      ## (lm) have no class, so each is a single-panel envelope for that sub-polygon. Title carries
-      ## the sub-polygon + metric name (the study area is in the output path, not repeated here).
-      for (met in unique(env$metric)) {
-        em <- env[env$metric == met, , drop = FALSE]
-        for (poly in unique(em$poly)) {
-          sub <- em[em$poly == poly, , drop = FALSE]
-          if (!nrow(sub)) next
-          ttl <- paste0(poly, " — ", met)
-          for (type in c("ribbon", "boxplot")) {
-            tasks[[length(tasks) + 1L]] <- list(
-              plotter = "envelope", df = sub, type = type,
-              facet = c("class", "metric.1"), ylab = ylab, title = ttl, page = NULL,
-              file = file.path(d, paste0(safe(poly), " ", safe(met), "_", type, ".png")),
-              width = 16, height = 10
-            )
-          }
-        }
-      }
-      return(tasks)
-    }
-
-    ## One figure-set per metric: facet the subregion panels and paginate them across pages, so a
-    ## large panel set becomes several PNGs (<metric>_<type>_p<pg>.png). Used for the compare-
-    ## subregions layout (sspm). Page count is resolved once here (main worker); one task per page.
-    for (met in unique(env$metric)) {
-      sub <- env[env$metric == met, , drop = FALSE]
-      if (!nrow(sub)) next
-      ttl <- paste0(saPrefix, met)
-      for (type in c("ribbon", "boxplot")) {
-        gg1 <- plot_nrv_envelope(
-          sub, type = type, facet = c("poly", "class", "metric.1"),
-          ylab = ylab, title = ttl, page = 1
-        )
-        if (is.null(gg1)) next
-        nPages <- tryCatch(ggforce::n_pages(gg1), error = function(e) 1L)
-        if (is.null(nPages) || is.na(nPages)) nPages <- 1L
-        for (pg in seq_len(nPages)) {
-          tasks[[length(tasks) + 1L]] <- list(
-            plotter = "envelope", df = sub, type = type,
-            facet = c("poly", "class", "metric.1"), ylab = ylab, title = ttl, page = pg,
-            file = file.path(d, paste0(safe(met), "_", type, "_p", pg, ".png")),
-            width = 16, height = 10
-          )
-        }
-      }
-    }
-    tasks
-  }
 
   events <- tolower(P(sim)$postprocessEvents)
   tasks <- list()
 
   if ("lm" %in% events) {
+    ylab <- "landscape metric value"
     for (p in mod$rptPolyNames) {
-      tasks <- c(tasks, envTasks("lm", p, ylab = "landscape metric value", perSubregion = TRUE))
+      tasks <- c(
+        tasks,
+        .envelopeFigTasks(sim, "lm", p, ylab),
+        .envelopeFigTasks(sim, "lm", p, ylab, layout = "metric", subdir = "per-metric",
+                          titlePrefix = paste0(p, " — "), minSubregions = 2L)
+      )
     }
   }
   if ("pm" %in% events) {
     for (p in mod$rptPolyNames) {
-      tasks <- c(tasks, envTasks("pm", p, ylab = "patch metric value", perSubregion = TRUE))
+      tasks <- c(
+        tasks,
+        .envelopeFigTasks(sim, "pm", p, ylab = "patch metric value"),
+        .byClassFigTasks(sim, "pm", p, xlab = "vegetation type", titlePrefix = paste0(p, " — "))
+      )
     }
   }
   if ("lw" %in% events) {
@@ -1500,7 +1589,8 @@ plotFun <- function(sim) {
   }
   if ("bc" %in% events) {
     for (p in mod$rptPolyNames) {
-      tasks <- c(tasks, envTasks("sspm", p, ylab = "seral patch area (ha)"))
+      tasks <- c(tasks, .envelopeFigTasks(sim, "sspm", p, ylab = "seral patch area (ha)",
+                                          layout = "metric", titlePrefix = saPrefix))
     }
   }
 

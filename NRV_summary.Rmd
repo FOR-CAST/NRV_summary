@@ -98,8 +98,23 @@ raising ImageMagick's `policy.xml` memory/disk limits (see
 
 ### Plotting
 
-`plotFun` writes the NRV envelope figures (ribbon + box-and-whisker) per reporting
-polygon; the `"am"` event additionally writes the stand-age animation GIF (see *Events*).
+In `mode = "multi"`, `plotFun` writes these figures for each reporting-polygon layer, under
+`postprocess/figures/`:
+
+- `lm/<layer>/` and `pm/<layer>/`: the NRV envelope of each metric in each subregion, as a
+  ribbon (the across-replicate mean and min--max range over the summary period) and as a
+  box-and-whisker per summary year, with the current condition (the year-0 snapshot) as a red
+  dashed line. Patch metrics have a panel per vegetation type.
+- `lm/<layer>/per-metric/`: the envelopes of each landscape metric with a panel per subregion,
+  12 panels to a page.
+- `pm/<layer>/per-metric/`: box and violin plots of each patch metric for each vegetation type,
+  a panel per subregion, from the values of each replicate and summary year (a patch-level
+  metric averaged over each replicate's patches), with the current condition as a red point.
+- `boxplots/<layer>/` and `histograms/<layer>/`: the LandWeb summaries (`lw`), with the current
+  condition in red.
+- `sspm/<layer>/`: the BC seral patch metrics (`bc`), one paginated envelope figure-set per metric.
+
+The `"am"` event additionally writes the stand-age animation GIF (see *Events*).
 
 ### Saving
 
