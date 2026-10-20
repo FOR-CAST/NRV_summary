@@ -29,6 +29,7 @@ test_that("inputs are the expected names and classes", {
       "sppColorVect"         = "character",
       "sppColorVectReporting" = "character",
       "sppEquiv"             = "data.table",
+      "standAgeMap"          = "SpatRaster",
       "studyAreaReporting"   = "SpatVector"
 )
   )
@@ -49,7 +50,7 @@ test_that("parameters are the expected names", {
     sort(md$parameters$paramName),
     c(
       ".plotInitialTime", ".plotInterval", ".plots", ".seed", ".studyAreaName",
-      ".useCache", "ageClassCutOffs", "ageClasses", "ageClassMaxAge", "mixedType",
+      ".useCache", "ageClassCutOffs", "ageClasses", "ageClassMaxAge", "ccStandAgeSource", "mixedType",
       "mode", "patchDirections", "plotWorkers", "postprocessEvents", "reps",
       "reuseAggregates", "sieveThresh", "simTimes", "sppEquivCol", "sppEquivColReporting", "summaryInterval",
       "summaryPeriod", "timeSeriesTimes", "vegLeadingProportion"

@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9033"),
+  version = list(NRV_summary = "2.0.0.9034"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -49,6 +49,15 @@ defineModule(sim, list(
                     "defines the age boundaries between age classes"),
     defineParameter("ageClassMaxAge", "integer", 400L, NA, NA,
                     "maximum possible age"),
+    defineParameter("ccStandAgeSource", "character", "standAgeMap", NA, NA,
+                    paste("(mode = 'single') where the current condition's (year 0's) stand-age map",
+                          "comes from: 'standAgeMap', the age layer `sim$standAgeMap` (e.g.",
+                          "Biomass_borealDataPrep's), rounded, on the pixels with cohorts; or",
+                          "'cohortData', the biomass-weighted age of the year-0 cohorts",
+                          "(`LandR::standAgeMapGenerator()`), which keeps the binning of the cohort ages",
+                          "and floors each pixel's age to the decade. 'standAgeMap' warns and uses the",
+                          "cohorts when `sim$standAgeMap` is absent or not on a grid aligned with",
+                          "`pixelGroupMap`. The simulated years always come from the cohorts.")),
     defineParameter("patchDirections", "integer", 4L, 4L, 8L,
                     paste("patch connectivity for the 'lw' (LandWeb summary) large-patch analysis,",
                           "passed to `nrvtools::largePatchCounts()` (via `landscapemetrics::get_patches`):",
@@ -156,6 +165,11 @@ defineModule(sim, list(
                               "reporting column.")),
     expectsInput("sppEquiv", "data.table", NA, NA, NA,
                  desc = "table of species equivalencies. See `LandR::sppEquivalencies_CA`."),
+    expectsInput("standAgeMap", "SpatRaster",
+                 desc = paste("(mode = 'single') stand age of the current forest (e.g.",
+                              "Biomass_borealDataPrep's), on the grid of `pixelGroupMap` or on a",
+                              "larger grid aligned with it. The year-0 stand-age map, with",
+                              "`ccStandAgeSource = 'standAgeMap'`.")),
     expectsInput("studyAreaReporting", "SpatVector",
                  desc = "Required in single mode.")
   ),
@@ -187,6 +201,9 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
           !is.null(sim$sppEquiv),
           !is.null(sim$studyAreaReporting)
         )
+        if (!P(sim)$ccStandAgeSource %in% c("standAgeMap", "cohortData")) {
+          stop("ccStandAgeSource must be 'standAgeMap' or 'cohortData'.", call. = FALSE)
+        }
 
         ## Year 0 is the current condition that mode = "multi" reports today's values from, so it
         ## is taken before any time-0 dynamics: after every module's init (SpaDES.core schedules
@@ -260,8 +277,12 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         sim$pixelGroupMap,
         weight = "biomass",
         doAssertion = getOption("LandR.assertions", TRUE)
-      ) |>
-        terra::mask(sim$studyAreaReporting)
+      )
+      ## the current condition: today's ages, not the cohorts' binned ages (see .ccStandAgeMap())
+      if (time(sim) == start(sim) && P(sim)$ccStandAgeSource == "standAgeMap") {
+        mod$standAgeMap <- .ccStandAgeMap(sim$standAgeMap, mod$standAgeMap)
+      }
+      mod$standAgeMap <- terra::mask(mod$standAgeMap, sim$studyAreaReporting)
 
       if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2]) {
         ## fmt: skip
@@ -547,6 +568,44 @@ InitMulti <- function(sim) {
   terra::mask(r, urbanMask, filename = outFile, overwrite = TRUE,
               wopt = list(datatype = terra::datatype(r)))
   outFile
+}
+
+## The current condition's (year 0's) stand-age map: the age layer `standAgeMap` (e.g.
+## Biomass_borealDataPrep's, on its larger grid) cropped to the grid of `cohortAge`, the map
+## LandR::standAgeMapGenerator() makes from the year-0 cohorts, on the cells where that map has a
+## value, rounded half up as LandR::asInteger() rounds the ages the cohorts are made from. The cohort
+## ages are binned (Biomass_borealDataPrep rounds those above `minAgeForGrouping` to the nearest
+## `pixelGroupAgeClass`; on WesternAlbertaUpland, above 70 to the nearest 20) and the generator floors
+## each pixel's age to the decade, which put 30.4% of that forest at 120 years or older, against
+## 22.1% by the age layer. A cell with cohorts but no value in the age layer (Biomass_borealDataPrep
+## imputes those ages) keeps its cohort age. Without an age layer on an aligned grid, warns and
+## returns `cohortAge`.
+.ccStandAgeMap <- function(standAgeMap, cohortAge) {
+  useCohorts <- function(why) {
+    warning("NRV_summary: `standAgeMap` ", why, "; the current condition's stand ages are those ",
+            "of the year-0 cohorts, which are binned. Set `ccStandAgeSource = \"cohortData\"` to ",
+            "use them without this warning.", call. = FALSE)
+    cohortAge
+  }
+  if (is.null(standAgeMap)) {
+    return(useCohorts("is absent"))
+  }
+  if (!inherits(standAgeMap, "SpatRaster")) {
+    standAgeMap <- terra::rast(standAgeMap)
+  }
+  sam <- tryCatch(terra::crop(standAgeMap, cohortAge), error = function(e) NULL)
+  if (is.null(sam) || !isTRUE(terra::compareGeom(sam, cohortAge, stopOnError = FALSE))) {
+    return(useCohorts("is not on a grid aligned with `pixelGroupMap`"))
+  }
+  sam <- floor(sam + 0.5)
+  nFilled <- terra::global(is.na(sam) & !is.na(cohortAge), "sum", na.rm = TRUE)[[1L]]
+  if (nFilled > 0) {
+    message("NRV_summary: ", nFilled, " pixels with cohorts have no value in `standAgeMap`; ",
+            "their current stand age is that of their cohorts.")
+  }
+  sam <- terra::mask(terra::cover(sam, cohortAge), cohortAge)
+  names(sam) <- names(cohortAge)
+  sam
 }
 
 ## Colours for the reporting groups and "Mixed", named exactly as LandR::vegTypeMapGenerator()
