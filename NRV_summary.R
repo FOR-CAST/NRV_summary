@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9032"),
+  version = list(NRV_summary = "2.0.0.9033"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -38,7 +38,7 @@ defineModule(sim, list(
     ## 0.3.4.9001, not 0.3.4.9000: summarize_nrv() takes the per-replicate values that the patch
     ## metric envelopes are built from and returns exact quartiles; nrv_metric_info() names the
     ## axes; the plot functions take captions.
-    "FOR-CAST/nrvtools (>= 0.3.4.9001)",
+    "FOR-CAST/nrvtools (>= 0.3.4.9002)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
     "PredictiveEcology/SpaDES.core@development (>= 3.0.3.9000)"
   ),
@@ -746,6 +746,29 @@ InitMulti <- function(sim) {
 ## from the other files on every call, so a reused dataset is filled the same way. Returns the
 ## files written.
 .fillClassAreaZeros <- function(roots, zerosFile = "ca_zeros.parquet") {
+  .fillAbsentZeros(
+    roots,
+    zerosFile,
+    select = function(ds) dplyr::filter(ds, .data$level == "class", .data$metric == "ca"),
+    classCol = "class"
+  )
+}
+
+## The same for the LandWeb summaries (lw): 0 in every lw metric (leading proportion, share of the
+## forest, large-patch count and area) of each vegetation type that a subregion shows but lacks in
+## a replicate-year. The nrvtools producers write rows only for the types present in a map, so a
+## type that leads in 7 of 105 replicate-years had its boxes drawn from those 7 alone. Each metric x
+## age class the dataset holds is filled.
+.fillLeadingZeros <- function(roots, zerosFile = "lw_zeros.parquet") {
+  .fillAbsentZeros(roots, zerosFile, select = identity, classCol = "metric.1",
+                   otherCols = c("level", "metric", "class"))
+}
+
+## Rows of 0 for each class (`classCol`) that a subregion shows -- in its current condition or in
+## any replicate-year -- but lacks in a replicate-year, among the rows that `select()` (an Arrow
+## query) picks from each dataset, for every combination of `otherCols` those rows hold. See
+## .fillClassAreaZeros().
+.fillAbsentZeros <- function(roots, zerosFile, select, classCol, otherCols = character(0)) {
   parts <- lapply(roots, function(root) {
     f <- list.files(root, "\\.parquet$", recursive = TRUE, full.names = TRUE)
     unlink(f[basename(f) == zerosFile])
@@ -758,28 +781,29 @@ InitMulti <- function(sim) {
     list(
       root = root,
       schema = ds$schema,
-      ## every replicate-year of the dataset, whether or not a subregion has a class area in it
+      ## every replicate-year of the dataset, whether or not a subregion has the class in it
       years = as.data.frame(dplyr::collect(dplyr::distinct(ds, !!!rlang::syms(yearCols)))),
-      ca = as.data.frame(dplyr::collect(dplyr::filter(ds, .data$level == "class", .data$metric == "ca")))
+      rows = as.data.frame(dplyr::collect(select(ds)))
     )
   })
   parts <- Filter(Negate(is.null), parts)
-  seen <- unique(do.call(rbind, lapply(parts, function(p) p$ca[c("poly", "class")])))
+  seen <- unique(do.call(rbind, lapply(parts, function(p) p$rows[c("poly", classCol)])))
   if (is.null(seen) || !nrow(seen)) {
     return(invisible(character(0)))
   }
   written <- character(0)
   for (p in parts) {
-    if (!nrow(p$ca)) next ## a dataset without class areas (another funList) gets none
+    if (!nrow(p$rows)) next ## a dataset without such rows (another funList) gets none
     grid <- merge(p$years, seen, by = NULL)
-    keyCols <- c(names(p$years), "poly", "class")
+    if (length(otherCols)) grid <- merge(grid, unique(p$rows[otherCols]), by = NULL)
+    keyCols <- c(names(p$years), "poly", classCol, otherCols)
     key <- function(d) do.call(paste, c(lapply(d[keyCols], as.character), sep = "\r"))
-    miss <- grid[!key(grid) %in% key(p$ca), , drop = FALSE]
+    miss <- grid[!key(grid) %in% key(p$rows), , drop = FALSE]
     if (!nrow(miss)) next
     ## in a fixed order, so a rerun writes the same files: Arrow returns rows in no fixed order
     miss <- miss[do.call(order, c(unname(as.list(miss[keyCols])), method = "radix")), , drop = FALSE]
-    ## zero rows shaped like the dataset's own class-area rows
-    z <- p$ca[rep(1L, nrow(miss)), , drop = FALSE]
+    ## zero rows shaped like the dataset's own rows
+    z <- p$rows[rep(1L, nrow(miss)), , drop = FALSE]
     z[keyCols] <- miss[keyCols]
     z$value[] <- 0
     if ("id" %in% names(z)) z$id[] <- NA
@@ -802,8 +826,8 @@ InitMulti <- function(sim) {
 ## a combined `<base>.csv` plus one `<base>_<metric>.csv` per metric. `kind` (lm/pm/sspm/lw) and the
 ## `_CC` suffix are recovered from `refCode`; the enclosing <kind>/<layer>/ dir supplies the context
 ## the flat filenames used to carry, and it mirrors the figure dir structure. The `lw` (LandWeb
-## summary) envelope is split by analysis -- leadingProp -> csv/boxplots/<layer>/ (the leading
-## boxplot data), the large-patch metrics -> csv/histograms/<layer>/.
+## summary) envelope is split by analysis -- leadingProp and leadingShare -> csv/boxplots/<layer>/
+## (the leading boxplot data), the large-patch metrics -> csv/histograms/<layer>/.
 .writeNrvSummaryCSVs <- function(sim, env, refCode, layer) {
   if (is.null(env) || !nrow(env)) {
     return(invisible(character(0)))
@@ -825,7 +849,7 @@ InitMulti <- function(sim) {
     mod$ppFiles <- c(mod$ppFiles, fs)
   }
   if (kind == "lw") {
-    isLead <- env$metric == "leadingProp"
+    isLead <- env$metric %in% c("leadingProp", "leadingShare")
     writeSet(env[isLead, , drop = FALSE], "boxplots", "leading")
     writeSet(env[!isLead, , drop = FALSE], "histograms", "largePatches")
   } else {
@@ -1069,21 +1093,20 @@ landWebMetrics <- function(sim) {
         )
       }
 
-      ## current conditions: a single (year-0) snapshot, treated as one replicate.
-      mod[[refCodeCC]] <- .buildRepDataset(
-        .nrvAggRoot(sim, refCodeCC),
-        repIDs = "CC",
-        compute_fn = function(repID) lwRaw(fvtm0, ftsf0),
-        id_cols = idCols
-      )
-
-      ## simulation results: one parquet partition per replicate (vtm/tsf vectors align by index).
-      mod[[refCode]] <- .buildRepDataset(
-        .nrvAggRoot(sim, refCode),
+      ## current conditions: a single (year-0) snapshot, treated as one replicate; simulation
+      ## results: one parquet partition per replicate (vtm/tsf vectors align by index). Then 0 in
+      ## each replicate-year for the vegetation types a subregion shows but lacks there.
+      ccRoot <- .nrvAggRoot(sim, refCodeCC)
+      simRoot <- .nrvAggRoot(sim, refCode)
+      .writeRepDataset(ccRoot, repIDs = "CC", compute_fn = function(repID) lwRaw(fvtm0, ftsf0))
+      .writeRepDataset(
+        simRoot,
         repIDs = names(vtmByRep),
-        compute_fn = function(repID) lwRaw(vtmByRep[[repID]], tsfByRep[[repID]]),
-        id_cols = idCols
+        compute_fn = function(repID) lwRaw(vtmByRep[[repID]], tsfByRep[[repID]])
       )
+      .fillLeadingZeros(c(simRoot, ccRoot))
+      mod[[refCodeCC]] <- .summarizeRepDataset(ccRoot, id_cols = idCols)
+      mod[[refCode]] <- .summarizeRepDataset(simRoot, id_cols = idCols)
 
       .writeNrvSummaryCSVs(sim, mod[[refCode]], refCode, p)
       .writeNrvSummaryCSVs(sim, mod[[refCodeCC]], refCodeCC, p)
@@ -1389,6 +1412,12 @@ makeAnimation <- function(sim) {
         )
       }
     }
+
+    ## Shares of the forest: one file per subregion, a box per leading type in each age-class panel
+    tasks <- c(tasks, .leadingShareFigTasks(
+      raw, cc, ageClasses, dBox, saPrefix,
+      areaHa = function(poly) areaHa(poly, "All species")
+    ))
   }
 
   ## Large-patch histograms: one file per (size x subregion x species), four age-class panels
@@ -1410,6 +1439,49 @@ makeAnimation <- function(sim) {
         )
       }
     }
+  }
+  tasks
+}
+
+## The share-of-forest figure TASKS of one reporting layer, one per subregion
+## (`<dir>/<subregion> share of forest.png`): a panel per age class with a box per leading
+## vegetation type of its share of the subregion's forest over the replicates and summary years
+## (nrvtools::plot_leading_share()), and the current condition in red. `raw` and `cc` hold the
+## layer's per-replicate and current-condition lw rows (`cc` may be NULL), and `areaHa(poly)` a
+## subregion's forested area for the caption (NA: none). A subregion where no type leads in any
+## replicate-year gets no figure.
+.leadingShareFigTasks <- function(raw, cc, ageClasses, dir, titlePrefix, areaHa) {
+  share <- raw[raw$metric == "leadingShare", , drop = FALSE]
+  safe <- function(s) gsub("[/\\]", "-", s) ## filename-safe subregion
+  tasks <- list()
+  for (poly in unique(share$poly)) {
+    d <- share[share$poly == poly & share$metric.1 != "All species", , drop = FALSE]
+    if (!nrow(d) || all(d$value == 0, na.rm = TRUE)) next
+    ccP <- if (!is.null(cc)) cc[cc$poly == poly & cc$metric == "leadingShare", , drop = FALSE]
+    if (!is.null(ccP) && !nrow(ccP)) ccP <- NULL
+    nk <- paste(.countText(length(unique(d$replicate)), "replicate"), "x",
+                .countText(length(unique(d$time)), "simulation year"))
+    cap <- paste0(
+      "Boxes: median and quartiles of ", nk, ", counting a replicate-year in which a type leads ",
+      "nowhere as 0; whiskers: to the furthest value within 1.5 x IQR of the box, with values ",
+      "beyond as points",
+      if (!is.null(ccP)) "; red points: current condition (simulation year 0)",
+      "."
+    )
+    cap <- paste(strwrap(cap, width = 150), collapse = "\n")
+    a <- areaHa(poly)
+    if (!is.na(a)) {
+      cap <- paste0(cap, "\nTotal forested area in ", poly, ": ",
+                    format(round(a), big.mark = ","), " ha")
+    }
+    sp <- unique(as.character(d$metric.1))
+    tasks[[length(tasks) + 1L]] <- list(
+      plotter = "leadingShare", df = d, cc = ccP, ageClasses = ageClasses,
+      species_labels = stats::setNames(.vegTypeLabels(sp), sp),
+      title = paste0(titlePrefix, poly), caption = cap,
+      file = file.path(dir, paste0(safe(poly), " share of forest.png")),
+      width = 11, height = max(4, 2 + 0.5 * length(sp))
+    )
   }
   tasks
 }
@@ -1760,6 +1832,11 @@ makeAnimation <- function(sim) {
           leading = nrvtools::plot_leading_boxplot(
             task[["df"]], cc = task[["cc"]], ageClasses = task[["ageClasses"]],
             title = task[["title"]], caption = task[["caption"]]
+          ),
+          leadingShare = nrvtools::plot_leading_share(
+            task[["df"]], cc = task[["cc"]], ageClasses = task[["ageClasses"]],
+            species_labels = task[["species_labels"]], title = task[["title"]],
+            caption = task[["caption"]]
           ),
           histogram = nrvtools::plot_largepatch_histogram(
             task[["df"]], cc = task[["cc"]], ageClasses = task[["ageClasses"]],
