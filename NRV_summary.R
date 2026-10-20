@@ -718,13 +718,13 @@ InitMulti <- function(sim) {
 .summarizeRepDataset <- function(root, id_cols = NULL, perReplicate = FALSE) {
   mod$ppFiles <- c(mod$ppFiles, list.files(root, "\\.parquet$", recursive = TRUE, full.names = TRUE))
   if (!perReplicate) {
-    return(summarize_nrv(root, id_cols = id_cols))
+    return(nrvtools::summarize_nrv(root, id_cols = id_cols))
   }
   v <- nrvtools::nrv_replicate_values(root)
   if (nrow(v)) {
     v <- v[!is.na(v$value), , drop = FALSE]
   }
-  summarize_nrv(v, id_cols = id_cols)
+  nrvtools::summarize_nrv(v, id_cols = id_cols)
 }
 
 ## Build the parquet dataset for one refCode and return the across-replicate envelope.
@@ -776,6 +776,8 @@ InitMulti <- function(sim) {
     key <- function(d) do.call(paste, c(lapply(d[keyCols], as.character), sep = "\r"))
     miss <- grid[!key(grid) %in% key(p$ca), , drop = FALSE]
     if (!nrow(miss)) next
+    ## in a fixed order, so a rerun writes the same files: Arrow returns rows in no fixed order
+    miss <- miss[do.call(order, c(unname(as.list(miss[keyCols])), method = "radix")), , drop = FALSE]
     ## zero rows shaped like the dataset's own class-area rows
     z <- p$ca[rep(1L, nrow(miss)), , drop = FALSE]
     z[keyCols] <- miss[keyCols]

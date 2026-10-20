@@ -47,11 +47,18 @@ test_that("class areas a replicate-year lacks are written as 0 ha", {
   expect_equal(cc$class[cc$metric == "ca"], c("Decid", "Fir", "Pine"))
   expect_equal(cc$value[cc$metric == "ca"], c(0, 10, 0))
   expect_setequal(basename(dirname(files)), c("replicate=rep01", "replicate=rep02", "replicate=CC"))
+  ## rows sorted by replicate, year, subregion and class, so a rerun writes the same bytes
+  for (f in files) {
+    z <- as.data.frame(arrow::read_parquet(f))
+    expect_identical(order(z$replicate, z$rep, z$time, z$poly, z$class, method = "radix"), seq_len(nrow(z)))
+  }
 
   ## a second call rebuilds the same zeros, not a second copy
   before <- lapply(files, function(f) as.data.frame(arrow::read_parquet(f)))
+  md5 <- unname(tools::md5sum(files))
   expect_setequal(fillClassAreaZeros(c(simRoot, ccRoot)), files)
   expect_equal(lapply(files, function(f) as.data.frame(arrow::read_parquet(f))), before)
+  expect_identical(unname(tools::md5sum(files)), md5)
   expect_equal(nrow(nrvtools::nrv_replicate_values(simRoot)), nrow(v))
 })
 
