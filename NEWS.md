@@ -2,6 +2,106 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+## Events scheduled once
+
+- In "single" mode `map_generators` and `save_single` were scheduled twice at the same time when the start, the start of the summary period, the end or a `timeSeriesTimes` year coincided (and again by the `summaryInterval` reschedule when it reached one of them). Each is now scheduled once per distinct time, which saves duplicate work and lets reruns reuse the cache.
+
+## Input checks at first use
+
+- Mode 'single' no longer fails in init when `cohortData`, `pixelGroupMap` etc. are not yet made by the vegetation
+  modules' init (cold cache); the objects are checked at the first `map_generators`, `save_single` or `annual_series`
+  event, with an error naming the missing ones.
+## Faster annual row
+
+- The annual event takes the leading species per pixelGroup from `LandR::leadingByPixelGroup()` instead of
+  `LandR::vegTypeGenerator()` plus a join onto every cohort row and `!duplicated()`; the row is identical.
+  Needs the LandR with `leadingByPixelGroup()`.
+
+## Autocorrelation time sets the thinning of the snapshots
+
+- New annual event (`recordAnnualSeries = TRUE`, the default; mode 'single') writes `annualSeries.csv` per rep: the
+  proportion of forest young and old, mean stand age, total biomass and the proportion led by each species, one
+  row per year, no rasters.
+- In mode 'multi' the new `postprocess_autocorr` event fits an exponential decay to each series over the NRV years
+  (phi = mean over reps of the lag-1 autocorrelation, tau = (1 + phi) / (1 - phi), with `ar1Misfit` checking the fit
+  against the empirical ACF at lags 1-50), reports the correlation r at lag `summaryInterval` (pooled, and the lowest
+  and highest rep) and the effective number of independent snapshots n (1 - r) / (1 + r). The recommended thinning
+  interval is the largest tau. Geyer's tau is kept as `tauGeyer` for comparison. Written to
+  `csv/autocorrelation/autocorrelation.csv` and `figures/autocorrelation/`; `autocorrMaxLag` (default 200 years)
+  is the longest lag shown.
+
+## `nrvWindow`: the NRV is the last part of the summary period
+
+- `summaryPeriod` now defaults to the whole run, `c(start(sim), end(sim))` (it was `start + c(700, 1000)`),
+  and is the span summarised and shown in the time-series figures. **Breaking default**: set
+  `summaryPeriod = start(sim) + c(700L, 1000L)` for the old summary years.
+- New parameter `nrvWindow` (default 0.3, above 0 and at most 1): the NRV is the last `nrvWindow` fraction of
+  `summaryPeriod`, so a 1000-year run has the NRV of years 700-1000, as the old default did. The NRV range and
+  `current_condition_overview.png` use only the summary times in it (`.nrvPeriod()`). The LandWeb summaries (leading
+  species, large patches), which pool over summary years, also use only the NRV years.
+- Envelope figures show all of `summaryPeriod` and shade the NRV years ("shaded: NRV years"). The stability
+  check keeps its own `stabilityWindow`, also a fraction of `summaryPeriod`.
+- `.renderTasks()` now passes `.addNrvShading` to the detached figure renderer, as it does `.addCurrentCondition`; envelope figures failed with "could not find function" with `plotWorkers` of 1 and on workers.
+
+## The NRV is the summary period; figures show real scales and full metric names
+
+- The NRV range (min, max and mean of the envelope) uses all times in `summaryPeriod` again, not only the
+  last `stabilityWindow` of it. `stabilityWindow` now only sets the span of the stability check; the
+  "shaded: the stability window, which defines the NRV" shading is removed from the envelope figures.
+- `current_condition_overview.png` is no longer rescaled to 0-1: one facet per metric on its own scale,
+  grey bar from the NRV minimum to maximum, a tick at the NRV mean and a red dot at the current condition.
+- Figure titles, facets and axes show full metric names ("Aggregation index", "Mean patch area",
+  "Median stand age", ...) from one lookup; CSVs and file names keep the codes.
+
+## `timeSeriesTimes` default fits short runs
+
+- `timeSeriesTimes` now defaults to `NA`, resolved at init to `start + 601:650` when the run is that
+  long and to the last 50 years of the run otherwise. The fixed `start + 601:650` default made every run
+  shorter than 650 years stop with "timeSeriesTimes values are outside the range of simulation times".
+  An explicit value outside the run still stops.
+
+## Current condition on the figures; a stability check (multi mode)
+
+- The ribbon and boxplot figures of the landscape and patch metrics now draw the current condition as a
+  dashed red line labelled "current condition", and each landscape-metric layer gets
+  `current_condition_overview.png`: every metric with the NRV range, the NRV mean and the current condition. The overview is saved through `SpaDES.core::Plots()`.
+- New event `postprocess_stability` asks whether the run is long enough: for each landscape metric, each
+  patch metric by class and the area burned per `summaryInterval` block (from burnSummaries'
+  `burnSummaries_fireSizes_allReps.csv`) it tests for a directional trend over the last
+  `stabilityWindow` (default 0.5) of `summaryPeriod`, Mann-Kendall on all reps pooled with the
+  Theil-Sen slope. A series is "still changing" when the trend is significant (`stabilityAlpha`, 0.05)
+  and the fitted change over the window is more than `stabilityMinChange` (0.10) of the series' range
+  within the window.
+  It writes `csv/stability/stability.csv` (metric, class, slope, p, change as % of range, flag), panels
+  of each series with the window shaded and the verdict in the title, a summary figure (both through
+  `Plots()`), and logs "N of M metrics still changing; consider a longer run".
+
+## Multi mode: replicate counts and file locations
+
+- `InitMulti()` takes each file once from `outputsDF`. A file registered twice (the last year is saved
+  by the sim and again by the summary modules) repeated that replicate's row at that time, so
+  `n_reps` in the envelopes was above the number of reps (7 at the last year for 4 reps).
+- The files are sorted. `outputsDF` is in the order the files were saved, which differs between the
+  veg-type and stand-age maps, and the patch metrics pair the two by position (a veg-type map of one
+  year was analysed with the stand-age map of another).
+- The year-0 and flammable rasters are read from the directory the replicate's outputs are in, not
+  `<outputPath>/rep1`, which does not exist when `outputPath` ends in `_all`.
+- Removed the `browser()` call in `postprocess_fd`; the event now says it is not implemented.
+- `.planWithWorkers()` no longer passes `workers` to a sequential plan (it warned "unknown arguments").
+- Requires SpaDES.core >= 3.2.1.9001 (`dirnamesFromSet()`, `resolveSimYears()`, `padYears()`).
+
+## Missing packages in `reqdPkgs` (`2.0.0.9025`)
+
+* `reqdPkgs` now lists `crayon`, `future` and `reproducible`, which the module's code uses.
+
+## `vegLeadingProportion` default from options
+
+- `vegLeadingProportion` now defaults to `LandR::leadingSpeciesProp()` (option
+  `LandR.leadingSpeciesProp`, which takes `LandR.mixedwoodProp`, 0.75, unless set), so the
+  leading-species threshold is set once for every module and LandR function instead of being
+  hard-coded per module. **The default changes from 0.8 to 0.75**, which changes vegetation type
+  maps. Requires LandR >= 1.2.0.9024 (PredictiveEcology/LandR#234).
+
 * **The current condition's stand ages are today's, not the binned ages of the cohorts (`2.0.0.9034`).** In `mode = "single"`, the year-0 `standAgeMap` now comes from the age layer `sim$standAgeMap` (Biomass_borealDataPrep's, cropped to `pixelGroupMap`), on the pixels with cohorts. It came from the year-0 cohorts, whose ages Biomass_borealDataPrep bins (on WesternAlbertaUpland, ages above 70 to the nearest 20 years): there, 30.4% of the forest in the reporting area was 120 years or older by the cohorts, against 22.1% by the age layer. Each age is rounded half up and then floored to the decade, as `LandR::standAgeMapGenerator()` floors the stand ages of every simulated year, so the current condition has the 10-year resolution of the envelopes it is compared with. The flooring leaves the age-class shares unchanged (the class limits are multiples of 10) and lowers the patch ages: on WesternAlbertaUpland, the current condition's patch median age (`sam_mdn`), averaged over the patches of the reporting area, is 71.8 years, against 74.5 by the cohorts and 76.3 by unfloored ages. A pixel with cohorts but no value in the age layer keeps its cohort age. The simulated years keep the cohorts' ages. Of the summaries, only the current condition's patch ages (`pm`, `sam_mdn`) read this map; the `lw` summaries use time since fire. New parameter `ccStandAgeSource`: `"standAgeMap"` (the default) or `"cohortData"`, the former map; without `sim$standAgeMap` on a grid aligned with `pixelGroupMap`, the module warns and uses the cohorts. **This changes the year-0 stand-age map of every replicate and the current condition's `pm` age values.**
 * **A figure of the leading vegetation types' shares of each subregion's forest, and absent types count as 0 in the `lw` summaries (`2.0.0.9033`).** `boxplots/<layer>/<subregion> share of forest.png` has a panel per age class and a box per leading type of its share of the subregion's forested area (`leadingShare`, from nrvtools >= 0.3.4.9002), with the current condition in red. Every box has the same denominator, so a type that leads on a few pixels has a small share, where its proportions by age class swing between 0 and 1. The nrvtools producers write rows only for the types present in a map, so a type that led in 7 of 105 replicate-years had its boxes and histograms drawn from those 7 alone (Fir in WAU's Subalpine ANC: median Old proportion 1). The `lw` aggregates now hold 0, in every metric, for each type a subregion shows (in its current condition or in any replicate-year) but lacks in a replicate-year, as the `pm` class areas do. In the leading-proportion boxplots such a replicate-year counts as 0 in every age class, so there the type's age classes sum to 0 rather than 1.
 * **Patch metric envelopes span the replicates, and class areas count absent classes as 0 ha (`2.0.0.9032`).** The `pm` envelopes of a patch-level metric (`area`, `sam_mdn`) pooled every patch of every replicate, so the band ran from a single cell to the largest patch, and the current condition's patch mean and median, drawn on the ribbon and box figures, were up to 51 times apart. Each replicate, and the current condition, now contributes its mean over its patches (`nrvtools::nrv_replicate_values()`), as on the per-class pages; the envelope CSVs change accordingly, and their `n_reps` counts replicates, not patches. For `lm` and `pm`, `n_reps` counts the replicates with a value: one whose metric is undefined there (the standard deviation of a single patch, say) is left out. The per-class pages of `area` are dropped: a replicate's mean patch area is the class's mean patch area, `area_mn`, which has its own. landscapemetrics reports no class area for a class absent from a map, so the `ca` boxes and envelopes summarised only the replicate-years where the class occurs. After the `pm` aggregation, a class area of 0 is written (as `replicate=<id>/ca_zeros.parquet`) for each class that a subregion shows in its current condition or in any replicate-year but lacks in a replicate-year, the current condition included. Patch size, shape and age metrics stay undefined for an absent class. **This changes the `pm` envelopes, CSVs and figures.**
@@ -110,6 +210,10 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
   where `landscapeMetrics` read the CC VTM before `patchMetrics` wrote it (a standalone run errored
   with `file does not exist: .../vegTypeMap_year0.tif`), and (b) the un-wired `"CC SAM"` dependency.
   The CC file paths are resolved once in `InitMulti`.
+
+## Stability check ignores patch-level rows
+
+- The stability series reader kept the patch-level rows of the pm aggregates (one per patch), so a series had many values per rep and time and the check failed. It now keeps only the landscape and class levels (`.seriesLevels()`).
 
 # NRV_summary 2.0.0
 

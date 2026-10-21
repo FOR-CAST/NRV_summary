@@ -49,11 +49,13 @@ test_that("parameters are the expected names", {
   expect_identical(
     sort(md$parameters$paramName),
     c(
-      ".plotInitialTime", ".plotInterval", ".plots", ".seed", ".studyAreaName",
-      ".useCache", "ageClassCutOffs", "ageClasses", "ageClassMaxAge", "ccStandAgeSource", "mixedType",
-      "mode", "patchDirections", "plotWorkers", "postprocessEvents", "reps",
-      "reuseAggregates", "sieveThresh", "simTimes", "sppEquivCol", "sppEquivColReporting", "summaryInterval",
-      "summaryPeriod", "timeSeriesTimes", "vegLeadingProportion"
+      ".plotInitialTime", ".plotInterval", ".plots", ".seed", ".studyAreaName", ".useCache",
+      "ageClassCutOffs", "ageClasses", "ageClassMaxAge", "autocorrMaxLag", "ccStandAgeSource",
+      "mixedType", "mode", "nrvWindow", "patchDirections", "plotWorkers", "postprocessEvents",
+      "recordAnnualSeries", "reps", "reuseAggregates", "sieveThresh", "simTimes",
+      "sppEquivCol", "sppEquivColReporting", "stabilityAlpha", "stabilityMinChange",
+      "stabilityWindow", "summaryInterval", "summaryPeriod", "timeSeriesTimes",
+      "vegLeadingProportion"
 )
   )
 })
