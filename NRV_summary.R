@@ -52,12 +52,13 @@ defineModule(sim, list(
     defineParameter("ccStandAgeSource", "character", "standAgeMap", NA, NA,
                     paste("(mode = 'single') where the current condition's (year 0's) stand-age map",
                           "comes from: 'standAgeMap', the age layer `sim$standAgeMap` (e.g.",
-                          "Biomass_borealDataPrep's), rounded, on the pixels with cohorts; or",
-                          "'cohortData', the biomass-weighted age of the year-0 cohorts",
-                          "(`LandR::standAgeMapGenerator()`), which keeps the binning of the cohort ages",
-                          "and floors each pixel's age to the decade. 'standAgeMap' warns and uses the",
-                          "cohorts when `sim$standAgeMap` is absent or not on a grid aligned with",
-                          "`pixelGroupMap`. The simulated years always come from the cohorts.")),
+                          "Biomass_borealDataPrep's) on the pixels with cohorts, rounded and then",
+                          "floored to the decade, as `LandR::standAgeMapGenerator()` floors the",
+                          "simulated years' ages; or 'cohortData', that generator's biomass-weighted",
+                          "age of the year-0 cohorts, which keeps the binning of the cohort ages.",
+                          "'standAgeMap' warns and uses the cohorts when `sim$standAgeMap` is absent or",
+                          "not on a grid aligned with `pixelGroupMap`. The simulated years always come",
+                          "from the cohorts.")),
     defineParameter("patchDirections", "integer", 4L, 4L, 8L,
                     paste("patch connectivity for the 'lw' (LandWeb summary) large-patch analysis,",
                           "passed to `nrvtools::largePatchCounts()` (via `landscapemetrics::get_patches`):",
@@ -278,7 +279,8 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         weight = "biomass",
         doAssertion = getOption("LandR.assertions", TRUE)
       )
-      ## the current condition: today's ages, not the cohorts' binned ages (see .ccStandAgeMap())
+      ## the current condition: today's ages, not the cohorts' binned ages, floored to the decade
+      ## as the generator floors the simulated years' (see .ccStandAgeMap())
       if (time(sim) == start(sim) && P(sim)$ccStandAgeSource == "standAgeMap") {
         mod$standAgeMap <- .ccStandAgeMap(sim$standAgeMap, mod$standAgeMap)
       }
@@ -573,13 +575,15 @@ InitMulti <- function(sim) {
 ## The current condition's (year 0's) stand-age map: the age layer `standAgeMap` (e.g.
 ## Biomass_borealDataPrep's, on its larger grid) cropped to the grid of `cohortAge`, the map
 ## LandR::standAgeMapGenerator() makes from the year-0 cohorts, on the cells where that map has a
-## value, rounded half up as LandR::asInteger() rounds the ages the cohorts are made from. The cohort
-## ages are binned (Biomass_borealDataPrep rounds those above `minAgeForGrouping` to the nearest
-## `pixelGroupAgeClass`; on WesternAlbertaUpland, above 70 to the nearest 20) and the generator floors
-## each pixel's age to the decade, which put 30.4% of that forest at 120 years or older, against
-## 22.1% by the age layer. A cell with cohorts but no value in the age layer (Biomass_borealDataPrep
-## imputes those ages) keeps its cohort age. Without an age layer on an aligned grid, warns and
-## returns `cohortAge`.
+## value. Each age is rounded half up, as LandR::asInteger() rounds the ages the cohorts are made
+## from, then floored to the decade, as standAgeMapGenerator() floors the age of every pixel in the
+## maps of the simulated years, from which the envelopes are built (`floor(age / 10) * 10`, inline in
+## the generator: LandR exports no function for it). So year 0 has the decade resolution of the
+## envelopes, but not the binning of the cohort ages: Biomass_borealDataPrep rounds those above
+## `minAgeForGrouping` to the nearest `pixelGroupAgeClass` (on WesternAlbertaUpland, above 70 to the
+## nearest 20), which put 30.4% of that forest at 120 years or older, against 22.1% by the age layer.
+## A cell with cohorts but no value in the age layer (Biomass_borealDataPrep imputes those ages)
+## keeps its cohort age. Without an age layer on an aligned grid, warns and returns `cohortAge`.
 .ccStandAgeMap <- function(standAgeMap, cohortAge) {
   useCohorts <- function(why) {
     warning("NRV_summary: `standAgeMap` ", why, "; the current condition's stand ages are those ",
@@ -597,7 +601,8 @@ InitMulti <- function(sim) {
   if (is.null(sam) || !isTRUE(terra::compareGeom(sam, cohortAge, stopOnError = FALSE))) {
     return(useCohorts("is not on a grid aligned with `pixelGroupMap`"))
   }
-  sam <- floor(sam + 0.5)
+  sam <- floor(sam + 0.5) ## rounded half up, as LandR::asInteger()
+  sam <- floor(sam / 10) * 10 ## floored to the decade, as LandR::standAgeMapGenerator()
   nFilled <- terra::global(is.na(sam) & !is.na(cohortAge), "sum", na.rm = TRUE)[[1L]]
   if (nFilled > 0) {
     message("NRV_summary: ", nFilled, " pixels with cohorts have no value in `standAgeMap`; ",

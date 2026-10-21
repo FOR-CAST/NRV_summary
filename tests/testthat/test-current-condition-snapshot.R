@@ -80,10 +80,10 @@ test_that("year 0 is saved before any time-0 dynamics, once", {
   expect_identical(sum(cmp$eventType == "save_single" & as.numeric(cmp$eventTime) == 0), 1L)
 })
 
-## The current condition's stand ages. The cohorts' ages are binned when they are made, and
-## LandR::standAgeMapGenerator() floors each pixel's mean age to the decade, so through 2.0.0.9033
-## the year-0 map moved part of today's forest into older age classes than the age layer the
-## cohorts were made from.
+## The current condition's stand ages. The cohorts' ages are binned when they are made, so through
+## 2.0.0.9033 the year-0 map moved part of today's forest into older age classes than the age layer
+## the cohorts were made from. LandR::standAgeMapGenerator() floors each pixel's mean age to the
+## decade in the maps of the simulated years; year 0 is floored the same way, to be on their scale.
 
 ## A 2 x 2 landscape and an age layer one cell larger on each side, aligned with it. Cell 2 has
 ## cohorts but no value in the age layer, cell 4 an age but no cohorts. By the cohorts (weighted by
@@ -92,7 +92,9 @@ ccAgeFixture <- function() {
   crs <- "EPSG:3400"
   rtm <- terra::rast(nrows = 2, ncols = 2, xmin = 0, xmax = 500, ymin = 0, ymax = 500, crs = crs)
   ages <- rep(999, 16)
-  ages[c(6, 7, 10, 11)] <- c(86.5, NA, 12.5, 300) ## the cells of `rtm`; round() gives 86 and 12
+  ## the cells of `rtm`. Rounded half up, then floored to the decade: 80 and 10, where flooring
+  ## alone gives 70 and rounding alone 13.
+  ages[c(6, 7, 10, 11)] <- c(79.5, NA, 12.5, 300)
   spp <- c("Pice_gla", "Popu_tre")
   sppEquiv <- LandR::sppEquivalencies_CA
   sppEquiv <- sppEquiv[sppEquiv[["LandR"]] %in% spp, ]
@@ -133,7 +135,7 @@ savedAges <- function(dir, year) {
   terra::values(terra::rast(f), mat = FALSE)
 }
 
-test_that(".ccStandAgeMap() takes the age layer, rounded half up, on the cells with cohorts", {
+test_that(".ccStandAgeMap() takes the age layer on the cells with cohorts, floored to the decade", {
   f <- ccAgeFixture()
   ccStandAgeMap <- moduleFn(".ccStandAgeMap", new.env())
   cohortAge <- LandR::standAgeMapGenerator(f$cohortData, f$pixelGroupMap)
@@ -141,7 +143,25 @@ test_that(".ccStandAgeMap() takes the age layer, rounded half up, on the cells w
 
   expect_message(out <- ccStandAgeMap(f$standAgeMap, cohortAge), "1 pixels with cohorts have no")
   expect_true(terra::compareGeom(out, cohortAge))
-  expect_equal(terra::values(out, mat = FALSE), c(87, 70, 13, NA))
+  expect_equal(terra::values(out, mat = FALSE), c(80, 70, 10, NA))
+})
+
+test_that("year 0's ages are those LandR::standAgeMapGenerator() gives unbinned cohorts", {
+  ## one cohort per pixel, aged as Biomass_borealDataPrep ages it from the age layer before any
+  ## binning (rounded half up); the generator floors each pixel's age to the decade
+  ages <- c(0, 0.4, 9.4, 9.5, 10, 19.5, 79.5, 86.5, 99.4, 99.5, 399.5)
+  rtm <- terra::rast(nrows = 1, ncols = length(ages), xmin = 0, xmax = 250 * length(ages),
+                     ymin = 0, ymax = 250, crs = "EPSG:3400")
+  cohortData <- data.table::data.table(pixelGroup = seq_along(ages), age = LandR::asInteger(ages),
+                                       B = 1000L)
+  generated <- LandR::standAgeMapGenerator(cohortData, terra::rast(rtm, vals = seq_along(ages)))
+  expected <- c(0, 0, 0, 10, 10, 20, 80, 80, 90, 100, 400)
+  expect_equal(terra::values(generated, mat = FALSE), expected)
+
+  ccStandAgeMap <- moduleFn(".ccStandAgeMap", new.env())
+  cohortAge <- terra::rast(rtm, vals = 999) ## every cell has an age-layer value: none of these is kept
+  out <- ccStandAgeMap(terra::rast(rtm, vals = ages), cohortAge)
+  expect_equal(terra::values(out, mat = FALSE), expected)
 })
 
 test_that(".ccStandAgeMap() warns and keeps the cohort ages without an aligned age layer", {
@@ -162,7 +182,7 @@ test_that("year 0's stand ages come from the age layer, the later years' from th
   out <- file.path(testPaths$outputPath, "currentConditionAge", "standAgeMap")
   sim <- runCurrentConditionAge(f, list(), out)
 
-  expect_equal(savedAges(out, 0), c(87, 70, 13, NA))
+  expect_equal(savedAges(out, 0), c(80, 70, 10, NA))
   for (year in c(1, 5, 10)) {
     expect_equal(savedAges(out, year), c(70, 70, 150, NA))
   }
