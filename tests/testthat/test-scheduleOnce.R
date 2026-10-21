@@ -2,18 +2,12 @@
 ## are wanted at the start, at the start of the summary period, at the end and at each
 ## timeSeriesTimes year, and those times can coincide.
 
-moduleName <- "NRV_summary"
-modulePath <- dirname(normalizePath(file.path("..", ".."), winslash = "/", mustWork = TRUE))
-root <- withr::local_tempdir()
-paths <- list(cachePath = file.path(root, "cache"), inputPath = file.path(root, "inputs"),
-              modulePath = modulePath, outputPath = file.path(root, "outputs"))
-
 singleSim <- function(summaryPeriod, timeSeriesTimes, end = 10, interval = 5L) {
   r <- terra::rast(nrows = 4, ncols = 4, vals = 1L)
   suppressMessages(SpaDES.core::simInit(
     times = list(start = 0, end = end),
     modules = moduleName,
-    paths = paths,
+    paths = testPaths,
     params = stats::setNames(
       list(list(mode = "single", summaryPeriod = summaryPeriod, summaryInterval = interval,
                 timeSeriesTimes = timeSeriesTimes, .plots = NA, .useCache = FALSE)),
