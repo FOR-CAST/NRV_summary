@@ -2972,8 +2972,8 @@ border-radius: 0px;
 
 
 <h1 class="title toc-ignore">NRV_summary Manual</h1>
-<h3 class="subtitle">v.2.0.0.9024</h3>
-<h4 class="date">Last updated: 2026-08-21</h4>
+<h3 class="subtitle">v.2.0.0.9025</h3>
+<h4 class="date">Last updated: 2026-10-21</h4>
 
 </div>
 
@@ -3173,9 +3173,35 @@ max
 <th style="text-align:left;">
 paramDesc
 </th>
+<th style="text-align:left;">
+cacheKey
+</th>
 </tr>
 </thead>
 <tbody>
+<tr>
+<td style="text-align:left;">
+autocorrMaxLag
+</td>
+<td style="text-align:left;">
+integer
+</td>
+<td style="text-align:left;">
+200
+</td>
+<td style="text-align:left;">
+1
+</td>
+<td style="text-align:left;">
+NA
+</td>
+<td style="text-align:left;">
+longest lag (years) of the autocorrelation of the annual landscape series, which gives the thinning interval for the summary snapshots.
+</td>
+<td style="text-align:left;">
+TRUE
+</td>
+</tr>
 <tr>
 <td style="text-align:left;">
 ageClasses
@@ -3194,6 +3220,9 @@ NA
 </td>
 <td style="text-align:left;">
 descriptions/labels for age classes (seral stages)
+</td>
+<td style="text-align:left;">
+TRUE
 </td>
 </tr>
 <tr>
@@ -3215,6 +3244,9 @@ NA
 <td style="text-align:left;">
 defines the age boundaries between age classes
 </td>
+<td style="text-align:left;">
+TRUE
+</td>
 </tr>
 <tr>
 <td style="text-align:left;">
@@ -3234,6 +3266,9 @@ NA
 </td>
 <td style="text-align:left;">
 maximum possible age
+</td>
+<td style="text-align:left;">
+TRUE
 </td>
 </tr>
 <tr>
@@ -3255,6 +3290,9 @@ integer
 <td style="text-align:left;">
 patch connectivity for the ‘lw’ (LandWeb summary) large-patch analysis, passed to <code>nrvtools::largePatchCounts()</code> (via <code>landscapemetrics::get_patches</code>): <code>4</code> = rook / 4-connected (matches v2’s GDAL <code>polygonize</code>; the default), <code>8</code> = queen / 8-connected. NOTE: v2 was fixed at 4-connectivity; exposing 8 (queen) is a departure from v2.
 </td>
+<td style="text-align:left;">
+TRUE
+</td>
 </tr>
 <tr>
 <td style="text-align:left;">
@@ -3274,6 +3312,9 @@ NA
 </td>
 <td style="text-align:left;">
 How to define mixed stands: <code>0L</code> for none; <code>1L</code> for any species admixture; <code>2L</code> for deciduous &gt; conifer. See <code>LandR::vegTypeMapGenerator</code>.
+</td>
+<td style="text-align:left;">
+TRUE
 </td>
 </tr>
 <tr>
@@ -3295,6 +3336,32 @@ NA
 <td style="text-align:left;">
 use ‘single’ to run part of a simulation; use ‘multi’ to run as part of postprocessing multiple runs.
 </td>
+<td style="text-align:left;">
+TRUE
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+recordAnnualSeries
+</td>
+<td style="text-align:left;">
+logical
+</td>
+<td style="text-align:left;">
+TRUE
+</td>
+<td style="text-align:left;">
+NA
+</td>
+<td style="text-align:left;">
+NA
+</td>
+<td style="text-align:left;">
+(mode = ‘single’) record a few landscape scalars every year (proportion young and old, mean stand age, total biomass, proportion by leading species) in <code>annualSeries.csv</code>. In ‘multi’ mode they give the autocorrelation time of the landscape, hence how far apart the summary snapshots must be to be independent.
+</td>
+<td style="text-align:left;">
+TRUE
+</td>
 </tr>
 <tr>
 <td style="text-align:left;">
@@ -3314,6 +3381,9 @@ NA
 </td>
 <td style="text-align:left;">
 (mode = ‘multi’) if TRUE, reuse a complete per-replicate <code>_aggregates</code> parquet dataset instead of recomputing it, re-summarizing the surviving parquets to regenerate the envelopes/CSVs/figures. Use to iterate on the plots/CSVs without re-running the (~hours) landscape-metric aggregation; leave FALSE for a fresh run.
+</td>
+<td style="text-align:left;">
+TRUE
 </td>
 </tr>
 <tr>
@@ -3335,6 +3405,9 @@ NA
 <td style="text-align:left;">
 (mode = ‘multi’) hard cap on the number of local worker processes used to render the postprocess figures in parallel (each figure is an independent <code>ggsave</code>). The actual count is RAM-aware (<code>pemisc::optimalClusterNum</code>) but never exceeds this cap, so a shared compute node is not swamped; 1 renders sequentially. Uses <code>future</code> multisession (not fork; the crew worker is a mirai daemon).
 </td>
+<td style="text-align:left;">
+TRUE
+</td>
 </tr>
 <tr>
 <td style="text-align:left;">
@@ -3354,6 +3427,9 @@ NA
 </td>
 <td style="text-align:left;">
 Specify which subset of postprocessing events to run. At least one of: ‘am’ for the stand-age time-series animation (GIF); ‘bc’ for BC seral stage patch metrics; ‘fd’ for forest degradation indicators; ‘lm’ for default landscape metrics; ‘lw’ for default LandWeb summaries ‘pm’ for default patch metrics; ‘on’ for ON patch metrics.
+</td>
+<td style="text-align:left;">
+TRUE
 </td>
 </tr>
 <tr>
@@ -3375,6 +3451,9 @@ NA
 <td style="text-align:left;">
 number of replicates/runs per study area.
 </td>
+<td style="text-align:left;">
+TRUE
+</td>
 </tr>
 <tr>
 <td style="text-align:left;">
@@ -3394,6 +3473,9 @@ NA
 </td>
 <td style="text-align:left;">
 threshold patch size (number of pixels) to use with <code>terra::sieve</code> when creating seral stage maps
+</td>
+<td style="text-align:left;">
+TRUE
 </td>
 </tr>
 <tr>
@@ -3415,6 +3497,9 @@ NA
 <td style="text-align:left;">
 Simulation start and end times when running in ‘multi’ mode.
 </td>
+<td style="text-align:left;">
+TRUE
+</td>
 </tr>
 <tr>
 <td style="text-align:left;">
@@ -3434,6 +3519,101 @@ NA
 </td>
 <td style="text-align:left;">
 The column in <code>sim$sppEquiv</code> data.table to use as a naming convention
+</td>
+<td style="text-align:left;">
+TRUE
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+stabilityAlpha
+</td>
+<td style="text-align:left;">
+numeric
+</td>
+<td style="text-align:left;">
+0.05
+</td>
+<td style="text-align:left;">
+0
+</td>
+<td style="text-align:left;">
+1
+</td>
+<td style="text-align:left;">
+(mode = ‘multi’) significance level of the Mann-Kendall trend test in the stability check.
+</td>
+<td style="text-align:left;">
+TRUE
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+stabilityMinChange
+</td>
+<td style="text-align:left;">
+numeric
+</td>
+<td style="text-align:left;">
+0.1
+</td>
+<td style="text-align:left;">
+0
+</td>
+<td style="text-align:left;">
+1
+</td>
+<td style="text-align:left;">
+(mode = ‘multi’) a series is flagged ‘still changing’ only if its fitted change across the stability window exceeds this fraction of the series’ range (its largest minus smallest value over all reps within the window), as well as being a significant trend.
+</td>
+<td style="text-align:left;">
+TRUE
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+stabilityWindow
+</td>
+<td style="text-align:left;">
+numeric
+</td>
+<td style="text-align:left;">
+0.5
+</td>
+<td style="text-align:left;">
+0
+</td>
+<td style="text-align:left;">
+1
+</td>
+<td style="text-align:left;">
+(mode = ‘multi’) the last fraction of <code>summaryPeriod</code> over which the stability check looks for a directional trend (0.5 = the last half). A run whose metrics are still trending there needs to be longer. It does not define the NRV (see <code>nrvWindow</code>).
+</td>
+<td style="text-align:left;">
+TRUE
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+nrvWindow
+</td>
+<td style="text-align:left;">
+numeric
+</td>
+<td style="text-align:left;">
+0.3
+</td>
+<td style="text-align:left;">
+0
+</td>
+<td style="text-align:left;">
+1
+</td>
+<td style="text-align:left;">
+the NRV is the last fraction of <code>summaryPeriod</code> (0.3 = the last 30%; in a 1000-year run, years 700-1000). Must be above 0 and at most 1. The NRV range and the current condition overview use only the summary times in it; the time-series figures still show all of <code>summaryPeriod</code>, with the NRV years shaded.
+</td>
+<td style="text-align:left;">
+TRUE
 </td>
 </tr>
 <tr>
@@ -3455,6 +3635,9 @@ NA
 <td style="text-align:left;">
 simulation time interval at which to take ‘snapshots’ used for summary analyses.
 </td>
+<td style="text-align:left;">
+TRUE
+</td>
 </tr>
 <tr>
 <td style="text-align:left;">
@@ -3464,7 +3647,7 @@ summaryPeriod
 integer
 </td>
 <td style="text-align:left;">
-700, 1000
+0, 10
 </td>
 <td style="text-align:left;">
 NA
@@ -3473,7 +3656,10 @@ NA
 NA
 </td>
 <td style="text-align:left;">
-lower and upper end of the range of simulation times used for summary analyses.
+lower and upper end of the range of simulation times summarised and shown in the time-series figures; default is the whole run. The NRV is the last <code>nrvWindow</code> fraction of it.
+</td>
+<td style="text-align:left;">
+TRUE
 </td>
 </tr>
 <tr>
@@ -3484,16 +3670,19 @@ timeSeriesTimes
 numeric
 </td>
 <td style="text-align:left;">
-601, 602….
-</td>
-<td style="text-align:left;">
 NA
 </td>
 <td style="text-align:left;">
 NA
 </td>
 <td style="text-align:left;">
-simulation times for which to build time steries animations.
+NA
+</td>
+<td style="text-align:left;">
+simulation times for which to build time series animations; default (NA) is start + 601:650 when the run is that long, otherwise the last 50 years of the run.
+</td>
+<td style="text-align:left;">
+TRUE
 </td>
 </tr>
 <tr>
@@ -3504,7 +3693,7 @@ vegLeadingProportion
 numeric
 </td>
 <td style="text-align:left;">
-0.8
+0.75
 </td>
 <td style="text-align:left;">
 0
@@ -3513,7 +3702,10 @@ numeric
 1
 </td>
 <td style="text-align:left;">
-a number that defines whether a species is leading for a given pixel
+a number that defines whether a species is leading for a given pixel. Default: <code>LandR::leadingSpeciesProp()</code>, i.e. option <code>LandR.leadingSpeciesProp</code>, which takes <code>LandR.mixedwoodProp</code> (0.75) unless set. Setting it in one place moves every module and LandR function together.
+</td>
+<td style="text-align:left;">
+TRUE
 </td>
 </tr>
 <tr>
@@ -3535,6 +3727,9 @@ NA
 <td style="text-align:left;">
 Used by <code>SpaDES.core::Plots</code>, which can be optionally used here.
 </td>
+<td style="text-align:left;">
+TRUE
+</td>
 </tr>
 <tr>
 <td style="text-align:left;">
@@ -3554,6 +3749,9 @@ NA
 </td>
 <td style="text-align:left;">
 Describes the simulation time at which the first plot event should occur.
+</td>
+<td style="text-align:left;">
+TRUE
 </td>
 </tr>
 <tr>
@@ -3575,6 +3773,9 @@ NA
 <td style="text-align:left;">
 Describes the simulation time interval between plot events.
 </td>
+<td style="text-align:left;">
+TRUE
+</td>
 </tr>
 <tr>
 <td style="text-align:left;">
@@ -3595,6 +3796,9 @@ NA
 <td style="text-align:left;">
 Human-readable name for the study area used, or a hash of the study area obtained using <code>reproducible::studyAreaName()</code>.
 </td>
+<td style="text-align:left;">
+TRUE
+</td>
 </tr>
 <tr>
 <td style="text-align:left;">
@@ -3613,6 +3817,9 @@ NA
 </td>
 <td style="text-align:left;">
 Named list of seeds to use for each event (names).
+</td>
+<td style="text-align:left;">
+TRUE
 </td>
 </tr>
 <tr>
@@ -3633,6 +3840,9 @@ NA
 </td>
 <td style="text-align:left;">
 Should caching of events or module be used?
+</td>
+<td style="text-align:left;">
+TRUE
 </td>
 </tr>
 </tbody>
