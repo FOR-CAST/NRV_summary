@@ -6,38 +6,6 @@ envelope <- function(classes = c("Pine", "Spruce")) {
   data.frame(time = g$time, poly = "ELF", class = g$class, metric = "area_mn", metric.1 = NA_character_,
              mean = base, min = base - 2, max = base + 2, q25 = base - 1, median = base, q75 = base + 1)
 }
-ccFor <- function(classes, values) {
-  data.frame(poly = "ELF", class = classes, metric = "area_mn", metric.1 = NA_character_, mean = values)
-}
-
-test_that("the current condition is a labelled line in the panel of its class", {
-  facet <- c("class", "metric.1")
-  for (type in c("ribbon", "boxplot")) {
-    gg <- nrvtools::plot_nrv_envelope(envelope(), type = type, facet = facet)
-    gg <- .addCurrentCondition(gg, ccFor(c("Pine", "Spruce"), c(12, 47)), facet)
-    b <- ggplot2::ggplot_build(gg)
-    hl <- b$data[[length(b$data)]] ## the last layer is the line
-    expect_equal(nrow(hl), 2L)
-    ## each panel's line is the current condition of the class drawn in that panel (Pine's envelope
-    ## tops out at 12, Spruce's at 52)
-    top <- sapply(split(b$data[[1]]$ymax, b$data[[1]]$PANEL), max)
-    expect_equal(hl$yintercept[match(names(top), hl$PANEL)], unname(ifelse(top == 12, 12, 47)))
-    expect_true("current condition" %in% b$plot$scales$get_scales("colour")$get_labels())
-  }
-})
-
-test_that("with a single panel the line is still drawn", {
-  gg <- nrvtools::plot_nrv_envelope(envelope("Pine"), type = "ribbon", facet = c("class", "metric.1"))
-  gg <- .addCurrentCondition(gg, ccFor("Pine", 11), c("class", "metric.1"))
-  hl <- ggplot2::ggplot_build(gg)$data[[3]]
-  expect_equal(hl$yintercept, 11)
-})
-
-test_that("no current condition leaves the figure unchanged", {
-  gg <- nrvtools::plot_nrv_envelope(envelope(), type = "ribbon", facet = "class")
-  expect_identical(.addCurrentCondition(gg, NULL, "class"), gg)
-})
-
 ## two metrics on very different scales, with a transient at time 100 before the later times
 overviewEnv <- function() {
   g <- expand.grid(time = c(100, 200, 300), metric = c("ai", "area_mn"), stringsAsFactors = FALSE)

@@ -1,6 +1,6 @@
 ## render_one runs detached from the module namespace, so every module helper it calls must be
 ## re-assigned into its environment by .renderTasks(). An envelope task with an NRV period calls
-## .addCurrentCondition and .addNrvShading. A package attached on the search path (as load_all does)
+## .addNrvShading (the current condition is drawn by nrvtools itself, from `cc`). A package attached on the search path (as load_all does)
 ## would hide a missing one, because the detached environment sits under globalenv(), so the test
 ## runs with the package detached, as it is in a simulation.
 

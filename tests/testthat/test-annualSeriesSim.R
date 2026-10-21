@@ -65,7 +65,7 @@ test_that("multi mode reads the reps' annual series and writes the autocorrelati
   sim <- SpaDES.core::simInit(
     times = list(start = 0, end = end),
     params = list(NRV_summary = list(mode = "multi", reps = 1:3, summaryPeriod = period, summaryInterval = 300L,
-                                     nrvWindow = 1, postprocessEvents = "none", .plots = "png",
+                                     nrvWindow = 1, postprocessEvents = character(0), .plots = "png",
                                      .studyAreaName = "stub")),
     modules = moduleName,
     objects = list(outputsDF = data.table::data.table(file = files, saveTime = end), reportingPolygons = list(ELF = "x"),
