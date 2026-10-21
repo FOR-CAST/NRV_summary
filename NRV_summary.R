@@ -169,23 +169,15 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
           !is.null(sim$studyAreaReporting)
         )
 
-        sim <- scheduleEvent(sim, start(sim), "NRV_summary", "map_generators", .last())
-        ## fmt: skip
-        sim <- scheduleEvent(sim, P(sim)$summaryPeriod[1], "NRV_summary", "map_generators", .last())
-        sim <- scheduleEvent(sim, end(sim), "NRV_summary", "map_generators", .last())
-
-        sim <- scheduleEvent(sim, start(sim), "NRV_summary", "save_single", .last())
-        sim <- scheduleEvent(sim, P(sim)$summaryPeriod[1], "NRV_summary", "save_single", .last())
-        sim <- scheduleEvent(sim, end(sim), "NRV_summary", "save_single", .last())
-
-        ## also generate + save the stand-age / veg-type maps at each timeSeriesTimes
-        ## year, so the animation has its frames (read back in mode = "multi"). These
-        ## typically fall outside summaryPeriod, so they are not covered by the
-        ## summaryInterval reschedule; schedule map_generators before save_single so
-        ## the maps exist when saved.
-        for (tst in P(sim)$timeSeriesTimes) {
-          sim <- scheduleEvent(sim, tst, "NRV_summary", "map_generators", .last())
-          sim <- scheduleEvent(sim, tst, "NRV_summary", "save_single", .last())
+        ## the start, the start of the summary period, the end and the timeSeriesTimes can coincide:
+        ## schedule each distinct time once (map_generators before save_single, so the maps exist when saved).
+        ## The timeSeriesTimes typically fall outside summaryPeriod, so they are not covered by the
+        ## summaryInterval reschedule; they get the stand-age / veg-type maps for the animation frames
+        ## (read back in mode = "multi").
+        mod$initTimes <- unique(c(start(sim), P(sim)$summaryPeriod[1], end(sim), P(sim)$timeSeriesTimes))
+        for (tm in mod$initTimes) {
+          sim <- scheduleEvent(sim, tm, "NRV_summary", "map_generators", .last())
+          sim <- scheduleEvent(sim, tm, "NRV_summary", "save_single", .last())
         }
       } else if (P(sim)$mode == "multi") {
         stopifnot(!is.null(sim$reportingPolygons))
@@ -248,9 +240,10 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       ) |>
         terra::mask(sim$studyAreaReporting)
 
-      if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2]) {
-        ## fmt: skip
-        sim <- scheduleEvent(sim, time(sim) + P(sim)$summaryInterval, "NRV_summary", "map_generators", .last())
+      nextTime <- time(sim) + P(sim)$summaryInterval
+      ## times scheduled by init are not scheduled a second time here
+      if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2] && !nextTime %in% mod$initTimes) {
+        sim <- scheduleEvent(sim, nextTime, "NRV_summary", "map_generators", .last())
       }
     },
     plot = {
@@ -324,9 +317,10 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         terra::writeRaster(sim$pixelGroupMap, f_pixelGroupMap, datatype = "INT4U", overwrite = TRUE)
         sim <- registerOutputs(f_pixelGroupMap, sim)
 
-        if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2]) {
-          ## fmt: skip
-          sim <- scheduleEvent(sim, time(sim) + P(sim)$summaryInterval, "NRV_summary", "save_single", .last())
+        nextTime <- time(sim) + P(sim)$summaryInterval
+        ## times scheduled by init are not scheduled a second time here
+        if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2] && !nextTime %in% mod$initTimes) {
+          sim <- scheduleEvent(sim, nextTime, "NRV_summary", "save_single", .last())
         }
       }
 
