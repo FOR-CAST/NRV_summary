@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9034"),
+  version = list(NRV_summary = "2.0.0.9035"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -38,7 +38,7 @@ defineModule(sim, list(
     ## 0.3.4.9001, not 0.3.4.9000: summarize_nrv() takes the per-replicate values that the patch
     ## metric envelopes are built from and returns exact quartiles; nrv_metric_info() names the
     ## axes; the plot functions take captions.
-    "FOR-CAST/nrvtools (>= 0.3.4.9002)",
+    "FOR-CAST/nrvtools (>= 0.3.4.9003)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
     "PredictiveEcology/SpaDES.core@development (>= 3.0.3.9000)"
   ),
@@ -735,6 +735,19 @@ InitMulti <- function(sim) {
 .ppFigDir <- function(sim, kind, layer, ...) {
   reproducible::checkPath(file.path(.ppRoot(sim), "figures", kind, layer, ...), create = TRUE)
 }
+## Empty the figure folders of the events this run draws, so that a type, subregion or reporting
+## layer renamed or dropped since an earlier run leaves none of its figures behind (the 10-22 rebuild
+## left 5,749 of them). The folders of events not run this time keep their figures.
+.clearFigDirs <- function(sim, events) {
+  ## the figures/<kind> folders each postprocess event draws into
+  kindsByEvent <- list(lm = "lm", pm = "pm", lw = c("boxplots", "histograms"), bc = "sspm")
+  kinds <- unlist(kindsByEvent[intersect(events, names(kindsByEvent))], use.names = FALSE)
+  for (d in file.path(.ppRoot(sim), "figures", kinds)) {
+    unlink(list.files(d, full.names = TRUE, all.files = TRUE, no.. = TRUE), recursive = TRUE)
+  }
+  invisible(kinds)
+}
+
 .ppCsvDir <- function(sim, kind, layer, ...) {
   reproducible::checkPath(file.path(.ppRoot(sim), "csv", kind, layer, ...), create = TRUE)
 }
@@ -1529,7 +1542,7 @@ makeAnimation <- function(sim) {
       "Boxes: median and quartiles of ", nk, ", counting a replicate-year in which a type leads ",
       "nowhere as 0; whiskers: to the furthest value within 1.5 x IQR of the box, with values ",
       "beyond as points",
-      if (!is.null(ccP)) "; red points: current condition (simulation year 0)",
+      if (!is.null(ccP)) "; red circles: current condition (simulation year 0)",
       "."
     )
     cap <- paste(strwrap(cap, width = 150), collapse = "\n")
@@ -1974,6 +1987,7 @@ plotFun <- function(sim) {
   saPrefix <- if (nzchar(saName)) paste0(saName, " — ") else ""
 
   events <- tolower(P(sim)$postprocessEvents)
+  .clearFigDirs(sim, events)
   tasks <- list()
 
   ## y titles name each metric and its unit; vegetation types are shown by their display names
