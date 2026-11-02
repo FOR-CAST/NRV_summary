@@ -100,6 +100,8 @@ defineModule(sim, list(
                           "'lm' for default landscape metrics;",
                           "'lw' for default LandWeb summaries",
                           "'pm' for default patch metrics;",
+                          "'st' for stand-level measures (age-class, leading-type and forested shares, total",
+                          "biomass) at each summary time, from the saved snapshots;",
                           "'on' for ON patch metrics.",
                           "Any other value is an error ('fd', forest degradation indicators, is not",
                           "implemented).")),
@@ -302,6 +304,10 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
           sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_lw", .last())
         }
 
+        if ("st" %in% tolower(P(sim)$postprocessEvents)) {
+          sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_st", .last())
+        }
+
         if ("bc" %in% tolower(P(sim)$postprocessEvents)) {
           sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_bc", .last())
         }
@@ -370,6 +376,9 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
     },
     postprocess_lw = {
       sim <- landWebMetrics(sim)
+    },
+    postprocess_st = {
+      sim <- standMetrics(sim)
     },
     postprocess_stability = {
       sim <- stabilityCheck(sim)
@@ -478,6 +487,7 @@ InitMulti <- function(sim) {
     file.path(outputPath(sim), mod$allReps[1])
   }
 
+  mod$rep1Dir <- rep1Dir
   ## all reps have same flammable map
   mod$flm <- file.path(rep1Dir, paste0("flammableMap_year", pad$end, ".tif"))
 
@@ -784,7 +794,7 @@ InitMulti <- function(sim) {
 ## an unknown value would otherwise be skipped without a word, and 'fd' (forest degradation) was
 ## scheduled as a stub that stopped in browser() after the other summaries had run.
 .checkPostprocessEvents <- function(events) {
-  known <- c("am", "bc", "lm", "lw", "on", "pm")
+  known <- c("am", "bc", "lm", "lw", "on", "pm", "st")
   bad <- setdiff(tolower(events), known)
   if (length(bad)) {
     stop(
@@ -1088,6 +1098,7 @@ landscapeMetrics <- function(sim) {
 
       .writeNrvSummaryCSVs(sim, mod[[refCode]], refCode, p)
       .writeNrvSummaryCSVs(sim, mod[[refCodeCC]], refCodeCC, p)
+      .writeNrvComparisonCSV(sim, mod[[refCode]], mod[[refCodeCC]], "lm", p)
 
       return(invisible(NULL))
     },
@@ -2208,15 +2219,36 @@ plotFun <- function(sim) {
   }))
 }
 
+## The current condition against the NRV, one row per poly x metric: the NRV range (lo, hi) and mean (mid)
+## of `.nrvRange()`, the current condition (`current`, the mean of `cc`) and where it falls: "inside",
+## "above" or "below" the range. `env` and `cc` as for `.nrvRange()` (cc: poly, metric, mean).
+.nrvComparison <- function(env, cc, period) {
+  nrv <- .nrvRange(env, period)
+  nrv <- merge(nrv, stats::setNames(cc[c("poly", "metric", "mean")], c("poly", "metric", "current")),
+               by = c("poly", "metric"))
+  tol <- 1e-9 * pmax(1, abs(nrv$lo), abs(nrv$hi)) ## a value equal to an end is inside
+  nrv$position <- ifelse(nrv$current < nrv$lo - tol, "below", ifelse(nrv$current > nrv$hi + tol, "above", "inside"))
+  nrv
+}
+
+## Write `.nrvComparison()` of one analysis `kind` and reporting `layer` to csv/<kind>/<layer>/<kind>_nrvComparison.csv
+.writeNrvComparisonCSV <- function(sim, env, cc, kind, layer) {
+  if (is.null(env) || !nrow(env) || is.null(cc) || !nrow(cc)) {
+    return(invisible())
+  }
+  f <- file.path(.ppCsvDir(sim, kind, layer), paste0(kind, "_nrvComparison.csv"))
+  utils::write.csv(.nrvComparison(env, cc, .nrvPeriod(sim)), f, row.names = FALSE)
+  mod$ppFiles <- c(mod$ppFiles, f)
+  invisible()
+}
+
 ## Where the current condition falls within the NRV, one facet per metric on its real scale.
 ## `data` = list(env =, cc =, period =): the envelope over the summary times (min, max, mean per time), the
 ## current-condition snapshot (mean) and the NRV years. The grey bar is the NRV range (smallest min to
 ## largest max over the NRV years), the black tick the NRV mean, the red dot the current condition.
 ## A dot beyond the bar is outside the NRV.
 .currentConditionOverview <- function(data) {
-  nrv <- .nrvRange(data$env, data$period)
-  nrv <- merge(nrv, stats::setNames(data$cc[c("poly", "metric", "mean")], c("poly", "metric", "current")),
-               by = c("poly", "metric"))
+  nrv <- .nrvComparison(data$env, data$cc, data$period)
   nrv$panel <- paste0(if (length(unique(nrv$poly)) > 1L) paste0(nrv$poly, ": ") else "", .metricLabel(nrv$metric))
   ggplot2::ggplot(nrv) +
     ggplot2::geom_segment(ggplot2::aes(x = lo, xend = hi, y = 0, yend = 0), colour = "grey75", linewidth = 4) +
@@ -2324,6 +2356,12 @@ plotFun <- function(sim) {
       data.frame(kind = kind, layer = p, raw[, c("poly", "level", "class", "metric", "rep", "time", "value")])
     })
   })
+  ## the stand-level series (the `st` event)
+  st <- if ("st" %in% events && !is.null(mod$standSeries)) {
+    d <- mod$standSeries
+    data.frame(kind = "st", layer = P(sim)$.studyAreaName, poly = P(sim)$.studyAreaName, level = "landscape",
+               class = NA_character_, metric = d$metric, rep = d$rep, time = d$time, value = d$value)
+  }
   fs <- file.path(outputPath(sim), "burnSummaries_fireSizes_allReps.csv")
   burn <- if (file.exists(fs)) {
     b <- .burnBlockSeries(data.table::fread(fs), P(sim)$simTimes, P(sim)$summaryInterval)
@@ -2331,7 +2369,7 @@ plotFun <- function(sim) {
                level = "landscape", class = NA_character_, metric = "areaBurnedHa per block",
                rep = b$rep, time = b$time, value = b$value)
   }
-  do.call(rbind, c(unlist(one, recursive = FALSE), list(burn)))
+  do.call(rbind, c(unlist(one, recursive = FALSE), list(st, burn)))
 }
 
 .stabilityKeys <- c("kind", "layer", "poly", "level", "class", "metric")
@@ -2413,6 +2451,146 @@ stabilityCheck <- function(sim) {
     filename = "stability_summary", path = figDir,
     types = P(sim)$.plots, ggsaveArgs = list(width = 10, height = max(4, 0.25 * length(unique(res$metric))), units = "in")
   )
+  invisible(sim)
+}
+
+## ---- stand-level measures (the `st` event) ------------------------------------------------------------
+## At each summary time of each rep, and for the current condition, over the reporting area
+## (`studyAreaReporting`): the share of the forested area in each age class (`ageClasses`, `ageClassCutOffs`;
+## the saved standAgeMap), the forested share of the area, the share of the area led by each vegetation
+## type (the saved vegTypeMap) and the total tree biomass (Tg; the saved cohortData and pixelGroupMap).
+## A pixel is forested when it has a stand age and a pixel group above 0. Read from the snapshots the
+## lm/pm events read, so the current condition is the same year-0 state (urban removed when
+## `LandTypeCC_reporting` is supplied).
+
+## One snapshot, from the values of the reporting-area pixels: `sam` stand age, `vtmCode` vegetation type code,
+## `pgm` pixel group; `cohortData` (B in g/m2) and the pixel area in ha. Returns metric, value: age_<class>
+## (% of forested), forested (% of the area), biomassTg, lead_<code> (% of the area).
+.standRow <- function(sam, vtmCode, pgm, cohortData, pixelHa, ageClassCutOffs, ageClasses) {
+  forest <- !is.na(sam) & !is.na(pgm) & pgm > 0
+  ac <- cut(sam[forest], c(ageClassCutOffs, Inf), right = FALSE, labels = ageClasses)
+  bPG <- rowsum(as.numeric(cohortData$B), cohortData$pixelGroup)
+  B <- bPG[match(pgm, as.integer(rownames(bPG)))]
+  lead <- table(vtmCode[!is.na(vtmCode)])
+  data.frame(
+    metric = c(paste0("age_", ageClasses), "forested", "biomassTg", paste0("lead_", names(lead))),
+    value = c(100 * as.numeric(table(ac)) / max(1, sum(forest)), 100 * mean(forest),
+              sum(B, na.rm = TRUE) * 0.01 * pixelHa / 1e6, ## as .annualSeriesRow()
+              100 * as.numeric(lead) / length(pgm))
+  )
+}
+
+## The vegetation type code of each pixel of a saved vegTypeMap (its levels: ID, code)
+.vtmCodes <- function(vtm) {
+  lv <- terra::levels(vtm)[[1]]
+  lv[[2]][match(terra::values(vtm, mat = FALSE), lv[[1]])]
+}
+
+## The snapshot files of each rep and time, one row each: rep (the rep folder), time, sam, vtm, pgm, cd.
+.snapshotTable <- function(sam, vtm, pgm, cd) {
+  key <- function(f, col) {
+    d <- data.frame(rep = basename(dirname(f)), time = as.numeric(sub("^.*_year([0-9.]+)\\.[^.]*$", "\\1", basename(f))), f)
+    names(d)[3] <- col
+    d
+  }
+  Reduce(function(a, b) merge(a, b, by = c("rep", "time")),
+         list(key(sam, "sam"), key(vtm, "vtm"), key(pgm, "pgm"), key(cd, "cd")))
+}
+
+## A vegetation type absent from a snapshot leads 0% of it: every metric of `rows` (rep, time, metric, value)
+## at every rep x time, 0 where missing; `metrics` adds metrics found elsewhere (e.g. only in the current condition).
+.fillAbsentMetrics <- function(rows, metrics = character(0)) {
+  grid <- expand.grid(rep = unique(rows$rep), time = unique(rows$time), metric = union(unique(rows$metric), metrics),
+                      stringsAsFactors = FALSE)
+  out <- merge(grid, rows, by = c("rep", "time", "metric"), all.x = TRUE)
+  out$value[is.na(out$value)] <- 0
+  out[order(out$rep, out$time, out$metric), ]
+}
+
+## Readable names of the stand-level metrics; a leading type by `sppEquiv`'s EN_generic_full when it has one
+.standLabel <- function(metric, sppEquiv = NULL, sppEquivCol = "LandR") {
+  code <- sub("^lead_", "", metric)
+  sp <- if (!is.null(sppEquiv) && "EN_generic_full" %in% names(sppEquiv)) {
+    sppEquiv[["EN_generic_full"]][match(code, sppEquiv[[sppEquivCol]])]
+  } else NA_character_
+  sp <- ifelse(is.na(sp), .vegTypeLabels(code), sp)
+  ifelse(metric == "biomassTg", "Total tree biomass (Tg)",
+  ifelse(metric == "forested", "Forested share of the area (%)",
+  ifelse(grepl("^age_", metric), paste0(sub("^age_", "", metric), " forest, share of forested area (%)"),
+         paste0(sp, " leading, share of the area (%)"))))
+}
+
+## One stand-level figure: each rep a thin line, the median over reps bold, the current condition an open
+## circle, the NRV years shaded. `data` = list(series = (rep, time, label, value), cc = (time, label, value),
+## period =, title =, ylab =).
+.standSeriesPanels <- function(data) {
+  d <- data$series
+  med <- stats::aggregate(value ~ label + time, d, stats::median)
+  ggplot2::ggplot(d, ggplot2::aes(time, value, colour = label)) +
+    ggplot2::annotate("rect", xmin = min(data$period), xmax = max(data$period), ymin = -Inf, ymax = Inf,
+                      alpha = 0.15, fill = "orange") +
+    ggplot2::geom_line(ggplot2::aes(group = interaction(label, rep)), alpha = 0.35, linewidth = 0.3) +
+    ggplot2::geom_line(data = med, linewidth = 1) +
+    ggplot2::geom_point(data = data$cc, shape = 1, size = 2.5, stroke = 1) +
+    ggplot2::labs(x = "Simulation year", y = data$ylab, colour = NULL, title = data$title,
+                  caption = "thin lines: replicates; bold: median; circle: current condition; shaded: NRV years") +
+    ggplot2::theme_bw(base_size = 12) + ggplot2::theme(legend.position = "bottom")
+}
+
+standMetrics <- function(sim) {
+  sa <- P(sim)$.studyAreaName
+  pad <- padYears(P(sim)$simTimes)
+  snaps <- .snapshotTable(mod$sam, mod$vtm, mod$pgm, mod$cd)
+  cc <- data.frame(rep = "CC", time = P(sim)$simTimes[1], sam = mod$fsam0, vtm = mod$fvtm0,
+                   pgm = file.path(mod$rep1Dir, paste0("pixelGroupMap_year", pad$start, ".tif")),
+                   cd = file.path(mod$rep1Dir, paste0("cohortData_year", pad$start, ".qs2")))
+  cells <- NULL
+  one <- function(f) {
+    pgm <- terra::rast(f$pgm)
+    if (is.null(cells)) cells <<- which(.reportingCells(pgm, sim$studyAreaReporting))
+    row <- .standRow(terra::values(terra::rast(f$sam), mat = FALSE)[cells], .vtmCodes(terra::rast(f$vtm))[cells],
+                     terra::values(pgm, mat = FALSE)[cells], qs2::qs_read(f$cd), prod(terra::res(pgm)) / 1e4,
+                     P(sim)$ageClassCutOffs, P(sim)$ageClasses)
+    data.frame(rep = f$rep, time = f$time, row)
+  }
+  series <- do.call(rbind, lapply(split(snaps, seq_len(nrow(snaps))), one))
+  ccRows <- one(cc)
+  series <- .fillAbsentMetrics(series, ccRows$metric)
+  series$rep <- as.integer(sub("^\\D*", "", series$rep))
+  ccRows <- .fillAbsentMetrics(ccRows, series$metric)
+  series$label <- .standLabel(series$metric, sim$sppEquiv, P(sim)$sppEquivCol)
+  ccRows$label <- .standLabel(ccRows$metric, sim$sppEquiv, P(sim)$sppEquivCol)
+  mod$standSeries <- series
+
+  env <- stats::aggregate(value ~ metric + time, series, function(v) c(mean = mean(v), min = min(v), max = max(v)))
+  env <- data.frame(poly = sa, metric = env$metric, time = env$time, env$value)
+  cmp <- .nrvComparison(env, data.frame(poly = sa, metric = ccRows$metric, mean = ccRows$value), .nrvPeriod(sim))
+  cmp$label <- .standLabel(cmp$metric, sim$sppEquiv, P(sim)$sppEquivCol)
+
+  d <- .ppCsvDir(sim, "st", sa)
+  fs <- file.path(d, c("st.csv", "st_CC.csv", "st_nrvComparison.csv"))
+  utils::write.csv(series, fs[1], row.names = FALSE)
+  utils::write.csv(ccRows[, c("metric", "label", "value")], fs[2], row.names = FALSE)
+  utils::write.csv(cmp, fs[3], row.names = FALSE)
+  mod$ppFiles <- c(mod$ppFiles, fs)
+
+  ## figures: age classes, leading types (those leading at least 0.5% of the area in some snapshot), biomass
+  leadMax <- tapply(series$value, series$metric, max)
+  groups <- list(
+    age = list(m = paste0("age_", P(sim)$ageClasses), ylab = "Share of forested area (%)", what = "forest age classes"),
+    leading = list(m = names(leadMax)[grepl("^lead_", names(leadMax)) & leadMax >= 0.5],
+                   ylab = "Share of the area (%)", what = "leading tree type"),
+    biomass = list(m = "biomassTg", ylab = "Total tree biomass (Tg)", what = "tree biomass")
+  )
+  for (g in names(groups)) {
+    m <- groups[[g]]$m
+    Plots(
+      data = list(series = series[series$metric %in% m, ], cc = ccRows[ccRows$metric %in% m, ],
+                  period = .nrvPeriod(sim), title = paste(sa, "-", groups[[g]]$what), ylab = groups[[g]]$ylab),
+      fn = .standSeriesPanels, filename = paste0("stand_", g), path = .ppFigDir(sim, "st", sa),
+      types = P(sim)$.plots, ggsaveArgs = list(width = 8, height = 5, units = "in")
+    )
+  }
   invisible(sim)
 }
 

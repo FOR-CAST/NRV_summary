@@ -4,7 +4,7 @@
 
 test_that("every implemented postprocess event is accepted, in any case", {
   check <- moduleFn(".checkPostprocessEvents", new.env())
-  expect_no_error(check(c("am", "bc", "lm", "lw", "on", "pm")))
+  expect_no_error(check(c("am", "bc", "lm", "lw", "on", "pm", "st")))
   expect_no_error(check(c("LM", "Pm")))
 })
 

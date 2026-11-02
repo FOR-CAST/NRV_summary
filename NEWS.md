@@ -2,6 +2,17 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+## Stand-level measures and the current condition against the NRV, in tables
+
+- New multi-mode postprocess event `"st"` (add it to `postprocessEvents`): at each summary time of each rep and for
+  the current condition, the share of forest in each age class, the forested share of the reporting area, the share
+  led by each vegetation type and the total tree biomass (Tg), from the saved snapshots. It writes
+  `csv/st/<studyArea>/st.csv`, `st_CC.csv` and `st_nrvComparison.csv`, draws `figures/st/<studyArea>/stand_age.png`,
+  `stand_leading.png` and `stand_biomass.png`, and the stability check tests these series too.
+- The `lm` event also writes `lm_nrvComparison.csv`: per metric the NRV range and mean, the current condition and
+  whether it is inside, above or below the range (what the current-condition overview figure draws).
+- Single mode, and so what each replicate writes, is unchanged.
+
 ## Events scheduled once
 
 - In "single" mode `map_generators` and `save_single` were scheduled twice at the same time when the start, the start of the summary period, the end or a `timeSeriesTimes` year coincided (and again by the `summaryInterval` reschedule when it reached one of them). Each is now scheduled once per distinct time, which saves duplicate work and lets reruns reuse the cache.
