@@ -1749,24 +1749,26 @@ makeAnimation <- function(sim) {
 }
 
 ## The caption of an NRV figure: what its marks show, with the replicate and year counts of the
-## data drawn. `type` is "ribbon" or "boxplot" for an envelope (`df` from summarize_nrv(), whose
+## data drawn. `type` is "ribbon" (a band), "lines" (a line per replicate) or "boxplot" for an envelope (`df` from summarize_nrv(), whose
 ## n_reps count the replicates with a value), "box" or "violin" for a per-class page (`df` of
 ## per-replicate values). `cc` holds the figure's current-condition rows, if any; the caption names
 ## the current condition when one of them has a value to draw. Wrapped to `width` inches.
 .figCaption <- function(type, df, cc = NULL, perPatch = FALSE, width = 16) {
   fewer <- " (fewer where a class is absent or the metric undefined)"
-  if (type %in% c("ribbon", "boxplot")) {
+  if (type %in% c("ribbon", "lines", "boxplot")) {
     n <- .countText(df$n_reps, "replicate")
     varies <- length(unique(df$n_reps)) > 1L
     parts <- if (type == "ribbon") {
       c(paste0("Grey band: range of ", n, " at each simulation year", if (varies) fewer), "line: mean")
+    } else if (type == "lines") {
+      c(paste0("Thin grey lines: ", n, if (varies) fewer), "bold line: median over the replicates")
     } else {
       c(
         paste0("Boxes: median and quartiles of ", n, " at each simulation year", if (varies) fewer),
         "whiskers: minimum to maximum"
       )
     }
-    ccCol <- if (type == "ribbon") "mean" else "median"
+    ccCol <- if (type == "boxplot") "median" else "mean"
     if (!is.null(cc) && any(is.finite(cc[[ccCol]]))) {
       parts <- c(parts, "red dashed line: current condition (simulation year 0)")
     }
@@ -1812,10 +1814,14 @@ makeAnimation <- function(sim) {
 ## Only units with a value get a panel, so the panels and pages counted here are those drawn. The
 ## y title is the metric's plain name and unit unless `ylab` is given; `classLabels` maps the class
 ## codes to the names shown; `captions = FALSE` omits the captions, which describe replicate
-## envelopes. The output dirs are created here (main worker).
+## envelopes. `repLines = TRUE` draws the ribbon figures as a thin grey line per replicate and the
+## median bold (the replicates' values read from the parquet aggregates, as for the per-class pages),
+## not as a band; where the aggregates hold no replicate values the band is drawn. The output dirs
+## are created here (main worker).
 .envelopeFigTasks <- function(sim, kind, p, ylab = NULL, layout = c("subregion", "metric"),
                               subdir = NULL, titlePrefix = "", minSubregions = 1L,
-                              classLabels = NULL, captions = TRUE, nrvPeriod = NULL) {
+                              classLabels = NULL, captions = TRUE, nrvPeriod = NULL,
+                              repLines = FALSE) {
   layout <- match.arg(layout)
   refCode <- LandWebUtils::refCodeFor(kind, p)
   env <- mod[[refCode]]
@@ -1830,16 +1836,29 @@ makeAnimation <- function(sim) {
       cc$class <- classLabels(cc$class)
     }
   }
+  reps <- if (repLines) nrvtools::nrv_replicate_values(.nrvAggRoot(sim, refCode))
+  if (!is.null(reps) && nrow(reps)) {
+    reps <- reps[is.finite(reps$value), , drop = FALSE]
+    if (!is.null(classLabels)) {
+      reps$class <- classLabels(reps$class)
+    }
+  }
   safe <- function(s) gsub("[/\\]", "-", s) ## filename-safe metric / subregion
   ## `nrvPeriod` (the NRV years, .nrvPeriod(sim)) is shaded on every envelope; see .addNrvShading()
   task <- function(sub, ccSub, type, facet, title, page, lay, file) {
     lev <- .levelOf(sub)
+    ## the replicates' values of the metric (and subregion) drawn, for a ribbon figure
+    repSub <- if (type == "ribbon" && !is.null(reps) && nrow(reps)) {
+      reps[reps$metric %in% sub$metric & reps$poly %in% sub$poly, , drop = FALSE]
+    }
+    if (!is.null(repSub) && !nrow(repSub)) repSub <- NULL
     list(
       plotter = "envelope", df = sub, cc = ccSub, type = type, facet = facet, nrvPeriod = nrvPeriod,
+      reps = repSub,
       ylab = if (is.null(ylab)) .metricTitle(unique(sub$metric), lev) else ylab,
       xlab = "Simulation year", title = title,
       caption = if (captions) {
-        .figCaption(type, sub, cc = ccSub, perPatch = identical(lev, "patch"), width = lay$width)
+        .figCaption(if (is.null(repSub)) type else "lines", sub, cc = ccSub, perPatch = identical(lev, "patch"), width = lay$width)
       },
       page = page, ncol = lay$ncol, nrow = if (is.null(page)) NULL else lay$nrow,
       file = file, width = lay$width, height = lay$height
@@ -2003,15 +2022,7 @@ makeAnimation <- function(sim) {
         gg <- switch(
           task[["plotter"]],
           ## the NRV years shaded over the envelope (nrvPeriod from .nrvPeriod(sim), set per task)
-          envelope = .addNrvShading(
-            nrvtools::plot_nrv_envelope(
-              task[["df"]], type = task[["type"]], facet = task[["facet"]],
-              ylab = task[["ylab"]], title = task[["title"]], ncol = task[["ncol"]],
-              nrow = task[["nrow"]], page = task[["page"]], cc = task[["cc"]],
-              xlab = task[["xlab"]], caption = task[["caption"]]
-            ),
-            task[["nrvPeriod"]]
-          ),
+          envelope = .envelopePlot(task),
           byclass = nrvtools::plot_by_class(
             task[["df"]], type = task[["type"]], page = task[["page"]], cc = task[["cc"]],
             value_col = "value", facet = "poly", ncol = task[["ncol"]], nrow = task[["nrow"]],
@@ -2063,10 +2074,13 @@ makeAnimation <- function(sim) {
   ## resolves everything; each task's data is shipped on its own as the mapped argument. (globalenv,
   ## not baseenv -- the latter trips future's "cycles in parent chains" during serialization.)
   environment(render_one) <- new.env(parent = globalenv())
-  ## the module helper render_one uses, detached the same way
-  addNrv <- .addNrvShading
-  environment(addNrv) <- new.env(parent = globalenv())
-  assign(".addNrvShading", addNrv, envir = environment(render_one))
+  ## the module helpers render_one uses, detached the same way, in render_one's own environment
+  ## so that they find each other
+  for (helper in c(".envelopePlot", ".addNrvShading", ".addReplicateLines", ".replicateLayers")) {
+    fn <- get(helper)
+    environment(fn) <- environment(render_one)
+    assign(helper, fn, envir = environment(render_one))
+  }
 
   nWorkers <- .plotWorkers(sim, length(tasks))
   message("NRV_summary: rendering ", length(tasks), " figure(s) across ", nWorkers, " worker(s)")
@@ -2111,9 +2125,10 @@ plotFun <- function(sim) {
     for (p in mod$rptPolyNames) {
       tasks <- c(
         tasks,
-        .envelopeFigTasks(sim, "lm", p, nrvPeriod = nrvPeriod),
+        .envelopeFigTasks(sim, "lm", p, nrvPeriod = nrvPeriod, repLines = TRUE),
         .envelopeFigTasks(sim, "lm", p, layout = "metric", subdir = "per-metric",
-                          titlePrefix = paste0(p, " — "), minSubregions = 2L, nrvPeriod = nrvPeriod)
+                          titlePrefix = paste0(p, " — "), minSubregions = 2L, nrvPeriod = nrvPeriod,
+                          repLines = TRUE)
       )
 
       env <- mod[[LandWebUtils::refCodeFor("lm", p)]]
@@ -2131,7 +2146,8 @@ plotFun <- function(sim) {
     for (p in mod$rptPolyNames) {
       tasks <- c(
         tasks,
-        .envelopeFigTasks(sim, "pm", p, classLabels = .vegTypeLabels, nrvPeriod = nrvPeriod),
+        .envelopeFigTasks(sim, "pm", p, classLabels = .vegTypeLabels, nrvPeriod = nrvPeriod,
+                          repLines = TRUE),
         .byClassFigTasks(sim, "pm", p, xlab = "Vegetation type",
                          titlePrefix = paste0(p, " — "), classLabels = .vegTypeLabels)
       )
@@ -2203,8 +2219,44 @@ plotFun <- function(sim) {
   c(sp[2L] - fraction * diff(sp), sp[2L])
 }
 
+## The envelope figure of one task (see .envelopeFigTasks()), the NRV years shaded behind it: nrvtools'
+## panels, scales and current-condition line, with its band replaced by the replicates' lines when the task
+## carries their values (`reps`).
+.envelopePlot <- function(task) {
+  gg <- nrvtools::plot_nrv_envelope(
+    task[["df"]], type = task[["type"]], facet = task[["facet"]],
+    ylab = task[["ylab"]], title = task[["title"]], ncol = task[["ncol"]],
+    nrow = task[["nrow"]], page = task[["page"]], cc = task[["cc"]],
+    xlab = task[["xlab"]], caption = task[["caption"]]
+  )
+  if (!is.null(gg) && !is.null(task[["reps"]])) {
+    gg <- .addReplicateLines(gg, task[["reps"]])
+  }
+  .addNrvShading(gg, task[["nrvPeriod"]])
+}
+
+## Replace the band and mean line of a `plot_nrv_envelope(type = "ribbon")` figure with each replicate as a thin
+## grey line and the median over the replicates bold (`.replicateLayers()`), in the panels of the plot. `reps`
+## has `replicate`, `time`, `value` and the panel columns (poly, class, metric, metric.1) of the plot's data,
+## whose `median` column is the bold line.
+.addReplicateLines <- function(gg, reps) {
+  keys <- intersect(c("poly", "class", "metric", "metric.1"), intersect(names(reps), names(gg$data)))
+  panels <- unique(as.data.frame(gg$data)[, c(keys, ".panel")])
+  series <- merge(reps, panels, by = keys)
+  med <- as.data.frame(gg$data)[, c("time", ".panel")]
+  med$value <- gg$data$median
+  isBand <- vapply(gg$layers, function(l) inherits(l$geom, c("GeomRibbon", "GeomLine")), logical(1))
+  gg$layers <- c(
+    .replicateLayers(series, med, ggplot2::aes(time, value, group = replicate),
+                     repColour = "grey70", medColour = "black"),
+    gg$layers[!isBand]
+  )
+  gg
+}
+
 ## Shade the NRV years `period` on an envelope figure from `plot_nrv_envelope()`, behind the data. The
-## boxplot figure has a discrete time axis (one box per time), the ribbon figure a continuous one.
+## boxplot figure has a discrete time axis (one box per time), the ribbon figure a continuous one. The shading is
+## added to the figure's caption.
 .addNrvShading <- function(gg, period) {
   if (is.null(gg) || is.null(period) || !"time" %in% names(gg$data)) {
     return(gg)
@@ -2221,7 +2273,10 @@ plotFun <- function(sim) {
                       alpha = 0.15, fill = "orange"),
     gg$layers
   )
-  gg + ggplot2::labs(caption = "shaded: NRV years")
+  ## added to the figure's caption, which says what its lines and marks show
+  caption <- gg$labels$caption
+  gg + ggplot2::labs(caption = if (is.null(caption)) "shaded: NRV years" else
+    paste0(sub("\\.$", "", caption), "; shaded: NRV years."))
 }
 
 ## The legend name of the tick at `mid` on the current-condition figures
@@ -2671,6 +2726,18 @@ stabilityCheck <- function(sim) {
          paste0(cls, " leading, share of the area (%)"))))
 }
 
+## The layers that draw replicates: each a thin line (`series`, `mapping` naming its group), the median over
+## them bold (`med`). A colour, if given, is fixed (`repColour`, `medColour`); otherwise the plot's own mapping
+## colours both.
+.replicateLayers <- function(series, med, mapping, repColour = NULL, medColour = NULL) {
+  list(
+    do.call(ggplot2::geom_line, c(list(data = series, mapping = mapping, alpha = 0.35, linewidth = 0.3),
+                                  if (!is.null(repColour)) list(colour = repColour))),
+    do.call(ggplot2::geom_line, c(list(data = med, mapping = ggplot2::aes(time, value), linewidth = 1),
+                                  if (!is.null(medColour)) list(colour = medColour)))
+  )
+}
+
 ## One stand-level figure: each rep a thin line, the median over reps bold, the current condition a circle, the
 ## NRV years shaded. `data` = list(series = (rep, time, class, value), cc = (time, class, value[, position]),
 ## period =, title =, ylab =). Classes are coloured and named in a legend on the right (the class only, in as many
@@ -2685,8 +2752,7 @@ stabilityCheck <- function(sim) {
   gg <- ggplot2::ggplot(d, ggplot2::aes(time, value, colour = class)) +
     ggplot2::annotate("rect", xmin = min(data$period), xmax = max(data$period), ymin = -Inf, ymax = Inf,
                       alpha = 0.15, fill = "orange") +
-    ggplot2::geom_line(ggplot2::aes(group = interaction(class, rep)), alpha = 0.35, linewidth = 0.3) +
-    ggplot2::geom_line(data = med, linewidth = 1)
+    .replicateLayers(d, med, ggplot2::aes(group = interaction(class, rep)))
   gg <- if (byPosition) {
     gg +
       ggplot2::scale_colour_manual(values = stats::setNames(rep("black", nClass), unique(d$class)), guide = "none") +

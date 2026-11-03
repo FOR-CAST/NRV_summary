@@ -269,3 +269,47 @@ test_that("the figure tasks render to PNG", {
   expect_warning(files <- renderTasks(sim, list(bad, tasks[[2]])), "could not render .*broken[.]png")
   expect_equal(files, tasks[[2]]$file)
 })
+
+## The envelope ribbons of lm and pm draw each replicate as its own thin grey line, with the median over the
+## replicates bold on top, as the stand-level figures do; no band is drawn.
+layer_classes <- function(gg) vapply(gg$layers, function(l) class(l$geom)[1L], character(1))
+
+test_that("a ribbon figure draws every replicate as a grey line and the median bold, with no band", {
+  withr::local_package("SpaDES.core")
+  mod <- new.env()
+  sim <- SpaDES.core::simInit(paths = testPaths)
+  write_pm_aggregates(sim, "Caribou", mod)
+  envelopeFigTasks <- moduleFn(".envelopeFigTasks", mod)
+  tasks <- envelopeFigTasks(sim, "pm", "Caribou", classLabels = function(x) x, repLines = TRUE)
+  ribbon <- tasks[[match("A ca_ribbon.png", basename(taskFiles(tasks)))]]
+  boxplot <- tasks[[match("A ca_boxplot.png", basename(taskFiles(tasks)))]]
+  expect_null(boxplot$reps) ## the box figures are unchanged
+  expect_setequal(unique(ribbon$reps$replicate), c("rep01", "rep02", "rep03"))
+
+  gg <- moduleFn(".envelopePlot", mod)(ribbon)
+  expect_false("GeomRibbon" %in% layer_classes(gg))
+  b <- ggplot2::ggplot_build(gg)
+  lines <- Filter(function(d) "group" %in% names(d) && "colour" %in% names(d), b$data)
+  perRep <- Filter(function(d) all(d$linewidth == 0.3), lines)
+  expect_length(perRep, 1L)
+  nPanels <- length(unique(gg$data$.panel))
+  expect_equal(nrow(unique(perRep[[1]][, c("PANEL", "group")])), 3L * nPanels) ## one line per replicate and panel
+  expect_true(all(perRep[[1]]$colour == "grey70")) ## light grey
+  med <- Filter(function(d) all(d$linewidth == 1), lines)
+  expect_length(med, 1L)
+  expect_equal(sort(med[[1]]$y), sort(gg$data$median)) ## the median over the replicates
+  expect_match(ribbon$caption, "Thin grey lines", fixed = TRUE)
+  expect_match(ribbon$caption, "bold line: median", fixed = TRUE)
+  expect_false(grepl("band", ribbon$caption))
+})
+
+test_that("shading the NRV years keeps the figure's caption and adds to it", {
+  d <- data.frame(time = c(100, 200, 300), y = 1:3)
+  gg <- ggplot2::ggplot(d, ggplot2::aes(time, y)) + ggplot2::geom_line() +
+    ggplot2::labs(caption = "Thin grey lines: 5 replicates; bold line: median.")
+  shaded <- moduleFn(".addNrvShading", new.env())(gg, c(200, 300))
+  expect_equal(shaded$labels$caption,
+               "Thin grey lines: 5 replicates; bold line: median; shaded: NRV years.")
+  none <- moduleFn(".addNrvShading", new.env())(ggplot2::ggplot(d, ggplot2::aes(time, y)), c(200, 300))
+  expect_equal(none$labels$caption, "shaded: NRV years")
+})

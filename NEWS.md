@@ -2,6 +2,11 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+- The `lm` and `pm` time-series figures (`<poly> <metric>_ribbon.png` and the per-metric `<metric>_ribbon_p<n>.png` pages)
+  draw each replicate as its own thin grey line with the median over the replicates bold, as the stand-level figures
+  do, instead of a min--max band and mean line. File names are unchanged; the current condition and the shaded NRV
+  years are kept. The `bc` (`sspm`) figures keep their band: it spans patches, not replicates.
+
 ## Stand-level measures and the current condition against the NRV, in tables
 
 - New multi-mode postprocess event `"st"` (add it to `postprocessEvents`): at each summary time of each rep and for
