@@ -2255,7 +2255,8 @@ plotFun <- function(sim) {
 }
 
 ## Shade the NRV years `period` on an envelope figure from `plot_nrv_envelope()`, behind the data. The
-## boxplot figure has a discrete time axis (one box per time), the ribbon figure a continuous one.
+## boxplot figure has a discrete time axis (one box per time), the ribbon figure a continuous one. The shading is
+## added to the figure's caption.
 .addNrvShading <- function(gg, period) {
   if (is.null(gg) || is.null(period) || !"time" %in% names(gg$data)) {
     return(gg)
@@ -2272,7 +2273,10 @@ plotFun <- function(sim) {
                       alpha = 0.15, fill = "orange"),
     gg$layers
   )
-  gg + ggplot2::labs(caption = "shaded: NRV years")
+  ## added to the figure's caption, which says what its lines and marks show
+  caption <- gg$labels$caption
+  gg + ggplot2::labs(caption = if (is.null(caption)) "shaded: NRV years" else
+    paste0(sub("\\.$", "", caption), "; shaded: NRV years."))
 }
 
 ## The legend name of the tick at `mid` on the current-condition figures

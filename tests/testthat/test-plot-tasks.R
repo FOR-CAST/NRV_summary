@@ -302,3 +302,14 @@ test_that("a ribbon figure draws every replicate as a grey line and the median b
   expect_match(ribbon$caption, "bold line: median", fixed = TRUE)
   expect_false(grepl("band", ribbon$caption))
 })
+
+test_that("shading the NRV years keeps the figure's caption and adds to it", {
+  d <- data.frame(time = c(100, 200, 300), y = 1:3)
+  gg <- ggplot2::ggplot(d, ggplot2::aes(time, y)) + ggplot2::geom_line() +
+    ggplot2::labs(caption = "Thin grey lines: 5 replicates; bold line: median.")
+  shaded <- moduleFn(".addNrvShading", new.env())(gg, c(200, 300))
+  expect_equal(shaded$labels$caption,
+               "Thin grey lines: 5 replicates; bold line: median; shaded: NRV years.")
+  none <- moduleFn(".addNrvShading", new.env())(ggplot2::ggplot(d, ggplot2::aes(time, y)), c(200, 300))
+  expect_equal(none$labels$caption, "shaded: NRV years")
+})
