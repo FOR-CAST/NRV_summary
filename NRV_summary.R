@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9034"),
+  version = list(NRV_summary = "2.0.0.9035"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -40,7 +40,7 @@ defineModule(sim, list(
     ## axes; the plot functions take captions.
     "FOR-CAST/nrvtools@development (>= 0.3.4.9002)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9016)",
-    "PredictiveEcology/SpaDES.core@development (>= 3.2.1.9001)" ## dirnamesFromSet(), resolveSimYears(), padYears()
+    "PredictiveEcology/SpaDES.core@development (>= 3.2.1.9057)" ## dirnamesFromSet() (bare-number replicate folders), resolveSimYears(), padYears()
   ),
   parameters = bindrows(
     defineParameter("autocorrMaxLag", "integer", 200L, 1L, NA,
