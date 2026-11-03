@@ -102,7 +102,7 @@ In `mode = "multi"`, `plotFun` writes these figures for each reporting-polygon l
 `postprocess/figures/`:
 
 - `lm/<layer>/` and `pm/<layer>/`: the NRV envelope of each metric in each subregion, as a
-  ribbon (the across-replicate mean and min--max range over the summary period) and as a
+  time series (`*_ribbon.png`: each replicate a thin grey line, the median over the replicates bold) and as a
   box-and-whisker per summary year (median and quartiles, whiskers from minimum to maximum),
   with the current condition (the year-0 snapshot) as a red dashed line where it has a value.
   Patch metrics have a panel per vegetation type. A patch-level metric (patch area, median stand
