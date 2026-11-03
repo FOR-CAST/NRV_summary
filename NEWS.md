@@ -12,6 +12,7 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 - The `lm` event also writes `lm_nrvComparison.csv`: per metric the NRV range and mean, the current condition and
   whether it is inside, above or below the range (what the current-condition overview figure draws).
 - Single mode, and so what each replicate writes, is unchanged.
+- New event `postprocess_cc` (scheduled with `lm` or `st`, after them) draws `figures/all/current_condition_all.png`: every metric of the `lm` and `st` groups in one panel, each metric's NRV range rescaled to 0-1 (0 = lowest, 1 = highest simulated value), the current condition coloured by its position; points beyond one range width are drawn at the limit with an arrow and their value. With several polygons there is one file each, `current_condition_all_<polygon>.png`. The `mid` column of `lm_nrvComparison.csv` and `st_nrvComparison.csv`, and the tick on the overview figures, is now the median over the NRV years of the per-time means (it was their mean). Stand rows run biomass, age classes young to old, forested share, leading types. `pm` writes no comparison table, so it is not on the figure. The per-group overview figures are kept.
 - The stand-level legends (`stand_age.png`, `stand_leading.png`, `stand_biomass.png`) name only the class ("Lodgepole pine"), on the right in as many columns as needed, so they are no longer cut off.
 - The `st` event also draws one figure per leading type, the mixed class included, `figures/st/<studyArea>/species/lead_<code>.png` (replicates thin, median bold, current condition, NRV years shaded), and `figures/st/<studyArea>/current_condition_overview.png`. The `lw` event pools the NRV years, so it has no series over simulation years.
 - The current condition is coloured by where it falls against the NRV range on the overview figures and the species figures: inside `#1b9e77`, below `#2166ac`, above `#7b3294`.
@@ -66,7 +67,7 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
   last `stabilityWindow` of it. `stabilityWindow` now only sets the span of the stability check; the
   "shaded: the stability window, which defines the NRV" shading is removed from the envelope figures.
 - `current_condition_overview.png` is no longer rescaled to 0-1: one facet per metric on its own scale,
-  grey bar from the NRV minimum to maximum, a tick at the NRV mean and a red dot at the current condition.
+  grey bar from the NRV minimum to maximum, a tick at the NRV median and a red dot at the current condition.
 - Figure titles, facets and axes show full metric names ("Aggregation index", "Mean patch area",
   "Median stand age", ...) from one lookup; CSVs and file names keep the codes.
 
@@ -81,7 +82,7 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 - The ribbon and boxplot figures of the landscape and patch metrics now draw the current condition as a
   dashed red line labelled "current condition", and each landscape-metric layer gets
-  `current_condition_overview.png`: every metric with the NRV range, the NRV mean and the current condition. The overview is saved through `SpaDES.core::Plots()`.
+  `current_condition_overview.png`: every metric with the NRV range, the NRV median and the current condition. The overview is saved through `SpaDES.core::Plots()`.
 - New event `postprocess_stability` asks whether the run is long enough: for each landscape metric, each
   patch metric by class and the area burned per `summaryInterval` block (from burnSummaries'
   `burnSummaries_fireSizes_allReps.csv`) it tests for a directional trend over the last

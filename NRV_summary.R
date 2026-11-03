@@ -319,6 +319,11 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         ## after the metric events above, whose parquet datasets and the burn blocks it reads
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_stability", .last() + 1)
 
+        ## one figure of every group's current condition against the NRV, after the group events that make them
+        if (any(c("lm", "st") %in% tolower(P(sim)$postprocessEvents))) {
+          sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_cc", .last() + 1)
+        }
+
         if (isTRUE(P(sim)$recordAnnualSeries)) {
           sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_autocorr", .last())
         }
@@ -382,6 +387,9 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
     },
     postprocess_stability = {
       sim <- stabilityCheck(sim)
+    },
+    postprocess_cc = {
+      sim <- currentConditionAll(sim)
     },
     postprocess_bc = {
       sim <- makeSeralStageMapsBC(sim)
@@ -2216,13 +2224,16 @@ plotFun <- function(sim) {
   gg + ggplot2::labs(caption = "shaded: NRV years")
 }
 
-## The NRV range of each poly x metric: smallest min, largest max and mean of the mean, over the
+## The legend name of the tick at `mid` on the current-condition figures
+.nrvMidLabel <- "NRV median"
+
+## The NRV range of each poly x metric: smallest min, largest max and median of the mean, over the
 ## times of `period` (the NRV years). `env` has poly, metric, time, mean, min and max.
 .nrvRange <- function(env, period) {
   env <- env[env$time >= min(period) & env$time <= max(period), , drop = FALSE]
   byMetric <- split(env, paste(env$poly, env$metric, sep = "\r"))
   do.call(rbind, lapply(byMetric, function(e) {
-    data.frame(poly = e$poly[1L], metric = e$metric[1L], lo = min(e$min), hi = max(e$max), mid = mean(e$mean))
+    data.frame(poly = e$poly[1L], metric = e$metric[1L], lo = min(e$min), hi = max(e$max), mid = stats::median(e$mean))
   }))
 }
 
@@ -2244,15 +2255,26 @@ plotFun <- function(sim) {
     return(invisible())
   }
   f <- file.path(.ppCsvDir(sim, kind, layer), paste0(kind, "_nrvComparison.csv"))
-  utils::write.csv(.nrvComparison(env, cc, .nrvPeriod(sim)), f, row.names = FALSE)
+  cmp <- .nrvComparison(env, cc, .nrvPeriod(sim))
+  utils::write.csv(cmp, f, row.names = FALSE)
+  .recordComparison(kind, cmp, layer)
   mod$ppFiles <- c(mod$ppFiles, f)
+  invisible()
+}
+
+## Keep the comparison of one analysis `kind` and reporting `layer` for the figure of every group
+## (`currentConditionAll()`), with its group and the metric's label (a `label` column, else `.metricLabel()`).
+.recordComparison <- function(kind, cmp, layer = "") {
+  cmp$group <- unname(.ccAllGroups[kind])
+  if (is.null(cmp$label)) cmp$label <- .metricLabel(cmp$metric)
+  mod$nrvComparisons[[paste(kind, layer)]] <- cmp
   invisible()
 }
 
 ## Where the current condition falls within the NRV, one facet per metric on its real scale.
 ## `data` = list(env =, cc =, period =): the envelope over the summary times (min, max, mean per time), the
 ## current-condition snapshot (mean) and the NRV years. The grey bar is the NRV range (smallest min to
-## largest max over the NRV years), the black tick the NRV mean, the dot the current condition, coloured by
+## largest max over the NRV years), the black tick the NRV median, the dot the current condition, coloured by
 ## its position: inside, below or above the range (`.positionColour`). `data$labels` (default `.metricLabel`)
 ## names the metrics.
 .currentConditionOverview <- function(data) {
@@ -2261,11 +2283,11 @@ plotFun <- function(sim) {
   nrv$panel <- paste0(if (length(unique(nrv$poly)) > 1L) paste0(nrv$poly, ": ") else "", labels(nrv$metric))
   ggplot2::ggplot(nrv) +
     ggplot2::geom_segment(ggplot2::aes(x = lo, xend = hi, y = 0, yend = 0), colour = "grey75", linewidth = 4) +
-    ggplot2::geom_point(ggplot2::aes(x = mid, y = 0, shape = "NRV mean"), size = 3) +
+    ggplot2::geom_point(ggplot2::aes(x = mid, y = 0, shape = .nrvMidLabel), size = 3) +
     ggplot2::geom_point(ggplot2::aes(x = current, y = 0, colour = position), size = 3) +
     ggplot2::scale_colour_manual(values = .positionColour, breaks = names(.positionColour),
                                  labels = unname(.positionLabels), drop = FALSE, name = "current condition") +
-    ggplot2::scale_shape_manual(values = c("NRV mean" = 124), name = NULL) +
+    ggplot2::scale_shape_manual(values = stats::setNames(124, .nrvMidLabel), name = NULL) +
     ggplot2::facet_wrap(~panel, scales = "free_x", labeller = ggplot2::label_wrap_gen(30)) +
     ggplot2::labs(x = "metric value (grey bar: NRV range over the NRV years)", y = NULL,
                   title = "Current condition relative to the NRV") +
@@ -2273,6 +2295,111 @@ plotFun <- function(sim) {
     ggplot2::theme(legend.position = "bottom", axis.text.y = ggplot2::element_blank(),
                    axis.ticks.y = ggplot2::element_blank(), panel.grid.major.y = ggplot2::element_blank(),
                    panel.grid.minor.y = ggplot2::element_blank())
+}
+
+## ---- every metric of every group on one figure ----------------------------------------------------------
+## The groups that write an nrvComparison table, by analysis kind: lm (landscape metrics) and st (stand-level
+## measures). pm and the other kinds have none, so they are not on the figure.
+.ccAllGroups <- c(lm = "landscape", st = "stand")
+.ccAllTitles <- c(landscape = "Landscape metrics", stand = "Stand-level measures")
+.ccAllXlab <- "position relative to the natural range (0 = lowest, 1 = highest simulated value)"
+.ccAllLimits <- c(-1, 2) ## a point further out than one range width beyond an end is drawn at the limit
+
+## `x` on the scale where the NRV range [lo, hi] is 0 to 1. A range of one value (hi == lo) is given a width of
+## 1% of the value (at least 0.01) centred on it.
+.nrvScale <- function(x, lo, hi) {
+  width <- hi - lo
+  point <- width == 0
+  width <- ifelse(point, 0.01 * pmax(abs(hi), 1), width)
+  lo <- ifelse(point, lo - width / 2, lo)
+  (x - lo) / width
+}
+
+## Order of the stand-level rows: biomass, the age classes young to old (`.ccAllAgeOrder`; others after, by name),
+## the forested share, then the leading types. Landscape rows have one rank, so they keep their order.
+.ccAllAgeOrder <- c("Young", "Immature", "Mature", "Old")
+.standRank <- function(metric, group) {
+  age <- match(sub("^age_", "", metric), .ccAllAgeOrder, nomatch = length(.ccAllAgeOrder) + 1L)
+  ifelse(group != "stand", 0, ifelse(metric == "biomassTg", 1, ifelse(grepl("^age_", metric), 2 + age / 10,
+         ifelse(metric == "forested", 3, 4))))
+}
+
+## The rows of the figure from the recorded comparisons (`poly`, `metric`, `group`, `label`, `lo`, `hi`, `mid`,
+## `current`, `position`): a leading type that is 0 in the current condition and in the NRV is dropped; the NRV
+## mid and the current condition are rescaled (xMid, xCurrent); the current condition is drawn at xPlot, clipped
+## to `.ccAllLimits` (clipped = TRUE); y is the row, from the top, with a row above each group for its title.
+.currentConditionAllData <- function(cmp) {
+  cmp <- cmp[!(grepl("^lead_", cmp$metric) & cmp$current == 0 & cmp$hi == 0), , drop = FALSE]
+  cmp$group <- factor(cmp$group, names(.ccAllTitles))
+  cmp <- cmp[order(cmp$group, .standRank(cmp$metric, cmp$group), ifelse(cmp$group == "stand", cmp$label, "")), , drop = FALSE]
+  cmp$xMid <- .nrvScale(cmp$mid, cmp$lo, cmp$hi)
+  cmp$xCurrent <- .nrvScale(cmp$current, cmp$lo, cmp$hi)
+  cmp$xPlot <- pmin(pmax(cmp$xCurrent, .ccAllLimits[1]), .ccAllLimits[2])
+  cmp$clipped <- cmp$xPlot != cmp$xCurrent
+  cmp$group <- as.character(cmp$group)
+  newGroup <- !duplicated(cmp$group)
+  cmp$y <- -(seq_len(nrow(cmp)) + cumsum(newGroup))
+  attr(cmp, "titles") <- data.frame(group = cmp$group[newGroup], y = cmp$y[newGroup] + 1,
+                                    title = unname(.ccAllTitles[cmp$group[newGroup]]))
+  cmp
+}
+
+## One panel, a row per metric: the grey bar is the NRV range (0 to 1), the black tick the NRV median, the dot the
+## current condition, coloured by its position. A current condition clipped at the limit has an arrow and its
+## value written beside it.
+.currentConditionAll <- function(data) {
+  titles <- attr(data, "titles")
+  clip <- data[data$clipped, , drop = FALSE]
+  dir <- sign(clip$xCurrent)
+  ggplot2::ggplot(data) +
+    ggplot2::geom_segment(ggplot2::aes(x = 0, xend = 1, y = y, yend = y), colour = "grey75", linewidth = 3) +
+    ggplot2::geom_point(ggplot2::aes(x = xMid, y = y, shape = .nrvMidLabel), size = 3) +
+    ggplot2::geom_point(ggplot2::aes(x = xPlot, y = y, colour = position), size = 2.5) +
+    ggplot2::geom_segment(data = clip, ggplot2::aes(x = xPlot - dir * 0.12, xend = xPlot, y = y, yend = y, colour = position),
+                          arrow = grid::arrow(length = grid::unit(0.08, "in")), show.legend = FALSE) +
+    ggplot2::geom_text(data = clip, ggplot2::aes(x = xPlot - dir * 0.16, y = y, label = signif(current, 3), colour = position),
+                       hjust = ifelse(dir > 0, 1, 0), size = 2.6, show.legend = FALSE) +
+    ggplot2::geom_text(data = titles, ggplot2::aes(x = .ccAllLimits[1], y = y, label = title), hjust = 0,
+                       fontface = "bold", size = 3.2) +
+    ggplot2::geom_vline(xintercept = c(0, 1), linetype = "dotted", colour = "grey60") +
+    ggplot2::scale_y_continuous(breaks = data$y, labels = data$label, expand = ggplot2::expansion(add = 0.8)) +
+    ggplot2::scale_x_continuous(breaks = seq(.ccAllLimits[1], .ccAllLimits[2], 0.5),
+                                limits = .ccAllLimits + c(-0.1, 0.1)) +
+    ggplot2::scale_colour_manual(values = .positionColour, breaks = names(.positionColour),
+                                 labels = unname(.positionLabels), drop = FALSE, name = "current condition") +
+    ggplot2::scale_shape_manual(values = stats::setNames(124, .nrvMidLabel), name = NULL) +
+    ggplot2::labs(x = .ccAllXlab, y = NULL, title = "Current condition relative to the NRV") +
+    ggplot2::theme_bw(base_size = 9) +
+    ggplot2::theme(legend.position = "bottom", panel.grid.major.y = ggplot2::element_blank(),
+                   panel.grid.minor = ggplot2::element_blank())
+}
+
+## figures/all/<name>.png: `current_condition_all`, with the polygon's name appended when there are several
+## polygons (characters that are not letters, digits, . or - become _)
+.ccAllName <- function(poly, nPoly) {
+  if (nPoly > 1L) paste0("current_condition_all_", gsub("[^A-Za-z0-9.-]+", "_", poly)) else "current_condition_all"
+}
+
+## The `postprocess_cc` event: one figure per reporting polygon with every group's NRV comparison recorded by the
+## lm and st events (`.recordComparison()`), written to postprocess/figures/all/ and registered as outputs.
+currentConditionAll <- function(sim) {
+  cmp <- do.call(rbind, mod$nrvComparisons)
+  if (is.null(cmp) || !nrow(cmp)) {
+    message("NRV_summary: no NRV comparisons for the combined current-condition figure")
+    return(invisible(sim))
+  }
+  polys <- unique(cmp$poly)
+  types <- P(sim)$.plots
+  dir <- reproducible::checkPath(file.path(.ppRoot(sim), "figures", "all"), create = TRUE)
+  for (p in polys) {
+    d <- .currentConditionAllData(cmp[cmp$poly == p, , drop = FALSE])
+    name <- .ccAllName(p, length(polys))
+    Plots(data = d, fn = .currentConditionAll, filename = name, path = dir, types = types,
+          ggsaveArgs = list(width = 11, height = 2 + 0.25 * nrow(d), units = "in"))
+    f <- file.path(dir, paste0(name, ".png"))
+    if (file.exists(f)) sim <- registerOutputs(f, sim)
+  }
+  invisible(sim)
 }
 
 ## ---- is the run long enough? Directional change over the last part of the summary period -----------
@@ -2622,6 +2749,7 @@ standMetrics <- function(sim) {
   env <- data.frame(poly = sa, metric = env$metric, time = env$time, env$value)
   cmp <- .nrvComparison(env, data.frame(poly = sa, metric = ccRows$metric, mean = ccRows$value), .nrvPeriod(sim))
   cmp$label <- .standLabel(cmp$metric, sim$sppEquiv, P(sim)$sppEquivCol)
+  .recordComparison("st", cmp, sa)
 
   d <- .ppCsvDir(sim, "st", sa)
   fs <- file.path(d, c("st.csv", "st_CC.csv", "st_nrvComparison.csv"))

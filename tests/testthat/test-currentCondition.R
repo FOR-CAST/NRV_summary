@@ -17,7 +17,7 @@ test_that("the NRV range spans every summary time, not only the last of them", {
   r <- .nrvRange(overviewEnv(), period = c(100, 300))
   r <- r[r$metric == "ai", ]
   expect_equal(c(r$lo, r$hi), c(8, 52)) ## the time-100 envelope is part of the NRV
-  expect_equal(r$mid, mean(c(50, 10, 10)))
+  expect_equal(r$mid, median(c(50, 10, 10)))
   ## times outside the summary period are not
   r2 <- .nrvRange(overviewEnv(), period = c(200, 300))
   expect_equal(c(r2$lo[r2$metric == "ai"], r2$hi[r2$metric == "ai"]), c(8, 12))
