@@ -40,7 +40,7 @@ defineModule(sim, list(
     ## axes; the plot functions take captions.
     "FOR-CAST/nrvtools@development (>= 0.3.4.9002)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9016)",
-    "PredictiveEcology/SpaDES.core@development (>= 3.2.1.9001)" ## dirnamesFromSet(), resolveSimYears(), padYears()
+    "PredictiveEcology/SpaDES.core@development (>= 3.2.1.9057)" ## dirnamesFromSet() (bare-number replicate folders), resolveSimYears(), padYears()
   ),
   parameters = bindrows(
     defineParameter("autocorrMaxLag", "integer", 200L, 1L, NA,
