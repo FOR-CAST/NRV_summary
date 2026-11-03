@@ -2224,13 +2224,16 @@ plotFun <- function(sim) {
   gg + ggplot2::labs(caption = "shaded: NRV years")
 }
 
-## The NRV range of each poly x metric: smallest min, largest max and mean of the mean, over the
+## The legend name of the tick at `mid` on the current-condition figures
+.nrvMidLabel <- "NRV median"
+
+## The NRV range of each poly x metric: smallest min, largest max and median of the mean, over the
 ## times of `period` (the NRV years). `env` has poly, metric, time, mean, min and max.
 .nrvRange <- function(env, period) {
   env <- env[env$time >= min(period) & env$time <= max(period), , drop = FALSE]
   byMetric <- split(env, paste(env$poly, env$metric, sep = "\r"))
   do.call(rbind, lapply(byMetric, function(e) {
-    data.frame(poly = e$poly[1L], metric = e$metric[1L], lo = min(e$min), hi = max(e$max), mid = mean(e$mean))
+    data.frame(poly = e$poly[1L], metric = e$metric[1L], lo = min(e$min), hi = max(e$max), mid = stats::median(e$mean))
   }))
 }
 
@@ -2271,7 +2274,7 @@ plotFun <- function(sim) {
 ## Where the current condition falls within the NRV, one facet per metric on its real scale.
 ## `data` = list(env =, cc =, period =): the envelope over the summary times (min, max, mean per time), the
 ## current-condition snapshot (mean) and the NRV years. The grey bar is the NRV range (smallest min to
-## largest max over the NRV years), the black tick the NRV mean, the dot the current condition, coloured by
+## largest max over the NRV years), the black tick the NRV median, the dot the current condition, coloured by
 ## its position: inside, below or above the range (`.positionColour`). `data$labels` (default `.metricLabel`)
 ## names the metrics.
 .currentConditionOverview <- function(data) {
@@ -2280,11 +2283,11 @@ plotFun <- function(sim) {
   nrv$panel <- paste0(if (length(unique(nrv$poly)) > 1L) paste0(nrv$poly, ": ") else "", labels(nrv$metric))
   ggplot2::ggplot(nrv) +
     ggplot2::geom_segment(ggplot2::aes(x = lo, xend = hi, y = 0, yend = 0), colour = "grey75", linewidth = 4) +
-    ggplot2::geom_point(ggplot2::aes(x = mid, y = 0, shape = "NRV mean"), size = 3) +
+    ggplot2::geom_point(ggplot2::aes(x = mid, y = 0, shape = .nrvMidLabel), size = 3) +
     ggplot2::geom_point(ggplot2::aes(x = current, y = 0, colour = position), size = 3) +
     ggplot2::scale_colour_manual(values = .positionColour, breaks = names(.positionColour),
                                  labels = unname(.positionLabels), drop = FALSE, name = "current condition") +
-    ggplot2::scale_shape_manual(values = c("NRV mean" = 124), name = NULL) +
+    ggplot2::scale_shape_manual(values = stats::setNames(124, .nrvMidLabel), name = NULL) +
     ggplot2::facet_wrap(~panel, scales = "free_x", labeller = ggplot2::label_wrap_gen(30)) +
     ggplot2::labs(x = "metric value (grey bar: NRV range over the NRV years)", y = NULL,
                   title = "Current condition relative to the NRV") +
@@ -2312,6 +2315,15 @@ plotFun <- function(sim) {
   (x - lo) / width
 }
 
+## Order of the stand-level rows: biomass, the age classes young to old (`.ccAllAgeOrder`; others after, by name),
+## the forested share, then the leading types. Landscape rows have one rank, so they keep their order.
+.ccAllAgeOrder <- c("Young", "Immature", "Mature", "Old")
+.standRank <- function(metric, group) {
+  age <- match(sub("^age_", "", metric), .ccAllAgeOrder, nomatch = length(.ccAllAgeOrder) + 1L)
+  ifelse(group != "stand", 0, ifelse(metric == "biomassTg", 1, ifelse(grepl("^age_", metric), 2 + age / 10,
+         ifelse(metric == "forested", 3, 4))))
+}
+
 ## The rows of the figure from the recorded comparisons (`poly`, `metric`, `group`, `label`, `lo`, `hi`, `mid`,
 ## `current`, `position`): a leading type that is 0 in the current condition and in the NRV is dropped; the NRV
 ## mid and the current condition are rescaled (xMid, xCurrent); the current condition is drawn at xPlot, clipped
@@ -2319,7 +2331,7 @@ plotFun <- function(sim) {
 .currentConditionAllData <- function(cmp) {
   cmp <- cmp[!(grepl("^lead_", cmp$metric) & cmp$current == 0 & cmp$hi == 0), , drop = FALSE]
   cmp$group <- factor(cmp$group, names(.ccAllTitles))
-  cmp <- cmp[order(cmp$group), , drop = FALSE]
+  cmp <- cmp[order(cmp$group, .standRank(cmp$metric, cmp$group), ifelse(cmp$group == "stand", cmp$label, "")), , drop = FALSE]
   cmp$xMid <- .nrvScale(cmp$mid, cmp$lo, cmp$hi)
   cmp$xCurrent <- .nrvScale(cmp$current, cmp$lo, cmp$hi)
   cmp$xPlot <- pmin(pmax(cmp$xCurrent, .ccAllLimits[1]), .ccAllLimits[2])
@@ -2332,7 +2344,7 @@ plotFun <- function(sim) {
   cmp
 }
 
-## One panel, a row per metric: the grey bar is the NRV range (0 to 1), the black tick the NRV mean, the dot the
+## One panel, a row per metric: the grey bar is the NRV range (0 to 1), the black tick the NRV median, the dot the
 ## current condition, coloured by its position. A current condition clipped at the limit has an arrow and its
 ## value written beside it.
 .currentConditionAll <- function(data) {
@@ -2341,7 +2353,7 @@ plotFun <- function(sim) {
   dir <- sign(clip$xCurrent)
   ggplot2::ggplot(data) +
     ggplot2::geom_segment(ggplot2::aes(x = 0, xend = 1, y = y, yend = y), colour = "grey75", linewidth = 3) +
-    ggplot2::geom_point(ggplot2::aes(x = xMid, y = y, shape = "NRV mean"), size = 3) +
+    ggplot2::geom_point(ggplot2::aes(x = xMid, y = y, shape = .nrvMidLabel), size = 3) +
     ggplot2::geom_point(ggplot2::aes(x = xPlot, y = y, colour = position), size = 2.5) +
     ggplot2::geom_segment(data = clip, ggplot2::aes(x = xPlot - dir * 0.12, xend = xPlot, y = y, yend = y, colour = position),
                           arrow = grid::arrow(length = grid::unit(0.08, "in")), show.legend = FALSE) +
@@ -2355,7 +2367,7 @@ plotFun <- function(sim) {
                                 limits = .ccAllLimits + c(-0.1, 0.1)) +
     ggplot2::scale_colour_manual(values = .positionColour, breaks = names(.positionColour),
                                  labels = unname(.positionLabels), drop = FALSE, name = "current condition") +
-    ggplot2::scale_shape_manual(values = c("NRV mean" = 124), name = NULL) +
+    ggplot2::scale_shape_manual(values = stats::setNames(124, .nrvMidLabel), name = NULL) +
     ggplot2::labs(x = .ccAllXlab, y = NULL, title = "Current condition relative to the NRV") +
     ggplot2::theme_bw(base_size = 9) +
     ggplot2::theme(legend.position = "bottom", panel.grid.major.y = ggplot2::element_blank(),

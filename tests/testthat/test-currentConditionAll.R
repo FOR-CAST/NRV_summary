@@ -79,3 +79,29 @@ test_that("the combined figure is written once per polygon and registered as an 
   expect_true(file.exists(f))
   expect_true(normalizePath(f) %in% normalizePath(SpaDES.core::outputs(sim)$file))
 })
+
+test_that("the NRV mid is the median over the NRV years, not the mean", {
+  env <- data.frame(poly = "E", metric = "a", time = c(0, 700, 800, 1000), mean = c(1000, 1, 2, 9), min = 0, max = 10)
+  expect_equal(.nrvRange(env, c(700, 1000))$mid, 2) ## the mean would be 4; time 0 is outside the NRV years
+})
+
+test_that("the NRV tick is labelled median on the combined and the per-group figures", {
+  expect_identical(.nrvMidLabel, "NRV median")
+  cc <- data.frame(poly = "ELF", metric = "ai", mean = 11)
+  env <- data.frame(time = c(100, 200), poly = "ELF", metric = "ai", mean = 10, min = 8, max = 12)
+  g1 <- ggplot2::ggplot_build(.currentConditionOverview(list(env = env, cc = cc, period = c(100, 200))))
+  g2 <- ggplot2::ggplot_build(.currentConditionAll(.currentConditionAllData(cmpRows())))
+  expect_identical(g1$plot$scales$get_scales("shape")$get_labels(), "NRV median")
+  expect_identical(g2$plot$scales$get_scales("shape")$get_labels(), "NRV median")
+})
+
+test_that("stand rows run biomass, age classes young to old, forested share, then leading types by label", {
+  m <- c("lead_B", "age_Old", "forested", "lead_A", "age_Young", "biomassTg", "age_Mature", "age_Immature")
+  cmp <- data.frame(poly = "E", metric = m, group = "stand", label = c("B leading", "Old", "Forested", "A leading", "Young",
+                    "Biomass", "Mature", "Immature"), lo = 0, hi = 1, mid = 0.5, current = 0.5, position = "inside")
+  cmp <- rbind(cmp, transform(cmpRows("E")[1:2, ], group = "landscape"))
+  d <- .currentConditionAllData(cmp)
+  expect_identical(d$metric[d$group == "stand"], c("biomassTg", "age_Young", "age_Immature", "age_Mature", "age_Old",
+                                                   "forested", "lead_A", "lead_B"))
+  expect_identical(d$metric[d$group == "landscape"], c("ai", "area_mn")) ## unchanged
+})
