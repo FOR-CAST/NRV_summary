@@ -33,7 +33,18 @@ test_that("the overview is on each metric's real scale, one facet per metric", {
   x <- unlist(lapply(b$data, function(l) c(l$x, l$xmin, l$xend)))
   expect_true(all(c(8, 52, 11, 20000) %in% x)) ## raw min, max and current condition; not 0-1
   expect_gt(max(x), 1000)
-  expect_true("current condition" %in% b$plot$scales$get_scales("colour")$get_labels())
+  expect_identical(b$plot$scales$get_scales("colour")$get_labels(names(.positionColour)), unname(.positionLabels)) ## all three named
+})
+
+test_that("the overview colours the current condition by its position against the NRV range", {
+  ## ai NRV range 8-52 (time 100 included): 11 inside, 2 below; area_mn range 4998-5002..25002: 90000 above
+  cc <- data.frame(poly = "ELF", metric = c("ai", "area_mn"), mean = c(2, 90000))
+  b <- ggplot2::ggplot_build(.currentConditionOverview(list(env = overviewEnv(), cc = cc, period = c(100, 300))))
+  pts <- b$data[[3]]
+  expect_setequal(pts$colour, c("#2166ac", "#7b3294"))
+  cc$mean <- c(11, 5000)
+  b <- ggplot2::ggplot_build(.currentConditionOverview(list(env = overviewEnv(), cc = cc, period = c(100, 300))))
+  expect_identical(unique(b$data[[3]]$colour), "#1b9e77")
 })
 
 test_that("the overview facets carry the full metric names", {
