@@ -55,9 +55,49 @@ test_that("stand-level labels name the leading type by sppEquiv", {
 })
 
 test_that("the stand-level figure draws reps, their median and the current condition", {
-  s <- data.frame(rep = rep(1:2, each = 3), time = rep(c(0, 500, 1000), 2), label = "Old", value = 1:6)
-  g <- .standSeriesPanels(list(series = s, cc = data.frame(time = 0, label = "Old", value = 2),
+  s <- data.frame(rep = rep(1:2, each = 3), time = rep(c(0, 500, 1000), 2), class = "Old", value = 1:6)
+  g <- .standSeriesPanels(list(series = s, cc = data.frame(time = 0, class = "Old", value = 2),
                                period = c(700, 1000), title = "t", ylab = "y"))
   expect_s3_class(g, "ggplot")
   expect_silent(ggplot2::ggplot_build(g))
+})
+
+test_that("legend entries are the class only, on the right, in columns that keep them on the figure", {
+  se <- data.frame(LandR = "Pinu_con", EN_generic_full = "Lodgepole pine")
+  expect_identical(.standClass(c("lead_Pinu_con", "lead_Mixed", "age_Old", "forested", "biomassTg"), se),
+                   c("Lodgepole pine", "Mixed", "Old", "Forested", "Total tree biomass"))
+  expect_identical(.standClass(c("lead_Pinu_con", "lead_Mixed")), c("Pinu con", "Mixed")) ## no sppEquiv: one name each
+  cls <- paste0("Species number ", 1:30)
+  s <- expand.grid(rep = 1:2, time = c(0, 500), class = cls, stringsAsFactors = FALSE)
+  s$value <- 1
+  g <- .standSeriesPanels(list(series = s, cc = data.frame(time = 0, class = cls, value = 1),
+                               period = c(300, 500), title = "t", ylab = "y"))
+  expect_identical(g$theme$legend.position, "right")
+  expect_identical(g$guides$guides$colour$params$ncol, 3) ## 30 entries: 12 to a column
+  expect_identical(as.character(unique(ggplot2::ggplot_build(g)$plot$data$class))[1], "Species number 1")
+})
+
+test_that("a position colours the current condition: inside green, below blue, above purple", {
+  expect_identical(unname(.positionColour[c("inside", "below", "above")]), c("#1b9e77", "#2166ac", "#7b3294"))
+  s <- data.frame(rep = rep(1:2, each = 3), time = rep(c(0, 500, 1000), 2), class = "Old", value = 1:6)
+  g <- .standSeriesPanels(list(series = s, cc = data.frame(time = 0, class = "Old", value = 2, position = "above"),
+                               period = c(700, 1000), title = "t", ylab = "y"))
+  b <- ggplot2::ggplot_build(g)
+  pt <- b$data[[length(b$data)]]
+  expect_identical(pt$fill, "#7b3294")
+})
+
+test_that("each leading type, the mixed class included, gets a figure with its position", {
+  g <- expand.grid(rep = 1:5, time = c(0, 100), metric = c("lead_A", "lead_Mixed", "lead_Z", "age_Old"),
+                   stringsAsFactors = FALSE)
+  g$value <- ifelse(g$metric == "lead_Z", 0, 5)
+  g$class <- .standClass(g$metric)
+  cc <- data.frame(metric = c("lead_A", "lead_Mixed", "lead_Z", "age_Old"), time = 0, value = c(1, 5, 0, 5))
+  cc$class <- .standClass(cc$metric)
+  cmp <- data.frame(metric = cc$metric, position = c("below", "inside", "inside", "inside"))
+  f <- .speciesFigData(g, cc, cmp, c(50, 100), "ELF")
+  expect_identical(names(f), c("lead_A", "lead_Mixed")) ## not an age class, nor a type that never leads
+  expect_identical(f$lead_A$cc$position, "below")
+  expect_identical(unique(f$lead_A$series$rep), 1:5)
+  expect_silent(ggplot2::ggplot_build(.standSeriesPanels(f$lead_A)))
 })

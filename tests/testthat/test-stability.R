@@ -96,3 +96,17 @@ test_that("the stability series keep landscape and class rows, not one row per p
   expect_false(anyDuplicated(kept[key]) > 0L)
   expect_true(anyDuplicated(raw[key]) > 0L)
 })
+
+test_that("a stability page's canvas holds the panels it has, and the bold line is the median", {
+  expect_equal(.pageLayout(13, 1)[c("ncol", "nrow")], list(ncol = 4L, nrow = 3L))
+  one <- .pageLayout(13, 2) ## the last page: 1 panel
+  expect_equal(c(one$ncol, one$nrow, one$width, one$height), c(1, 1, 8, 5))
+  expect_lt(.pageLayout(14, 2)$height, .pageLayout(14, 1)$height)
+  d <- list(series = data.frame(kind = "burn", layer = "a", poly = "a", level = "landscape", class = NA, metric = "m",
+                                rep = rep(1:3, each = 2), time = rep(1:2, 3), value = c(1, 1, 1, 1, 10, 10)),
+            flag = "stable", id = "burn a a landscape NA m")
+  g <- .stabilityPanels(d, c(1, 2), ncol = 1L, nrow = 1L)
+  expect_match(g$labels$caption, "bold: median")
+  b <- ggplot2::ggplot_build(g)
+  expect_equal(b$data[[3]]$y, c(1, 1)) ## the median of 1, 1, 10; the mean would be 4
+})

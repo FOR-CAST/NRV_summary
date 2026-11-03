@@ -12,6 +12,10 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 - The `lm` event also writes `lm_nrvComparison.csv`: per metric the NRV range and mean, the current condition and
   whether it is inside, above or below the range (what the current-condition overview figure draws).
 - Single mode, and so what each replicate writes, is unchanged.
+- The stand-level legends (`stand_age.png`, `stand_leading.png`, `stand_biomass.png`) name only the class ("Lodgepole pine"), on the right in as many columns as needed, so they are no longer cut off.
+- The `st` event also draws one figure per leading type, the mixed class included, `figures/st/<studyArea>/species/lead_<code>.png` (replicates thin, median bold, current condition, NRV years shaded), and `figures/st/<studyArea>/current_condition_overview.png`. The `lw` event pools the NRV years, so it has no series over simulation years.
+- The current condition is coloured by where it falls against the NRV range on the overview figures and the species figures: inside `#1b9e77`, below `#2166ac`, above `#7b3294`.
+- Stability pages are sized to the panels they hold (a last page with one panel was a full blank canvas), and the bold line is the median, not the mean.
 
 - Multi mode finds replicate folders named by the bare number (`.../370/16/`, as `SpaDES.project::pathBuild()` writes them), not only `rep16`: SpaDES.core >= 3.2.1.9057 (PredictiveEcology/SpaDES.core#515).
 

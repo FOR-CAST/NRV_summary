@@ -1676,6 +1676,11 @@ makeAnimation <- function(sim) {
   max(1L, as.integer(ceiling(nPanels / perPage)))
 }
 
+## The layout of page `page` of `nPanels` panels at `perPage` a page: the last page holds only what is left.
+.pageLayout <- function(nPanels, page, perPage = 12L) {
+  .figLayout(min(perPage, nPanels - perPage * (page - 1L)), paginate = TRUE)
+}
+
 .pageTitle <- function(title, page, nPages) {
   if (nPages > 1L) paste0(title, " (page ", page, " of ", nPages, ")") else title
 }
@@ -2171,8 +2176,10 @@ plotFun <- function(sim) {
 }
 
 ## ---- current condition on the figures ---------------------------------------------------------
-## the legend label and colour of the current condition, on every figure that shows it
-.ccColour <- c("current condition" = "firebrick")
+## where the current condition falls against the NRV range (.nrvComparison()'s `position`): its colour and legend
+## label, on every figure that colours the current condition
+.positionColour <- c(inside = "#1b9e77", below = "#2166ac", above = "#7b3294")
+.positionLabels <- c(inside = "inside the NRV range", below = "below the NRV range", above = "above the NRV range")
 
 ## Add the current-condition value to an envelope figure from `plot_nrv_envelope()` as a dashed red
 ## horizontal line labelled "current condition", in the panel it belongs to. `cc` has the facet
@@ -2245,18 +2252,21 @@ plotFun <- function(sim) {
 ## Where the current condition falls within the NRV, one facet per metric on its real scale.
 ## `data` = list(env =, cc =, period =): the envelope over the summary times (min, max, mean per time), the
 ## current-condition snapshot (mean) and the NRV years. The grey bar is the NRV range (smallest min to
-## largest max over the NRV years), the black tick the NRV mean, the red dot the current condition.
-## A dot beyond the bar is outside the NRV.
+## largest max over the NRV years), the black tick the NRV mean, the dot the current condition, coloured by
+## its position: inside, below or above the range (`.positionColour`). `data$labels` (default `.metricLabel`)
+## names the metrics.
 .currentConditionOverview <- function(data) {
   nrv <- .nrvComparison(data$env, data$cc, data$period)
-  nrv$panel <- paste0(if (length(unique(nrv$poly)) > 1L) paste0(nrv$poly, ": ") else "", .metricLabel(nrv$metric))
+  labels <- if (is.null(data$labels)) .metricLabel else data$labels
+  nrv$panel <- paste0(if (length(unique(nrv$poly)) > 1L) paste0(nrv$poly, ": ") else "", labels(nrv$metric))
   ggplot2::ggplot(nrv) +
     ggplot2::geom_segment(ggplot2::aes(x = lo, xend = hi, y = 0, yend = 0), colour = "grey75", linewidth = 4) +
     ggplot2::geom_point(ggplot2::aes(x = mid, y = 0, shape = "NRV mean"), size = 3) +
-    ggplot2::geom_point(ggplot2::aes(x = current, y = 0, colour = names(.ccColour)), size = 3) +
-    ggplot2::scale_colour_manual(values = .ccColour, name = NULL) +
+    ggplot2::geom_point(ggplot2::aes(x = current, y = 0, colour = position), size = 3) +
+    ggplot2::scale_colour_manual(values = .positionColour, breaks = names(.positionColour),
+                                 labels = unname(.positionLabels), drop = FALSE, name = "current condition") +
     ggplot2::scale_shape_manual(values = c("NRV mean" = 124), name = NULL) +
-    ggplot2::facet_wrap(~panel, scales = "free_x") +
+    ggplot2::facet_wrap(~panel, scales = "free_x", labeller = ggplot2::label_wrap_gen(30)) +
     ggplot2::labs(x = "metric value (grey bar: NRV range over the NRV years)", y = NULL,
                   title = "Current condition relative to the NRV") +
     ggplot2::theme_bw(base_size = 9) +
@@ -2377,7 +2387,7 @@ plotFun <- function(sim) {
 ## the window the check looks at: the last `stabilityWindow` of the summary period
 .stabilityWindow <- function(sim) .lastFraction(P(sim)$summaryPeriod, P(sim)$stabilityWindow)
 
-## Panels of each series over time (reps as thin lines, mean in bold), the window shaded, and the
+## Panels of each series over time (reps as thin lines, median in bold), the window shaded, and the
 ## verdict in each panel title; `page` of `nPages` panels sets.
 .stabilityPanels <- function(data, window, page = 1L, ncol = 4L, nrow = 3L) {
   d <- data$series
@@ -2387,9 +2397,9 @@ plotFun <- function(sim) {
     ggplot2::annotate("rect", xmin = window[1L], xmax = window[2L], ymin = -Inf, ymax = Inf,
                       alpha = 0.15, fill = "orange") +
     ggplot2::geom_line(ggplot2::aes(group = rep), colour = "grey60", linewidth = 0.3) +
-    ggplot2::stat_summary(fun = mean, geom = "line", linewidth = 0.8) +
+    ggplot2::stat_summary(fun = stats::median, geom = "line", linewidth = 0.8) +
     ggforce::facet_wrap_paginate(~panel, ncol = ncol, nrow = nrow, page = page, scales = "free_y") +
-    ggplot2::labs(x = "time", y = NULL, caption = "shaded: stability window; thin lines: reps; bold: mean") +
+    ggplot2::labs(x = "time", y = NULL, caption = "shaded: stability window; thin lines: reps; bold: median") +
     ggplot2::theme_bw(base_size = 9)
 }
 
@@ -2436,13 +2446,15 @@ stabilityCheck <- function(sim) {
   for (k in unique(series$kind)) {
     sk <- series[series$kind == k, , drop = FALSE]
     rk <- res[res$kind == k, , drop = FALSE]
-    nPages <- ceiling(nrow(rk) / 12L)
+    nPages <- .nPages(nrow(rk))
     for (pg in seq_len(nPages)) {
+      ## the canvas holds the panels of this page: a last page with few panels is not a full page
+      lay <- .pageLayout(nrow(rk), pg)
       Plots(
         data = list(series = sk, flag = rk$flag, id = do.call(paste, rk[.stabilityKeys])),
-        fn = .stabilityPanels, window = window, page = pg,
+        fn = .stabilityPanels, window = window, page = pg, ncol = lay$ncol, nrow = lay$nrow,
         filename = paste0("stability_", k, "_p", pg), path = figDir,
-        types = P(sim)$.plots, ggsaveArgs = list(width = 16, height = 10, units = "in")
+        types = P(sim)$.plots, ggsaveArgs = list(width = lay$width, height = lay$height, units = "in")
       )
     }
   }
@@ -2507,34 +2519,76 @@ stabilityCheck <- function(sim) {
   out[order(out$rep, out$time, out$metric), ]
 }
 
-## Readable names of the stand-level metrics; a leading type by `sppEquiv`'s EN_generic_full when it has one
-.standLabel <- function(metric, sppEquiv = NULL, sppEquivCol = "LandR") {
+.leadingYlab <- "Share of the area (%)" ## the y title of the leading-type figures
+.standFigSize <- list(width = 9, height = 5, units = "in") ## the size of a stand-level figure
+
+## The class a stand-level metric is about, for a legend where the axis says what is measured: the age class,
+## the leading type (by `sppEquiv`'s EN_generic_full when it has one), or the measure itself.
+.standClass <- function(metric, sppEquiv = NULL, sppEquivCol = "LandR") {
   code <- sub("^lead_", "", metric)
   sp <- if (!is.null(sppEquiv) && "EN_generic_full" %in% names(sppEquiv)) {
     sppEquiv[["EN_generic_full"]][match(code, sppEquiv[[sppEquivCol]])]
-  } else NA_character_
+  } else rep(NA_character_, length(code))
   sp <- ifelse(is.na(sp), .vegTypeLabels(code), sp)
-  ifelse(metric == "biomassTg", "Total tree biomass (Tg)",
-  ifelse(metric == "forested", "Forested share of the area (%)",
-  ifelse(grepl("^age_", metric), paste0(sub("^age_", "", metric), " forest, share of forested area (%)"),
-         paste0(sp, " leading, share of the area (%)"))))
+  ifelse(metric == "biomassTg", "Total tree biomass",
+  ifelse(metric == "forested", "Forested",
+  ifelse(grepl("^age_", metric), sub("^age_", "", metric), sp)))
 }
 
-## One stand-level figure: each rep a thin line, the median over reps bold, the current condition an open
-## circle, the NRV years shaded. `data` = list(series = (rep, time, label, value), cc = (time, label, value),
-## period =, title =, ylab =).
+## Readable names of the stand-level metrics (the CSV labels): `.standClass()` with what is measured
+.standLabel <- function(metric, sppEquiv = NULL, sppEquivCol = "LandR") {
+  cls <- .standClass(metric, sppEquiv, sppEquivCol)
+  ifelse(metric == "biomassTg", "Total tree biomass (Tg)",
+  ifelse(metric == "forested", "Forested share of the area (%)",
+  ifelse(grepl("^age_", metric), paste0(cls, " forest, share of forested area (%)"),
+         paste0(cls, " leading, share of the area (%)"))))
+}
+
+## One stand-level figure: each rep a thin line, the median over reps bold, the current condition a circle, the
+## NRV years shaded. `data` = list(series = (rep, time, class, value), cc = (time, class, value[, position]),
+## period =, title =, ylab =). Classes are coloured and named in a legend on the right (the class only, in as many
+## columns as it takes to fit); when `cc` has a `position` the figure is of one class, drawn in black, and the
+## circle is filled by its position against the NRV range (`.positionColour`).
 .standSeriesPanels <- function(data) {
   d <- data$series
-  med <- stats::aggregate(value ~ label + time, d, stats::median)
-  ggplot2::ggplot(d, ggplot2::aes(time, value, colour = label)) +
+  cc <- data$cc
+  nClass <- length(unique(d$class))
+  byPosition <- "position" %in% names(cc)
+  med <- stats::aggregate(value ~ class + time, d, stats::median)
+  gg <- ggplot2::ggplot(d, ggplot2::aes(time, value, colour = class)) +
     ggplot2::annotate("rect", xmin = min(data$period), xmax = max(data$period), ymin = -Inf, ymax = Inf,
                       alpha = 0.15, fill = "orange") +
-    ggplot2::geom_line(ggplot2::aes(group = interaction(label, rep)), alpha = 0.35, linewidth = 0.3) +
-    ggplot2::geom_line(data = med, linewidth = 1) +
-    ggplot2::geom_point(data = data$cc, shape = 1, size = 2.5, stroke = 1) +
+    ggplot2::geom_line(ggplot2::aes(group = interaction(class, rep)), alpha = 0.35, linewidth = 0.3) +
+    ggplot2::geom_line(data = med, linewidth = 1)
+  gg <- if (byPosition) {
+    gg +
+      ggplot2::scale_colour_manual(values = stats::setNames(rep("black", nClass), unique(d$class)), guide = "none") +
+      ggplot2::geom_point(data = cc, ggplot2::aes(time, value, fill = position), inherit.aes = FALSE,
+                          shape = 21, colour = "black", size = 3.5, stroke = 1) +
+      ggplot2::scale_fill_manual(values = .positionColour, labels = function(b) unname(.positionLabels[b]),
+                                 name = "current condition")
+  } else {
+    gg + ggplot2::geom_point(data = cc, shape = 1, size = 2.5, stroke = 1) +
+      ggplot2::guides(colour = ggplot2::guide_legend(ncol = ceiling(nClass / 12)))
+  }
+  gg +
     ggplot2::labs(x = "Simulation year", y = data$ylab, colour = NULL, title = data$title,
                   caption = "thin lines: replicates; bold: median; circle: current condition; shaded: NRV years") +
-    ggplot2::theme_bw(base_size = 12) + ggplot2::theme(legend.position = "bottom")
+    ggplot2::theme_bw(base_size = 12) +
+    ggplot2::theme(legend.position = if (nClass > 1L || byPosition) "right" else "none")
+}
+
+## The data of one figure per leading type (`lead_*` metrics that lead somewhere), for `.standSeriesPanels()`: the
+## replicates' series, the current condition with its `position` from `cmp` (.nrvComparison() rows), named by metric.
+.speciesFigData <- function(series, ccRows, cmp, period, sa, sppEquiv = NULL, sppEquivCol = "LandR") {
+  leadMax <- tapply(series$value, series$metric, max)
+  m <- names(leadMax)[grepl("^lead_", names(leadMax)) & leadMax > 0]
+  ccRows$position <- cmp$position[match(ccRows$metric, cmp$metric)]
+  stats::setNames(lapply(m, function(x) {
+    list(series = series[series$metric == x, , drop = FALSE], cc = ccRows[ccRows$metric == x, , drop = FALSE],
+         period = period, ylab = .leadingYlab,
+         title = paste(sa, "-", .standClass(x, sppEquiv, sppEquivCol), "leading"))
+  }), m)
 }
 
 standMetrics <- function(sim) {
@@ -2560,6 +2614,8 @@ standMetrics <- function(sim) {
   ccRows <- .fillAbsentMetrics(ccRows, series$metric)
   series$label <- .standLabel(series$metric, sim$sppEquiv, P(sim)$sppEquivCol)
   ccRows$label <- .standLabel(ccRows$metric, sim$sppEquiv, P(sim)$sppEquivCol)
+  series$class <- .standClass(series$metric, sim$sppEquiv, P(sim)$sppEquivCol)
+  ccRows$class <- .standClass(ccRows$metric, sim$sppEquiv, P(sim)$sppEquivCol)
   mod$standSeries <- series
 
   env <- stats::aggregate(value ~ metric + time, series, function(v) c(mean = mean(v), min = min(v), max = max(v)))
@@ -2569,7 +2625,7 @@ standMetrics <- function(sim) {
 
   d <- .ppCsvDir(sim, "st", sa)
   fs <- file.path(d, c("st.csv", "st_CC.csv", "st_nrvComparison.csv"))
-  utils::write.csv(series, fs[1], row.names = FALSE)
+  utils::write.csv(series[names(series) != "class"], fs[1], row.names = FALSE)
   utils::write.csv(ccRows[, c("metric", "label", "value")], fs[2], row.names = FALSE)
   utils::write.csv(cmp, fs[3], row.names = FALSE)
   mod$ppFiles <- c(mod$ppFiles, fs)
@@ -2579,7 +2635,7 @@ standMetrics <- function(sim) {
   groups <- list(
     age = list(m = paste0("age_", P(sim)$ageClasses), ylab = "Share of forested area (%)", what = "forest age classes"),
     leading = list(m = names(leadMax)[grepl("^lead_", names(leadMax)) & leadMax >= 0.5],
-                   ylab = "Share of the area (%)", what = "leading tree type"),
+                   ylab = .leadingYlab, what = "leading tree type"),
     biomass = list(m = "biomassTg", ylab = "Total tree biomass (Tg)", what = "tree biomass")
   )
   for (g in names(groups)) {
@@ -2588,9 +2644,24 @@ standMetrics <- function(sim) {
       data = list(series = series[series$metric %in% m, ], cc = ccRows[ccRows$metric %in% m, ],
                   period = .nrvPeriod(sim), title = paste(sa, "-", groups[[g]]$what), ylab = groups[[g]]$ylab),
       fn = .standSeriesPanels, filename = paste0("stand_", g), path = .ppFigDir(sim, "st", sa),
-      types = P(sim)$.plots, ggsaveArgs = list(width = 8, height = 5, units = "in")
+      types = P(sim)$.plots, ggsaveArgs = .standFigSize
     )
   }
+
+  ## one figure per leading type (the mixed class too): figures/st/<studyArea>/species/lead_<code>.png
+  spp <- .speciesFigData(series, ccRows, cmp, .nrvPeriod(sim), sa, sim$sppEquiv, P(sim)$sppEquivCol)
+  for (m in names(spp)) {
+    Plots(data = spp[[m]], fn = .standSeriesPanels, filename = m, path = .ppFigDir(sim, "st", sa, "species"),
+          types = P(sim)$.plots, ggsaveArgs = .standFigSize)
+  }
+
+  ## where the current condition falls against the NRV, one panel per stand-level metric
+  Plots(
+    data = list(env = env, cc = data.frame(poly = sa, metric = ccRows$metric, mean = ccRows$value),
+                period = .nrvPeriod(sim), labels = function(m) .standLabel(m, sim$sppEquiv, P(sim)$sppEquivCol)),
+    fn = .currentConditionOverview, filename = "current_condition_overview", path = .ppFigDir(sim, "st", sa),
+    types = P(sim)$.plots, ggsaveArgs = list(width = 12, height = 10, units = "in")
+  )
   invisible(sim)
 }
 
