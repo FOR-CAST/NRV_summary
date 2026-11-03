@@ -2,6 +2,8 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+- Multi mode finds replicate folders named by the bare number (`.../370/16/`, as `SpaDES.project::pathBuild()` writes them), not only `rep16`: SpaDES.core >= 3.2.1.9057 (PredictiveEcology/SpaDES.core#515).
+
 ## Events scheduled once
 
 - In "single" mode `map_generators` and `save_single` were scheduled twice at the same time when the start, the start of the summary period, the end or a `timeSeriesTimes` year coincided (and again by the `summaryInterval` reschedule when it reached one of them). Each is now scheduled once per distinct time, which saves duplicate work and lets reruns reuse the cache.
