@@ -39,3 +39,4 @@ vignettes/*.pdf
 .Renviron
 
 NRV_summary2.Rmd
+/NRV_summary.html
