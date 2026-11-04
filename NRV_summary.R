@@ -14,9 +14,9 @@ defineModule(sim, list(
   loadOrder = list(after = c("Biomass_core")),
   documentation = list("README.md", "NRV_summary.Rmd"), ## .md produced from .Rmd
   reqdPkgs = list(
-    "data.table", "dplyr", "fs", "future.apply", "future.callr",
+    "crayon", "data.table", "dplyr", "fs", "future", "future.apply", "future.callr",
     "ggforce", "ggplot2", "gifski", "googledrive", "landscapemetrics", "qs2",
-    "RColorBrewer", "sf", "terra", "tidyterra",
+    "RColorBrewer", "reproducible", "sf", "terra", "tidyterra",
     "PredictiveEcology/LandR@development (>= 1.2.0.9024)",
     "PredictiveEcology/LandWebUtils@development (>= 1.0.3.9016)",
     ## 0.2.10 floor, not 0.2.7: the LandWeb#118 tenure x sub-region crossings mint refCodes of the
