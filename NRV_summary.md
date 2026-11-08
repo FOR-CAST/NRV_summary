@@ -1,7 +1,7 @@
 ---
 title: "NRV_summary Manual"
-subtitle: "v.2.0.0.9024"
-date: "Last updated: 2026-11-04"
+subtitle: "v.2.0.0.9039"
+date: "Last updated: 2026-11-08"
 output:
   bookdown::html_document2:
     toc: true
@@ -99,9 +99,21 @@ Table \@ref(tab:moduleInputs-NRV-summary) shows the full list of module inputs.
    <td style="text-align:left;"> NA </td>
   </tr>
   <tr>
+   <td style="text-align:left;"> sppColorVectReporting </td>
+   <td style="text-align:left;"> character </td>
+   <td style="text-align:left;"> (mode = 'multi', with `sppEquivColReporting`) named colours for the reporting groups and 'Mixed'. If absent, `LandR::sppColors()` on the reporting column. </td>
+   <td style="text-align:left;"> NA </td>
+  </tr>
+  <tr>
    <td style="text-align:left;"> sppEquiv </td>
    <td style="text-align:left;"> data.table </td>
    <td style="text-align:left;"> table of species equivalencies. See `LandR::sppEquivalencies_CA`.NANA </td>
+   <td style="text-align:left;"> NA </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> standAgeMap </td>
+   <td style="text-align:left;"> SpatRaster </td>
+   <td style="text-align:left;"> (mode = 'single') stand age of the current forest (e.g. Biomass_borealDataPrep's), on the grid of `pixelGroupMap` or on a larger grid aligned with it. The year-0 stand-age map, with `ccStandAgeSource = 'standAgeMap'`. </td>
    <td style="text-align:left;"> NA </td>
   </tr>
   <tr>
@@ -131,6 +143,15 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
  </thead>
 <tbody>
   <tr>
+   <td style="text-align:left;"> autocorrMaxLag </td>
+   <td style="text-align:left;"> integer </td>
+   <td style="text-align:left;"> 200 </td>
+   <td style="text-align:left;"> 1 </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> longest lag (years) of the autocorrelation of the annual landscape series, which gives the thinning interval for the summary snapshots. </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
    <td style="text-align:left;"> ageClasses </td>
    <td style="text-align:left;"> character </td>
    <td style="text-align:left;"> Young, I.... </td>
@@ -155,6 +176,15 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> maximum possible age </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> ccStandAgeSource </td>
+   <td style="text-align:left;"> character </td>
+   <td style="text-align:left;"> standAgeMap </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> (mode = 'single') where the current condition's (year 0's) stand-age map comes from: 'standAgeMap', the age layer `sim$standAgeMap` (e.g. Biomass_borealDataPrep's) on the pixels with cohorts, rounded and then floored to the decade, as `LandR::standAgeMapGenerator()` floors the simulated years' ages; or 'cohortData', that generator's biomass-weighted age of the year-0 cohorts, which keeps the binning of the cohort ages. 'standAgeMap' warns and uses the cohorts when `sim$standAgeMap` is absent or not on a grid aligned with `pixelGroupMap`. The simulated years always come from the cohorts. </td>
    <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
@@ -185,6 +215,15 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
+   <td style="text-align:left;"> recordAnnualSeries </td>
+   <td style="text-align:left;"> logical </td>
+   <td style="text-align:left;"> TRUE </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> (mode = 'single') record a few landscape scalars every year (proportion young and old, mean stand age, total biomass, proportion by leading species) in `annualSeries.csv`. In 'multi' mode they give the autocorrelation time of the landscape, hence how far apart the summary snapshots must be to be independent. </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
    <td style="text-align:left;"> reuseAggregates </td>
    <td style="text-align:left;"> logical </td>
    <td style="text-align:left;"> FALSE </td>
@@ -208,7 +247,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> lm, pm </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
-   <td style="text-align:left;"> Specify which subset of postprocessing events to run. At least one of: 'am' for the stand-age time-series animation (GIF); 'bc' for BC seral stage patch metrics; 'fd' for forest degradation indicators; 'lm' for default landscape metrics; 'lw' for default LandWeb summaries 'pm' for default patch metrics; 'on' for ON patch metrics. </td>
+   <td style="text-align:left;"> Specify which subset of postprocessing events to run. At least one of: 'am' for the stand-age time-series animation (GIF); 'bc' for BC seral stage patch metrics; 'lm' for default landscape metrics; 'lw' for default LandWeb summaries 'pm' for default patch metrics; 'st' for stand-level measures (age-class, leading-type and forested shares, total biomass) at each summary time, from the saved snapshots; 'on' for ON patch metrics. Any other value is an error ('fd', forest degradation indicators, is not implemented). </td>
    <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
@@ -248,6 +287,51 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
+   <td style="text-align:left;"> stabilityAlpha </td>
+   <td style="text-align:left;"> numeric </td>
+   <td style="text-align:left;"> 0.05 </td>
+   <td style="text-align:left;"> 0 </td>
+   <td style="text-align:left;"> 1 </td>
+   <td style="text-align:left;"> (mode = 'multi') significance level of the Mann-Kendall trend test in the stability check. </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> stabilityMinChange </td>
+   <td style="text-align:left;"> numeric </td>
+   <td style="text-align:left;"> 0.1 </td>
+   <td style="text-align:left;"> 0 </td>
+   <td style="text-align:left;"> 1 </td>
+   <td style="text-align:left;"> (mode = 'multi') a series is flagged 'still changing' only if its fitted change across the stability window exceeds this fraction of the series' range (its largest minus smallest value over all reps within the window), as well as being a significant trend. </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> stabilityWindow </td>
+   <td style="text-align:left;"> numeric </td>
+   <td style="text-align:left;"> 0.5 </td>
+   <td style="text-align:left;"> 0 </td>
+   <td style="text-align:left;"> 1 </td>
+   <td style="text-align:left;"> (mode = 'multi') the last fraction of `summaryPeriod` over which the stability check looks for a directional trend (0.5 = the last half). A run whose metrics are still trending there needs to be longer. It does not define the NRV (see `nrvWindow`). </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> nrvWindow </td>
+   <td style="text-align:left;"> numeric </td>
+   <td style="text-align:left;"> 0.3 </td>
+   <td style="text-align:left;"> 0 </td>
+   <td style="text-align:left;"> 1 </td>
+   <td style="text-align:left;"> the NRV is the last fraction of `summaryPeriod` (0.3 = the last 30%; in a 1000-year run, years 700-1000). Must be above 0 and at most 1. The NRV range and the current condition overview use only the summary times in it; the time-series figures still show all of `summaryPeriod`, with the NRV years shaded. </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> sppEquivColReporting </td>
+   <td style="text-align:left;"> character </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> (mode = 'multi') column of `sim$sppEquiv` that groups the simulated species (`sppEquivCol`) for reporting. When set, the vegetation-type maps that the 'lm', 'lw' and 'pm' analyses read, for the simulated years and for current conditions, are rebuilt from the saved `cohortData` and `pixelGroupMap` with each species recoded to its group, so biomass is summed within a group before the leading type is decided. `LandR::vegTypeMapGenerator()` sums only within a code, so relabelling the species-level maps would not give this. `NA` (the default) analyses the species-level maps the simulation saved. </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
    <td style="text-align:left;"> summaryInterval </td>
    <td style="text-align:left;"> integer </td>
    <td style="text-align:left;"> 100 </td>
@@ -259,19 +343,19 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
   <tr>
    <td style="text-align:left;"> summaryPeriod </td>
    <td style="text-align:left;"> integer </td>
-   <td style="text-align:left;"> 700, 1000 </td>
+   <td style="text-align:left;"> 0, 10 </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
-   <td style="text-align:left;"> lower and upper end of the range of simulation times used for summary analyses. </td>
+   <td style="text-align:left;"> lower and upper end of the range of simulation times summarised and shown in the time-series figures; default is the whole run. The NRV is the last `nrvWindow` fraction of it. </td>
    <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> timeSeriesTimes </td>
    <td style="text-align:left;"> numeric </td>
-   <td style="text-align:left;"> 601, 602.... </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
-   <td style="text-align:left;"> simulation times for which to build time steries animations. </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> simulation times for which to build time series animations; default (NA) is start + 601:650 when the run is that long, otherwise the last 50 years of the run. </td>
    <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
@@ -358,8 +442,37 @@ raising ImageMagick's `policy.xml` memory/disk limits (see
 
 ### Plotting
 
-`plotFun` writes the NRV envelope figures (ribbon + box-and-whisker) per reporting
-polygon; the `"am"` event additionally writes the stand-age animation GIF (see *Events*).
+In `mode = "multi"`, `plotFun` writes these figures for each reporting-polygon layer, under
+`postprocess/figures/`:
+
+- `lm/<layer>/` and `pm/<layer>/`: the NRV envelope of each metric in each subregion, as a
+  time series (`*_ribbon.png`: each replicate a thin grey line, the median over the replicates bold) and as a
+  box-and-whisker per summary year (median and quartiles, whiskers from minimum to maximum),
+  with the current condition (the year-0 snapshot) as a red dashed line where it has a value.
+  Patch metrics have a panel per vegetation type. A patch-level metric (patch area, median stand
+  age of a patch) enters as each replicate's mean over its patches, so the envelope spans the
+  replicates, as for the class-level metrics.
+- `lm/<layer>/per-metric/`: the envelopes of each landscape metric with a panel per subregion,
+  up to 12 panels to a page.
+- `pm/<layer>/per-metric/`: box and violin plots of each patch metric for each vegetation type,
+  a panel per subregion, from the values of each replicate and summary year (a patch-level
+  metric averaged over each replicate's patches), with the current condition as a red point.
+  Patch area has no pages of its own: a replicate's mean patch area is the class's `area_mn`.
+- `boxplots/<layer>/` and `histograms/<layer>/`: the LandWeb summaries (`lw`), with the current
+  condition in red. Besides a boxplot per subregion and leading vegetation type,
+  `boxplots/<layer>/<subregion> share of forest.png` has a panel per age class and a box per
+  leading type of its share of the subregion's forested area.
+- `sspm/<layer>/`: the BC seral patch metrics (`bc`), one paginated envelope figure-set per metric.
+
+The y axes name each metric and its unit, and each envelope and per-class figure has a caption
+saying what its marks show, with the numbers of replicates and simulation years drawn. A class
+absent from a map has a class area (`ca`) of 0 ha: the `pm` event writes these zeros to the
+aggregates, for each class a subregion shows in its current condition or in any replicate-year,
+so the class-area figures count the replicate-years without the class. The `lw` event does the
+same for the vegetation types in every `lw` metric (leading proportion, share of the forest,
+large-patch count and area).
+
+The `"am"` event additionally writes the stand-age animation GIF (see *Events*).
 
 ### Saving
 
