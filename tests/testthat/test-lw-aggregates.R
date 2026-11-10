@@ -1,5 +1,6 @@
 ## The lw aggregates behind the leading-vegetation boxplots and large-patch histograms (2.0.0.9033):
-## a vegetation type absent from a replicate-year gets 0, and each subregion gets a figure of the
+## a vegetation type absent from a replicate-year gets 0 in the area metrics but no leading
+## proportion, and each subregion gets a figure of the
 ## leading types' shares of its forest.
 
 ## leading proportions, shares of the forest and large-patch counts of `species` (and All species)
@@ -15,7 +16,7 @@ new_lw_replicate <- function(rep, species, time, poly = "A") {
         one("class", "Npatch_ge100ha", 2))
 }
 
-test_that("vegetation types a replicate-year lacks get 0 in every lw metric", {
+test_that("vegetation types a replicate-year lacks get 0 in every lw area metric, no leading proportion", {
   withr::local_package("SpaDES.core")
   mod <- new.env()
   sim <- SpaDES.core::simInit(paths = testPaths)
@@ -46,11 +47,13 @@ test_that("vegetation types a replicate-year lacks get 0 in every lw metric", {
   a <- v[v$poly == "A", ]
   ## each replicate-year has every metric and age class of each type subregion A shows anywhere
   expect_setequal(unique(a$metric.1), c("Decid", "Fir", "Pine", "All species"))
-  expect_equal(nrow(a), 4L * 4L * 3L * 2L)
+  ## 4 replicate-years x 4 types x 3 metrics x 2 age classes, less the leading proportions of the 8
+  ## (replicate-year, type) pairs without the type: 0 of 0 ha is no value
+  expect_equal(nrow(a), 4L * 4L * 3L * 2L - 8L * 2L)
   expect_equal(nrow(unique(a[c("replicate", "time", "metric.1", "metric", "class")])), nrow(a))
   pick <- function(d, r, t, sp, met) d$value[d$replicate == r & d$time == t & d$metric.1 == sp &
                                                d$metric == met & d$class == "Old"]
-  expect_equal(pick(a, "rep02", 800L, "Decid", "leadingProp"), 0)
+  expect_length(pick(a, "rep02", 800L, "Decid", "leadingProp"), 0L)
   expect_equal(pick(a, "rep02", 800L, "Decid", "leadingShare"), 0)
   expect_equal(pick(a, "rep02", 800L, "Decid", "Npatch_ge100ha"), 0)
   expect_equal(pick(a, "rep01", 700L, "Decid", "leadingProp"), 0.5)

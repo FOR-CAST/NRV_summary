@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9035"),
+  version = list(NRV_summary = "2.0.0.9036"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -831,14 +831,15 @@ InitMulti <- function(sim) {
   )
 }
 
-## The same for the LandWeb summaries (lw): 0 in every lw metric (leading proportion, share of the
-## forest, large-patch count and area) of each vegetation type that a subregion shows but lacks in
-## a replicate-year. The nrvtools producers write rows only for the types present in a map, so a
-## type that leads in 7 of 105 replicate-years had its boxes drawn from those 7 alone. Each metric x
-## age class the dataset holds is filled.
+## The same for the LandWeb summaries (lw): 0 in every lw area metric (share of the forest,
+## large-patch count and area) of each vegetation type that a subregion shows but lacks in a
+## replicate-year. The nrvtools producers write rows only for the types present in a map, so a type
+## that leads in 7 of 105 replicate-years had its boxes drawn from those 7 alone. Each metric x age
+## class the dataset holds is filled, except the leading proportion: it is the share of the type's
+## own forest in each age class, which has no value (0 of 0 ha) where the type is absent.
 .fillLeadingZeros <- function(roots, zerosFile = "lw_zeros.parquet") {
-  .fillAbsentZeros(roots, zerosFile, select = identity, classCol = "metric.1",
-                   otherCols = c("level", "metric", "class"))
+  .fillAbsentZeros(roots, zerosFile, select = function(ds) dplyr::filter(ds, .data$metric != "leadingProp"),
+                   classCol = "metric.1", otherCols = c("level", "metric", "class"))
 }
 
 ## Rows of 0 for each class (`classCol`) that a subregion shows -- in its current condition or in
