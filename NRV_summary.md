@@ -1,7 +1,7 @@
 ---
 title: "NRV_summary Manual"
-subtitle: "v.1.1.2.9001"
-date: "Last updated: 2026-03-27"
+subtitle: "v.2.0.0.9036"
+date: "Last updated: 2026-11-13"
 output:
   bookdown::html_document2:
     toc: true
@@ -45,7 +45,7 @@ Produces 'X over time' and other summaries for multiple landscape and patch metr
 
 Table \@ref(tab:moduleInputs-NRV-summary) shows the full list of module inputs.
 
-<table class="table" style="color: black; margin-left: auto; margin-right: auto;">
+<table class="table" style="margin-left: auto; margin-right: auto;">
 <caption>(\#tab:moduleInputs-NRV-summary)(\#tab:moduleInputs-NRV-summary)List of (ref:NRV-summary) input objects and their description.</caption>
  <thead>
   <tr>
@@ -60,6 +60,12 @@ Table \@ref(tab:moduleInputs-NRV-summary) shows the full list of module inputs.
    <td style="text-align:left;"> cohortData </td>
    <td style="text-align:left;"> data.table </td>
    <td style="text-align:left;"> Required in single mode. </td>
+   <td style="text-align:left;"> NA </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> LandTypeCC_reporting </td>
+   <td style="text-align:left;"> SpatRaster </td>
+   <td style="text-align:left;"> Current-conditions land cover (Canada LCC 2020) with urban RETAINED. Used to correct the year-0 current-condition snapshot: the simulation imputes urban to its nearest forest type (pre-industrial state), so the year-0 rasters would otherwise report imputed forest as real current forest. Only urban differs between the sim and reporting layers -- water/barren/snow are already NA on both sides. </td>
    <td style="text-align:left;"> NA </td>
   </tr>
   <tr>
@@ -93,9 +99,21 @@ Table \@ref(tab:moduleInputs-NRV-summary) shows the full list of module inputs.
    <td style="text-align:left;"> NA </td>
   </tr>
   <tr>
+   <td style="text-align:left;"> sppColorVectReporting </td>
+   <td style="text-align:left;"> character </td>
+   <td style="text-align:left;"> (mode = 'multi', with `sppEquivColReporting`) named colours for the reporting groups and 'Mixed'. If absent, `LandR::sppColors()` on the reporting column. </td>
+   <td style="text-align:left;"> NA </td>
+  </tr>
+  <tr>
    <td style="text-align:left;"> sppEquiv </td>
    <td style="text-align:left;"> data.table </td>
    <td style="text-align:left;"> table of species equivalencies. See `LandR::sppEquivalencies_CA`.NANA </td>
+   <td style="text-align:left;"> NA </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> standAgeMap </td>
+   <td style="text-align:left;"> SpatRaster </td>
+   <td style="text-align:left;"> (mode = 'single') stand age of the current forest (e.g. Biomass_borealDataPrep's), on the grid of `pixelGroupMap` or on a larger grid aligned with it. The year-0 stand-age map, with `ccStandAgeSource = 'standAgeMap'`. </td>
    <td style="text-align:left;"> NA </td>
   </tr>
   <tr>
@@ -110,7 +128,7 @@ Table \@ref(tab:moduleInputs-NRV-summary) shows the full list of module inputs.
 Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
 
 
-<table class="table" style="color: black; margin-left: auto; margin-right: auto;">
+<table class="table" style="margin-left: auto; margin-right: auto;">
 <caption>(\#tab:moduleParams-NRV-summary)(\#tab:moduleParams-NRV-summary)List of (ref:NRV-summary) parameters and their description.</caption>
  <thead>
   <tr>
@@ -120,6 +138,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <th style="text-align:left;"> min </th>
    <th style="text-align:left;"> max </th>
    <th style="text-align:left;"> paramDesc </th>
+   <th style="text-align:left;"> cacheKey </th>
   </tr>
  </thead>
 <tbody>
@@ -130,6 +149,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> descriptions/labels for age classes (seral stages) </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> ageClassCutOffs </td>
@@ -138,6 +158,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> defines the age boundaries between age classes </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> ageClassMaxAge </td>
@@ -146,6 +167,25 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> maximum possible age </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> ccStandAgeSource </td>
+   <td style="text-align:left;"> character </td>
+   <td style="text-align:left;"> standAgeMap </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> (mode = 'single') where the current condition's (year 0's) stand-age map comes from: 'standAgeMap', the age layer `sim$standAgeMap` (e.g. Biomass_borealDataPrep's) on the pixels with cohorts, rounded and then floored to the decade, as `LandR::standAgeMapGenerator()` floors the simulated years' ages; or 'cohortData', that generator's biomass-weighted age of the year-0 cohorts, which keeps the binning of the cohort ages. 'standAgeMap' warns and uses the cohorts when `sim$standAgeMap` is absent or not on a grid aligned with `pixelGroupMap`. The simulated years always come from the cohorts. </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> patchDirections </td>
+   <td style="text-align:left;"> integer </td>
+   <td style="text-align:left;"> 4 </td>
+   <td style="text-align:left;"> 4 </td>
+   <td style="text-align:left;"> 8 </td>
+   <td style="text-align:left;"> patch connectivity for the 'lw' (LandWeb summary) large-patch analysis, passed to `nrvtools::largePatchCounts()` (via `landscapemetrics::get_patches`): `4` = rook / 4-connected (matches v2's GDAL `polygonize`; the default), `8` = queen / 8-connected. NOTE: v2 was fixed at 4-connectivity; exposing 8 (queen) is a departure from v2. </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> mixedType </td>
@@ -154,6 +194,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> How to define mixed stands: `0L` for none; `1L` for any species admixture; `2L` for deciduous &gt; conifer. See `LandR::vegTypeMapGenerator`. </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> mode </td>
@@ -162,6 +203,25 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> use 'single' to run part of a simulation; use 'multi' to run as part of postprocessing multiple runs. </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> reuseAggregates </td>
+   <td style="text-align:left;"> logical </td>
+   <td style="text-align:left;"> FALSE </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> (mode = 'multi') if TRUE, reuse a complete per-replicate `_aggregates` parquet dataset instead of recomputing it, re-summarizing the surviving parquets to regenerate the envelopes/CSVs/figures. Use to iterate on the plots/CSVs without re-running the (~hours) landscape-metric aggregation; leave FALSE for a fresh run. </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> plotWorkers </td>
+   <td style="text-align:left;"> integer </td>
+   <td style="text-align:left;"> 8 </td>
+   <td style="text-align:left;"> 1 </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> (mode = 'multi') hard cap on the number of local worker processes used to render the postprocess figures in parallel (each figure is an independent `ggsave`). The actual count is RAM-aware (`pemisc::optimalClusterNum`) but never exceeds this cap, so a shared compute node is not swamped; 1 renders sequentially. Uses `future` multisession (not fork; the crew worker is a mirai daemon). </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> postprocessEvents </td>
@@ -169,7 +229,8 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> lm, pm </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
-   <td style="text-align:left;"> Specify which subset of postprocessing events to run. At least one of: 'bc' for BC seral stage patch metrics; 'fd' for forest degradation indicators; 'lm' for default landscape metrics; 'lw' for default LandWeb summaries 'pm' for default patch metrics; 'on' for ON patch metrics. </td>
+   <td style="text-align:left;"> Specify which subset of postprocessing events to run. At least one of: 'am' for the stand-age time-series animation (GIF); 'bc' for BC seral stage patch metrics; 'lm' for default landscape metrics; 'lw' for default LandWeb summaries 'pm' for default patch metrics; 'on' for ON patch metrics. Any other value is an error ('fd', forest degradation indicators, is not implemented). </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> reps </td>
@@ -178,6 +239,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> 1 </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> number of replicates/runs per study area. </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> sieveThresh </td>
@@ -186,6 +248,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> threshold patch size (number of pixels) to use with `terra::sieve` when creating seral stage maps </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> simTimes </td>
@@ -194,6 +257,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> Simulation start and end times when running in 'multi' mode. </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> sppEquivCol </td>
@@ -202,6 +266,16 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> The column in `sim$sppEquiv` data.table to use as a naming convention </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> sppEquivColReporting </td>
+   <td style="text-align:left;"> character </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> (mode = 'multi') column of `sim$sppEquiv` that groups the simulated species (`sppEquivCol`) for reporting. When set, the vegetation-type maps that the 'lm', 'lw' and 'pm' analyses read, for the simulated years and for current conditions, are rebuilt from the saved `cohortData` and `pixelGroupMap` with each species recoded to its group, so biomass is summed within a group before the leading type is decided. `LandR::vegTypeMapGenerator()` sums only within a code, so relabelling the species-level maps would not give this. `NA` (the default) analyses the species-level maps the simulation saved. </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> summaryInterval </td>
@@ -210,6 +284,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> simulation time interval at which to take 'snapshots' used for summary analyses. </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> summaryPeriod </td>
@@ -218,6 +293,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> lower and upper end of the range of simulation times used for summary analyses. </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> timeSeriesTimes </td>
@@ -226,14 +302,16 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> simulation times for which to build time steries animations. </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> vegLeadingProportion </td>
    <td style="text-align:left;"> numeric </td>
-   <td style="text-align:left;"> 0.8 </td>
+   <td style="text-align:left;"> 0.75 </td>
    <td style="text-align:left;"> 0 </td>
    <td style="text-align:left;"> 1 </td>
-   <td style="text-align:left;"> a number that defines whether a species is leading for a given pixel </td>
+   <td style="text-align:left;"> A number that defines whether a species is leading for a given pixel. Default: `LandR::leadingSpeciesProp()`, i.e. option `LandR.leadingSpeciesProp`, which takes `LandR.mixedwoodProp` (0.75) unless set. Setting it in one place moves every module and LandR function together. </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> .plots </td>
@@ -242,6 +320,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> Used by `SpaDES.core::Plots`, which can be optionally used here. </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> .plotInitialTime </td>
@@ -250,6 +329,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> Describes the simulation time at which the first plot event should occur. </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> .plotInterval </td>
@@ -258,6 +338,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> Describes the simulation time interval between plot events. </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> .studyAreaName </td>
@@ -266,6 +347,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> Human-readable name for the study area used, or a hash of the study area obtained using `reproducible::studyAreaName()`. </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> .seed </td>
@@ -274,6 +356,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> Named list of seeds to use for each event (names). </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
    <td style="text-align:left;"> .useCache </td>
@@ -282,17 +365,77 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> Should caching of events or module be used? </td>
+   <td style="text-align:left;"> TRUE </td>
   </tr>
 </tbody>
 </table>
 
+### Reporting by groups of the simulated species
+
+When species are simulated separately but reported by groups of them, set `sppEquivColReporting`
+to the column of `sim$sppEquiv` that holds the groups (LandWeb uses `"LandWebReport"`, its
+reporting groups). In `mode = "multi"`, the vegetation-type maps that the `lm`, `lw` and `pm`
+analyses read, for the simulated years and for current conditions, are then rebuilt from the saved
+`cohortData` and `pixelGroupMap` with each species recoded to its group, and written under
+`postprocess/_reportingMaps/`. Biomass is summed within a group before the leading type is decided.
+`LandR::vegTypeMapGenerator()` sums biomass only within a species code, so relabelling the
+species-level maps would not give the same result: a stand of 40% black spruce, 40% tamarack and
+20% aspen is led by the group holding both conifers.
+
+A simulated code in two groups, or a group holding both conifers and broadleaves, stops the run.
+The groups' colours come from the optional input `sppColorVectReporting`. With
+`sppEquivColReporting = NA` (the default), the analyses read the species-level maps the simulation
+saved.
+
 ### Events
 
-Describe what happens for each event type.
+In `mode = "multi"` the postprocessing events selected via the `postprocessEvents`
+parameter run at the end of the simulation. Alongside the metric events (`lm`, `pm`,
+`lw`, `bc`, ...), `"am"` produces a **stand-age time-series animation**: replicate 1's
+saved `standAgeMap` layers for the `timeSeriesTimes` years are reclassified into age
+classes (`ageClassCutOffs` / `ageClasses`, coloured young &rarr; old with `RdYlGn`) and
+written to `standAge_animation.gif` under the module's figure path.
+
+The animation is encoded with **`gifski`** (a pure-Rust GIF encoder bundled as an R
+package), which needs no external tools. This deliberately avoids ImageMagick: the v2
+`animation::saveGIF` path routinely failed with *"cache resources exhausted"* and required
+raising ImageMagick's `policy.xml` memory/disk limits (see
+[LandWeb #153](https://github.com/PredictiveEcology/LandWeb/issues/153)). With `gifski`
+**no such system configuration is required**.
 
 ### Plotting
 
-Write what is plotted.
+In `mode = "multi"`, `plotFun` writes these figures for each reporting-polygon layer, under
+`postprocess/figures/`:
+
+- `lm/<layer>/` and `pm/<layer>/`: the NRV envelope of each metric in each subregion, as a
+  ribbon (the across-replicate mean and min--max range over the summary period) and as a
+  box-and-whisker per summary year (median and quartiles, whiskers from minimum to maximum),
+  with the current condition (the year-0 snapshot) as a red dashed line where it has a value.
+  Patch metrics have a panel per vegetation type. A patch-level metric (patch area, median stand
+  age of a patch) enters as each replicate's mean over its patches, so the envelope spans the
+  replicates, as for the class-level metrics.
+- `lm/<layer>/per-metric/`: the envelopes of each landscape metric with a panel per subregion,
+  up to 12 panels to a page.
+- `pm/<layer>/per-metric/`: box and violin plots of each patch metric for each vegetation type,
+  a panel per subregion, from the values of each replicate and summary year (a patch-level
+  metric averaged over each replicate's patches), with the current condition as a red point.
+  Patch area has no pages of its own: a replicate's mean patch area is the class's `area_mn`.
+- `boxplots/<layer>/` and `histograms/<layer>/`: the LandWeb summaries (`lw`), with the current
+  condition in red. Besides a boxplot per subregion and leading vegetation type,
+  `boxplots/<layer>/<subregion> share of forest.png` has a panel per age class and a box per
+  leading type of its share of the subregion's forested area.
+- `sspm/<layer>/`: the BC seral patch metrics (`bc`), one paginated envelope figure-set per metric.
+
+The y axes name each metric and its unit, and each envelope and per-class figure has a caption
+saying what its marks show, with the numbers of replicates and simulation years drawn. A class
+absent from a map has a class area (`ca`) of 0 ha: the `pm` event writes these zeros to the
+aggregates, for each class a subregion shows in its current condition or in any replicate-year,
+so the class-area figures count the replicate-years without the class. The `lw` event does the
+same for the vegetation types in every `lw` metric (leading proportion, share of the forest,
+large-patch count and area).
+
+The `"am"` event additionally writes the stand-age animation GIF (see *Events*).
 
 ### Saving
 
@@ -302,7 +445,7 @@ Write what is saved.
 
 Description of the module outputs (Table \@ref(tab:moduleOutputs-NRV-summary)).
 
-<table class="table" style="color: black; margin-left: auto; margin-right: auto;">
+<table class="table" style="margin-left: auto; margin-right: auto;">
 <caption>(\#tab:moduleOutputs-NRV-summary)(\#tab:moduleOutputs-NRV-summary)List of (ref:NRV-summary) outputs and their description.</caption>
  <thead>
   <tr>
@@ -313,14 +456,9 @@ Description of the module outputs (Table \@ref(tab:moduleOutputs-NRV-summary)).
  </thead>
 <tbody>
   <tr>
-   <td style="text-align:left;"> standAgeMap </td>
-   <td style="text-align:left;"> SpatRaster </td>
-   <td style="text-align:left;"> biomass-weighted cohort age map </td>
-  </tr>
-  <tr>
-   <td style="text-align:left;"> vegTypeMap </td>
-   <td style="text-align:left;"> SpatRaster </td>
-   <td style="text-align:left;"> leading vegetation type map </td>
+   <td style="text-align:left;"> character(0) </td>
+   <td style="text-align:left;"> c(":----------", ":-----------", ":----") </td>
+   <td style="text-align:left;"> character(0) </td>
   </tr>
 </tbody>
 </table>
