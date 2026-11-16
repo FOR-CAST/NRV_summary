@@ -80,6 +80,23 @@ knitr::kable(df_params, caption = "List of (ref:NRV-summary) parameters and thei
   kableExtra::kable_styling(latex_options = "scale_down", full_width = TRUE)
 ```
 
+### Reporting by groups of the simulated species
+
+When species are simulated separately but reported by groups of them, set `sppEquivColReporting`
+to the column of `sim$sppEquiv` that holds the groups (LandWeb uses `"LandWebReport"`, its
+reporting groups). In `mode = "multi"`, the vegetation-type maps that the `lm`, `lw` and `pm`
+analyses read, for the simulated years and for current conditions, are then rebuilt from the saved
+`cohortData` and `pixelGroupMap` with each species recoded to its group, and written under
+`postprocess/_reportingMaps/`. Biomass is summed within a group before the leading type is decided.
+`LandR::vegTypeMapGenerator()` sums biomass only within a species code, so relabelling the
+species-level maps would not give the same result: a stand of 40% black spruce, 40% tamarack and
+20% aspen is led by the group holding both conifers.
+
+A simulated code in two groups, or a group holding both conifers and broadleaves, stops the run.
+The groups' colours come from the optional input `sppColorVectReporting`. With
+`sppEquivColReporting = NA` (the default), the analyses read the species-level maps the simulation
+saved.
+
 ### Events
 
 In `mode = "multi"` the postprocessing events selected via the `postprocessEvents`

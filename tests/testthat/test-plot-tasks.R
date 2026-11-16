@@ -313,3 +313,24 @@ test_that("shading the NRV years keeps the figure's caption and adds to it", {
   none <- moduleFn(".addNrvShading", new.env())(ggplot2::ggplot(d, ggplot2::aes(time, y)), c(200, 300))
   expect_equal(none$labels$caption, "shaded: NRV years")
 })
+
+test_that("a run empties the figure folders of the events it draws, and only those", {
+  withr::local_package("SpaDES.core")
+  mod <- new.env()
+  sim <- SpaDES.core::simInit(paths = testPaths)
+  ppRoot <- moduleFn(".ppRoot", mod)
+  clearFigDirs <- moduleFn(".clearFigDirs", mod)
+  figs <- file.path(ppRoot(sim), "figures")
+  withr::defer(unlink(figs, recursive = TRUE))
+  old <- file.path(figs, c("boxplots/ANSR/Alpine Pice_gla.png", "histograms/BEC/100/Alpine Fir.png",
+                           "lm/ANSR/Alpine ai_ribbon.png", "sspm/ANSR/Alpine seral.png"))
+  for (f in old) {
+    dir.create(dirname(f), recursive = TRUE, showWarnings = FALSE)
+    file.create(f)
+  }
+
+  expect_setequal(clearFigDirs(sim, c("lw", "lm")), c("boxplots", "histograms", "lm"))
+  expect_equal(unname(file.exists(old)), c(FALSE, FALSE, FALSE, TRUE))
+  expect_length(list.files(file.path(figs, c("boxplots", "histograms", "lm")), recursive = TRUE,
+                           include.dirs = TRUE), 0L)
+})
