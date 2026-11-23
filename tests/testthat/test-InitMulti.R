@@ -121,8 +121,16 @@ test_that("national layers join the reporting polygons; standOnlyLayers get only
   expect_identical(names(m$reportingPolygons), c("ELF", "Province", "Protected"))
   expect_s3_class(m$reportingPolygons$Protected, "sf")
   expect_identical(names(sim$reportingPolygons), "ELF") ## the input is not changed
-  expect_identical(m$standPolyNames, c("ELF", "Province", "Protected"))
+  expect_identical(m$standPolyNames, c("Province", "Protected")) ## per-unit stand-level measures: national layers only
   expect_identical(m$rptPolyNames, c("ELF", "Province")) ## no landscape or patch metrics of the protected areas
+})
+
+test_that("by default no national layer is added and the layers are those given", {
+  root <- withr::local_tempdir()
+  m <- modOf(runInit(makeMultiSim(makeOutputsDF(root), reps = 1:2)))
+  expect_identical(names(m$reportingPolygons), "ELF")
+  expect_length(m$standPolyNames, 0L)
+  expect_identical(m$rptPolyNames, "ELF")
 })
 
 test_that("an unknown national layer stops the run before any work", {

@@ -14,14 +14,16 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
   reporting pixels; the forested share of the area is still reported as `forested`. `lead_*` values, ranges and
   positions in `st*.csv` change; labels read "share of forested area (%)".
 
-- The stand-level measures (`st`) gain three: `bigOld`, the share of the forest that is old and big-treed (in the
+- New `sofIndicators` (default `FALSE`, which changes nothing). With `TRUE`, the stand-level measures (`st`) gain three: `bigOld`, the share of the forest that is old and big-treed (in the
   oldest age class, with biomass at least the `bigTreedQuantile` (0.75) quantile of the old forest's at the current
   condition, a stand-in for site productivity); `youngRecent`, the share of the area younger than the
   `recentFireYears` window (40 years); and `burnedRecent`, the share burned within it (simulated: the saved
-  `rstTimeSinceFire`; current condition: the NBAC fires of `recentFireYears`, 1985--2024).
+  `rstTimeSinceFire`; current condition: the NBAC fires of `recentFireYears`, 1985--2024), with a
+  `stand_disturbance` figure.
 
-- The stand-level measures are also reported for each unit of each reporting layer, in `csv/st/<layer>/<unit>/` and
-  `figures/st/<layer>/<unit>/`; the reporting area's own tables and figures are where they were.
+- The stand-level measures are also reported for each unit of each national layer (below), in
+  `csv/st/<layer>/<unit>/` and `figures/st/<layer>/<unit>/`; the reporting area's own tables and figures are where they
+  were.
 
 - New `nationalReportingLayers` adds layers of `LandWebUtils::nationalReportingLayers()` (`Province`, `Ecozone`,
   `Protected`, `BorealCaribou`), clipped to the reporting area, to the layers the analyses run on (the input
@@ -29,7 +31,7 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
   says where they are downloaded. Layers in `standOnlyLayers` (default `Protected`) get the stand-level measures only,
   not the landscape and patch metrics.
 
-- Every `lm_nrvComparison.csv` and `st_nrvComparison.csv` has a `sofIndicator` column naming the State of the Forest
+- With `sofIndicators = TRUE`, every `lm_nrvComparison.csv` and `st_nrvComparison.csv` has a `sofIndicator` column naming the State of the Forest
   indicator a row speaks to (stateoftheforest.ca, "Missing Indicators Brief", 2026): `SoF-1 old growth` (`age_Old`,
   `bigOld`), `SoF-3 protected areas` (the `Protected` layer), `SoF-5 boreal caribou` (`burnedRecent`, `youngRecent`, the
   `BorealCaribou` layer) and `SoF-6 forest carbon` (`biomassTg`).

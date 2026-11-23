@@ -54,7 +54,7 @@ test_that("parameters are the expected names", {
       "mixedType", "mode", "nationalReportingLayers", "nationalReportingLayersPath", "nrvWindow", "patchDirections",
       "plotWorkers", "postprocessEvents", "recentFireYears",
       "recordAnnualSeries", "reps", "reuseAggregates", "sieveThresh", "simTimes",
-      "sppEquivCol", "sppEquivColReporting", "stabilityAlpha", "stabilityMinChange",
+      "sofIndicators", "sppEquivCol", "sppEquivColReporting", "stabilityAlpha", "stabilityMinChange",
       "stabilityWindow", "standOnlyLayers", "summaryInterval", "summaryPeriod", "timeSeriesTimes",
       "vegLeadingProportion"
 )

@@ -186,11 +186,12 @@ test_that("rows are labelled by the State of the Forest indicators they speak to
   expect_identical(.sofIndicator("ai", "ELF"), NA_character_)
 })
 
-test_that("the stand-level event reports the reporting area and each unit of each layer, with the new measures", {
-  withr::local_package("SpaDES.core")
+## The stand-level event on 4 x 4 pixels of 6.25 ha, one pixel group each, in two reps; the left half is a
+## `Protected` unit, `ELFlayer` the whole reporting area. Returns the run's output folder.
+runStandFixture <- function(sofIndicators, standPolyNames, fetch, env = parent.frame()) {
   ## 4 x 4 pixels of 6.25 ha, one pixel group each; the left half is protected
   r0 <- terra::rast(nrows = 4, ncols = 4, xmin = 0, xmax = 1000, ymin = 0, ymax = 1000, crs = "EPSG:3978")
-  out <- withr::local_tempdir()
+  out <- withr::local_tempdir(.local_envir = env)
   w <- function(vals, f, cat = FALSE) {
     r <- terra::setValues(r0, vals)
     if (cat) levels(r) <- data.frame(ID = 1L, code = "Pice_mar")
@@ -222,19 +223,14 @@ test_that("the stand-level event reports the reporting area and each unit of eac
   mod$fsam0 <- file.path(out, "rep1", "standAgeMap_year000.tif")
   mod$fvtm0 <- file.path(out, "rep1", "vegTypeMap_year000.tif")
   mod$ftsf0 <- file.path(out, "rep1", "rstTimeSinceFire_year000.tif")
-  mod$standPolyNames <- c("ELFlayer", "Protected")
+  mod$standPolyNames <- standPolyNames
   mod$reportingPolygons <- list(ELFlayer = sq("ELFlayer"), Protected = sq("Protected"))
   ## NBAC: one fire over the top-left two pixels (pixel 1 has no time since fire, so only pixel 2 counts)
-  testthat::local_mocked_bindings(
-    fetch_nbac_polys = function(study_area, fire_years, dest, ...) {
-      terra::vect("POLYGON ((0 750, 500 750, 500 1000, 0 1000, 0 750))", crs = "EPSG:3978")
-    },
-    .package = "fireregimetools"
-  )
+  testthat::local_mocked_bindings(fetch_nbac_polys = fetch, .package = "fireregimetools", .env = env)
   sar <- sq("ELFlayer")
   fn <- moduleFn("standMetrics", mod)
   ## outside an event there is no current module, for standMetrics() and the helpers it calls
-  testthat::local_mocked_bindings(P = function(sim, ...) SpaDES.core::params(sim)$NRV_summary)
+  testthat::local_mocked_bindings(P = function(sim, ...) SpaDES.core::params(sim)$NRV_summary, .env = env)
   environment(fn)$P <- P
   zoneOutputs <- moduleFn(".standZoneOutputs", mod) ## it, and the recorder it calls, read and write `mod`
   environment(zoneOutputs)$.recordComparison <- moduleFn(".recordComparison", mod)
@@ -242,12 +238,24 @@ test_that("the stand-level event reports the reporting area and each unit of eac
   sim <- SpaDES.core::simInit(
     times = list(start = 0, end = 100),
     params = list(NRV_summary = list(mode = "multi", reps = 1:2, .plots = "png", .studyAreaName = "ELF",
-                                     simTimes = c(0, 100), summaryPeriod = c(0L, 100L), nrvWindow = 0.5)),
+                                     simTimes = c(0, 100), summaryPeriod = c(0L, 100L), nrvWindow = 0.5,
+                                     sofIndicators = sofIndicators)),
     modules = moduleName, paths = utils::modifyList(testPaths, list(outputPath = file.path(out, "mainSim"))),
     objects = list(reportingPolygons = list(ELFlayer = sq("ELFlayer"), Protected = sq("Protected")),
                    studyAreaReporting = sar)
   )
   sim <- fn(sim)
+  out
+}
+
+nbacTopLeft <- function(study_area, fire_years, dest, ...) {
+  ## NBAC: one fire over the top-left two pixels (pixel 1 has no time since fire, so only pixel 2 counts)
+  terra::vect("POLYGON ((0 750, 500 750, 500 1000, 0 1000, 0 750))", crs = "EPSG:3978")
+}
+
+test_that("the stand-level event reports the reporting area and each unit of each layer, with the new measures", {
+  withr::local_package("SpaDES.core")
+  out <- runStandFixture(TRUE, c("ELFlayer", "Protected"), nbacTopLeft)
 
   csv <- file.path(out, "postprocess", "csv", "st")
   read <- function(...) utils::read.csv(file.path(csv, ...))
@@ -275,6 +283,21 @@ test_that("the stand-level event reports the reporting area and each unit of eac
                                     "current_condition_overview.png")))
 })
 
+test_that("by default the stand-level outputs are those of the base module: no new measures, column, figure or fetch", {
+  withr::local_package("SpaDES.core")
+  out <- runStandFixture(FALSE, character(0), function(...) stop("NBAC fetched with sofIndicators = FALSE"))
+  csv <- file.path(out, "postprocess", "csv", "st")
+  expect_identical(list.files(csv), "ELF") ## no unit of any layer
+  cc <- utils::read.csv(file.path(csv, "ELF", "st_CC.csv"))
+  expect_setequal(cc$metric, c(paste0("age_", c("Young", "Immature", "Mature", "Old")), "forested", "biomassTg",
+                               "lead_Pice_mar"))
+  cmp <- utils::read.csv(file.path(csv, "ELF", "st_nrvComparison.csv"))
+  expect_false("sofIndicator" %in% names(cmp))
+  figs <- list.files(file.path(out, "postprocess", "figures", "st", "ELF"))
+  expect_false("stand_disturbance.png" %in% figs)
+  expect_true("stand_age.png" %in% figs)
+})
+
 test_that("the landscape-metric comparisons of a national layer carry its indicator", {
   withr::local_package("SpaDES.core")
   mod <- new.env()
@@ -288,6 +311,12 @@ test_that("the landscape-metric comparisons of a national layer carry its indica
                               paths = utils::modifyList(testPaths, list(outputPath = file.path(out, "mainSim"))))
   env <- data.frame(poly = "Chinchaga", metric = "ai", time = c(80, 100), mean = 5, min = 1, max = 9)
   SpaDES.core::params(sim)$NRV_summary$nationalReportingLayers <- "BorealCaribou"
+  fn(sim, env, data.frame(poly = "Chinchaga", metric = "ai", mean = 4), "lm", "BorealCaribou")
+  ## by default, no indicator column
+  f <- file.path(out, "postprocess", "csv", "lm", "BorealCaribou", "lm_nrvComparison.csv")
+  expect_false("sofIndicator" %in% names(utils::read.csv(f)))
+  SpaDES.core::params(sim)$NRV_summary$sofIndicators <- TRUE
+  mod$nrvComparisons <- NULL
   fn(sim, env, data.frame(poly = "Chinchaga", metric = "ai", mean = 4), "lm", "BorealCaribou")
   cmp <- utils::read.csv(file.path(out, "postprocess", "csv", "lm", "BorealCaribou", "lm_nrvComparison.csv"))
   expect_identical(cmp$sofIndicator, "SoF-5 boreal caribou")

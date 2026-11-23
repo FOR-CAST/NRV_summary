@@ -129,6 +129,11 @@ defineModule(sim, list(
                     paste("reporting layers summarised by the stand-level event (`st`) only, not by the",
                           "landscape and patch metrics: layers of units too small or scattered for patch",
                           "structure to mean much, such as the protected areas.")),
+    defineParameter("sofIndicators", "logical", FALSE, NA, NA,
+                    paste("the State of the Forest indicator outputs: the stand-level measures `bigOld`,",
+                          "`youngRecent` and `burnedRecent` (the last fetches NBAC fires for its current condition),",
+                          "the `sofIndicator` column of the `lm_` and `st_nrvComparison.csv` tables, and the",
+                          "stand_disturbance figure. FALSE (the default) writes none of them.")),
     defineParameter("stabilityAlpha", "numeric", 0.05, 0, 1,
                     paste("(mode = 'multi') significance level of the Mann-Kendall trend test in the",
                           "stability check.")),
@@ -593,11 +598,13 @@ InitMulti <- function(sim) {
 
   ## the reporting layers the analyses run on: `reportingPolygons` and the national layers, clipped to the
   ## reporting area (kept here: the module hands nothing back through the simList)
-  mod$reportingPolygons <- c(sim$reportingPolygons, .nationalLayers(sim))
+  national <- .nationalLayers(sim)
+  mod$reportingPolygons <- c(sim$reportingPolygons, national)
 
-  ## every layer for the stand-level measures, all but `standOnlyLayers` for the landscape and patch metrics
-  mod$standPolyNames <- names(mod$reportingPolygons)
-  mod$rptPolyNames <- setdiff(mod$standPolyNames, P(sim)$standOnlyLayers)
+  ## the national layers get the stand-level measures per unit; the landscape and patch metrics run on
+  ## `reportingPolygons` and the national layers but `standOnlyLayers`
+  mod$standPolyNames <- names(national)
+  mod$rptPolyNames <- c(names(sim$reportingPolygons), setdiff(names(national), P(sim)$standOnlyLayers))
 
   # ! ----- STOP EDITING ----- ! #
 
@@ -2332,7 +2339,7 @@ plotFun <- function(sim) {
   }
   f <- file.path(.ppCsvDir(sim, kind, layer), paste0(kind, "_nrvComparison.csv"))
   cmp <- .nrvComparison(env, cc, .nrvPeriod(sim))
-  cmp$sofIndicator <- .sofIndicator(cmp$metric, layer)
+  if (isTRUE(P(sim)$sofIndicators)) cmp$sofIndicator <- .sofIndicator(cmp$metric, layer)
   utils::write.csv(cmp, f, row.names = FALSE)
   ## the figure of every group and nrvInside.csv are of the reporting area's own layers, not the national ones
   if (!layer %in% P(sim)$nationalReportingLayers) .recordComparison(kind, cmp, layer)
@@ -2889,13 +2896,16 @@ standMetrics <- function(sim) {
          pgm = terra::values(terra::rast(f$pgm), mat = FALSE), cd = qs2::qs_read(f$cd))
   }
   cc0 <- read(cc)
-  bigB <- .bigTreedThreshold(cc0$sam[saCells], cc0$pgm[saCells], cc0$cd, max(P(sim)$ageClassCutOffs),
-                             P(sim)$bigTreedQuantile)
+  ## the State of the Forest measures, only with `sofIndicators`
+  sof <- isTRUE(P(sim)$sofIndicators)
+  bigB <- if (sof) {
+    .bigTreedThreshold(cc0$sam[saCells], cc0$pgm[saCells], cc0$cd, max(P(sim)$ageClassCutOffs), P(sim)$bigTreedQuantile)
+  } else NA_real_
   fy <- P(sim)$recentFireYears
-  nRecent <- as.integer(diff(fy)) + 1L
+  nRecent <- if (sof) as.integer(diff(fy)) + 1L else NA_integer_
   ## burned within the window: simulated, from the time since fire; current, from the NBAC fires of `recentFireYears`
-  useFire <- all(file.exists(c(cc$tsf, snaps$tsf)))
-  if (!useFire) {
+  useFire <- sof && all(file.exists(c(cc$tsf, snaps$tsf)))
+  if (sof && !useFire) {
     message("NRV_summary: no rstTimeSinceFire beside every snapshot (burnSummaries' output); ",
             "the stand-level measures have no burnedRecent")
   }
@@ -2984,7 +2994,7 @@ standMetrics <- function(sim) {
   cmp <- .nrvComparison(env, data.frame(poly = poly, metric = cc$metric, mean = cc$value), .nrvPeriod(sim))
   cmp$label <- label(cmp$metric)
   cmp$order <- .standOrder(cmp$metric, cmp$label)
-  cmp$sofIndicator <- .sofIndicator(cmp$metric, layer)
+  if (isTRUE(P(sim)$sofIndicators)) cmp$sofIndicator <- .sofIndicator(cmp$metric, layer)
   if (isSA) {
     mod$standSeries <- series
     .recordComparison("st", cmp, poly)
