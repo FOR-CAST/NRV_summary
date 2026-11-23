@@ -828,7 +828,14 @@ InitMulti <- function(sim) {
 ## is matched in the name only: a folder of the path can hold the same digits (a temporary folder
 ## .../file12a2820b... matched every file of every year to 2820).
 .inYears <- function(files, years) {
-  files[grepl(paste0("_year0*(", paste(years, collapse = "|"), ")[.]"), basename(files))]
+  files[.fileYear(files) %in% years]
+}
+
+## The year of each saved file, from the `_year<YYYY>.<ext>` of its name (NA for a name without one)
+.fileYear <- function(files) {
+  b <- basename(files)
+  pat <- "^.*_year([0-9.]+)\\.[^.]*$"
+  as.numeric(ifelse(grepl(pat, b), sub(pat, "\\1", b), NA))
 }
 
 ## split a per-replicate map-file vector (`.../rep<NN>/<map>_year<YYYY>.tif`) into a named list by rep.
@@ -839,7 +846,7 @@ InitMulti <- function(sim) {
 ## The files of `files` (named `..._year<YYYY>.<ext>`) whose year is within `period`. Used for the pooled
 ## (over time) NRV distributions, which cover the NRV years only.
 .filesInPeriod <- function(files, period) {
-  yr <- as.integer(sub("^.*_year([0-9]+)\\.[^.]*$", "\\1", basename(files)))
+  yr <- .fileYear(files)
   files[!is.na(yr) & yr >= min(period) & yr <= max(period)]
 }
 
@@ -2738,7 +2745,7 @@ stabilityCheck <- function(sim) {
 ## The snapshot files of each rep and time, one row each: rep (the rep folder), time, sam, vtm, pgm, cd.
 .snapshotTable <- function(sam, vtm, pgm, cd) {
   key <- function(f, col) {
-    d <- data.frame(rep = basename(dirname(f)), time = as.numeric(sub("^.*_year([0-9.]+)\\.[^.]*$", "\\1", basename(f))), f)
+    d <- data.frame(rep = basename(dirname(f)), time = .fileYear(f), f)
     names(d)[3] <- col
     d
   }
@@ -2929,10 +2936,9 @@ standMetrics <- function(sim) {
     v <- .cropToStudyArea(layers[[l]], studyAreaReporting)
     v <- v[!is.na(v$Name), ]
     if (!nrow(v)) next
-    v <- terra::project(terra::vect(v), terra::crs(pgm))
+    v <- terra::vect(v)
     for (nm in sort(unique(v$Name))) {
-      inUnit <- !is.na(terra::values(terra::rasterize(v[v$Name == nm, ], pgm), mat = FALSE))
-      cells <- intersect(which(inUnit), saCells)
+      cells <- intersect(.polyCells(pgm, v[v$Name == nm, ]), saCells)
       if (length(cells) && !identical(cells, saCells)) {
         zones[[length(zones) + 1L]] <- list(layer = l, poly = nm, cells = cells)
       }
@@ -2946,12 +2952,16 @@ standMetrics <- function(sim) {
 .recentBurnCC <- function(pgm, tsf, years, dest) {
   fires <- fireregimetools::fetch_nbac_polys(pgm, fire_years = seq(years[1], years[2]), dest = dest)
   fires <- if (inherits(fires, "SpatVector")) fires else terra::vect(fires)
-  burned <- if (nrow(fires)) {
-    !is.na(terra::values(terra::rasterize(terra::project(fires, terra::crs(pgm)), pgm), mat = FALSE))
-  } else {
-    rep(FALSE, terra::ncell(pgm))
-  }
+  burned <- seq_len(terra::ncell(pgm)) %in% .polyCells(pgm, fires)
   burned & !is.na(tsf)
+}
+
+## The cells of raster `r` whose centres are in polygons `v` (projected to `r`'s CRS first)
+.polyCells <- function(r, v) {
+  if (!nrow(v)) {
+    return(integer(0))
+  }
+  which(!is.na(terra::values(terra::rasterize(terra::project(v, terra::crs(r)), r), mat = FALSE)))
 }
 
 ## The tables and figures of one unit's stand-level measures: `series` (rep, time, metric, value) and `cc`

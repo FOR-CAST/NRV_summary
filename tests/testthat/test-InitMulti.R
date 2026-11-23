@@ -133,3 +133,9 @@ test_that("an unknown national layer stops the run before any work", {
                                                                            crs = 3978)))
   expect_error(runInit(sim), "unknown nationalReportingLayers.*Parks")
 })
+
+test_that("a saved file's year is read from its name, padded or not, and NA without one", {
+  expect_equal(.fileYear(c("o/rep1/vegTypeMap_year0100.tif", "o/2820/cohortData_year2720.qs2", "o/flammableMap.tif")),
+               c(100, 2720, NA))
+  expect_identical(.inYears(c("a/x_year0100.tif", "a2720/x_year0200.tif"), c(100, 2720)), "a/x_year0100.tif")
+})
