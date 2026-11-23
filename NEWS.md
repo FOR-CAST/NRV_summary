@@ -2,6 +2,44 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+- The century-block burn stability check reads burnSummaries' own per-block table (`burnSummaries_fireBlocks.csv`, found
+  through the registered outputs) instead of an `areaBurnedHa` column that only fireSense writes. With LandMine or scfm
+  fires the area burned was always 0, so the check always said "stable". `.burnBlockSeries()` is removed.
+
+- `st_nrvComparison.csv` and `lm_nrvComparison.csv` have a `tested` column (FALSE for a leading type that is 0 in the
+  current condition and the NRV), and `st_nrvComparison.csv` an integer `order` column (the order of the figure's rows).
+  New `csv/all/nrvInside.csv`: per polygon, `nTests`, `nInside` and `pctInside` over the tested rows of `lm` and `st`.
+
+- Stand-level (`st`) leading-type shares are now percent of the forested pixels, as in the annual series, not of all
+  reporting pixels; the forested share of the area is still reported as `forested`. `lead_*` values, ranges and
+  positions in `st*.csv` change; labels read "share of forested area (%)".
+
+- New `sofIndicators` (default `FALSE`, which changes nothing). With `TRUE`, the stand-level measures (`st`) gain three: `bigOld`, the share of the forest that is old and big-treed (in the
+  oldest age class, with biomass at least the `bigTreedQuantile` (0.75) quantile of the old forest's at the current
+  condition, a stand-in for site productivity); `youngRecent`, the share of the area younger than the
+  `recentFireYears` window (40 years); and `burnedRecent`, the share burned within it (simulated: the saved
+  `rstTimeSinceFire`; current condition: the NBAC fires of `recentFireYears`, 1985--2024), with a
+  `stand_disturbance` figure.
+
+- The stand-level measures are also reported for each unit of each national layer (below), in
+  `csv/st/<layer>/<unit>/` and `figures/st/<layer>/<unit>/`; the reporting area's own tables and figures are where they
+  were.
+
+- New `nationalReportingLayers` adds layers of `LandWebUtils::nationalReportingLayers()` (`Province`, `Ecozone`,
+  `Protected`, `BorealCaribou`), clipped to the reporting area, to the layers the analyses run on (the input
+  `reportingPolygons` is unchanged); `nationalReportingLayersPath`
+  says where they are downloaded. Layers in `standOnlyLayers` (default `Protected`) get the stand-level measures only,
+  not the landscape and patch metrics.
+
+- With `sofIndicators = TRUE`, every `lm_nrvComparison.csv` and `st_nrvComparison.csv` has a `sofIndicator` column naming the State of the Forest
+  indicator a row speaks to (stateoftheforest.ca, "Missing Indicators Brief", 2026): `SoF-1 old growth` (`age_Old`,
+  `bigOld`), `SoF-3 protected areas` (the `Protected` layer), `SoF-5 boreal caribou` (`burnedRecent`, `youngRecent`, the
+  `BorealCaribou` layer) and `SoF-6 forest carbon` (`biomassTg`).
+
+- Multi mode finds the analysis years of the saved files in the file names only. It matched them anywhere in the path,
+  so a run whose output folder held the digits of an analysis year (a temporary folder `.../file12a2820b...`)
+  summarised every saved year, year 0 included.
+
 - Single mode registers each saved data file (cohortData, pixelGroupMap, standAgeMap, vegTypeMap, sppEquiv, sppColorVect,
   speciesLayers, flammableMap) with the name of the object it holds and the function that saved it. `outputs(sim)` had
   `NA` for the object name of all of them, so a replay could not load the archived files back as inputs.
