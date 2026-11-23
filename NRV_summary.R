@@ -435,28 +435,18 @@ InitMulti <- function(sim) {
     regexp = "cohortData|pixelGroupMap",
     recurse = 1,
     type = "file"
-  ) |>
-    grep(paste0("(", paste0(allReps, collapse = "|"), ")"), x = _, value = TRUE) |>
-    grep(paste(mod$analysesOutputsTimes, collapse = "|"), x = _, value = TRUE)
-  mod$allouts <- fs::dir_ls(
+  )
+  cdpgm <- cdpgm[.inReps(cdpgm, allReps) & .inYears(cdpgm, mod$analysesOutputsTimes)]
+  allouts <- fs::dir_ls(
     outputPath(sim),
     regexp = "vegType|standAge",
     recurse = 1,
     type = "file"
-  ) |>
-    grep(paste0("(", paste0(allReps, collapse = "|"), ")"), x = _, value = TRUE) |>
-    grep("gri|png|txt|xml", x = _, value = TRUE, invert = TRUE)
-  mod$allouts2 <- paste(
-    paste0(
-      "year",
-      paddedFloatToChar(
-        setdiff(c(0, P(sim)$timeSeriesTimes), mod$analysesOutputsTimes),
-        padL = padL
-      )
-    ),
-    collapse = "|"
-  ) |>
-    grep(pattern = _, x = mod$allouts, value = TRUE, invert = TRUE)
+  )
+  mod$allouts <- grep("gri|png|txt|xml", allouts[.inReps(allouts, allReps)], value = TRUE, invert = TRUE)
+  ## drop the files of the years only the time series needs (not analysed)
+  seriesOnlyYears <- setdiff(c(0, P(sim)$timeSeriesTimes), mod$analysesOutputsTimes)
+  mod$allouts2 <- mod$allouts[!.inYears(mod$allouts, seriesOnlyYears)]
 
   filesUserHas <- c(cdpgm, mod$allouts2)
 
@@ -485,19 +475,19 @@ InitMulti <- function(sim) {
   mod$layerName <- gsub(mod$layerName, pattern = "[/\\]", replacement = "_")
   mod$layerName <- gsub(mod$layerName, pattern = "^_", replacement = "")
 
-  mod$sam <- gsub(".*vegTypeMap.*", NA, mod$allouts2) |>
-    grep(paste(mod$analysesOutputsTimes, collapse = "|"), x = _, value = TRUE)
-  mod$vtm <- gsub(".*standAgeMap.*", NA, mod$allouts2) |>
-    grep(paste(mod$analysesOutputsTimes, collapse = "|"), x = _, value = TRUE)
+  mod$sam <- gsub(".*vegTypeMap.*", NA, mod$allouts2)
+  mod$sam <- mod$sam[.inYears(mod$sam, mod$analysesOutputsTimes)]
+  mod$vtm <- gsub(".*standAgeMap.*", NA, mod$allouts2)
+  mod$vtm <- mod$vtm[.inYears(mod$vtm, mod$analysesOutputsTimes)]
 
   ## time-since-fire per year (burnSummaries output), aligned with mod$vtm by rep/year path (see
   ## landWebMetrics(): the LandWeb summaries bin time-since-fire into age classes, matching v2).
   mod$tsf <- gsub("vegTypeMap", "rstTimeSinceFire", mod$vtm)
 
-  mod$samTimeSeries <- gsub(".*vegTypeMap.*", NA, mod$allouts) |>
-    grep(paste(P(sim)$timeSeriesTimes, collapse = "|"), x = _, value = TRUE)
-  mod$vtmTimeSeries <- gsub(".*standAgeMap.*", NA, mod$allouts) |>
-    grep(paste(P(sim)$timeSeriesTimes, collapse = "|"), x = _, value = TRUE)
+  mod$samTimeSeries <- gsub(".*vegTypeMap.*", NA, mod$allouts)
+  mod$samTimeSeries <- mod$samTimeSeries[.inYears(mod$samTimeSeries, P(sim)$timeSeriesTimes)]
+  mod$vtmTimeSeries <- gsub(".*standAgeMap.*", NA, mod$allouts)
+  mod$vtmTimeSeries <- mod$vtmTimeSeries[.inYears(mod$vtmTimeSeries, P(sim)$timeSeriesTimes)]
 
   ## cohortData and pixelGroupMap files
   mod$cd <- grep("cohortData", cdpgm, value = TRUE)
@@ -751,6 +741,29 @@ InitMulti <- function(sim) {
 
 .ppCsvDir <- function(sim, kind, layer, ...) {
   reproducible::checkPath(file.path(.ppRoot(sim), "csv", kind, layer, ...), create = TRUE)
+}
+
+## The year of each saved file, from the `_year<digits>.<ext>` of its name (NA for a name without one).
+## Only the file name is read, so digits in a folder name are never taken for a year.
+.fileYear <- function(files) {
+  b <- basename(as.character(files))
+  pat <- "^.*_year([0-9]+)\\.[^.]*$"
+  as.integer(ifelse(grepl(pat, b), sub(pat, "\\1", b), NA))
+}
+
+## TRUE for each file whose year (see .fileYear()) is one of `years`; FALSE for a file with no year.
+.inYears <- function(files, years) {
+  .fileYear(files) %in% years
+}
+
+## TRUE for each file with a path component equal to one of `reps` (e.g. "rep01"), so "rep1" does not
+## match the files of rep10 to rep12.
+.inReps <- function(files, reps) {
+  vapply(
+    strsplit(as.character(files), "[/\\\\]"),
+    function(p) any(p %in% reps),
+    logical(1L)
+  )
 }
 
 ## split a per-replicate map-file vector (`.../rep<NN>/<map>_year<YYYY>.tif`) into a named list by rep.
