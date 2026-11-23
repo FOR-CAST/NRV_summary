@@ -17,6 +17,7 @@ defineModule(sim, list(
     "data.table", "dplyr", "fs", "future.apply", "future.callr",
     "ggforce", "ggplot2", "gifski", "googledrive", "landscapemetrics", "qs2",
     "RColorBrewer", "sf", "terra", "tidyterra",
+    "arrow", "crayon", "future", "reproducible", "rlang",
     "PredictiveEcology/LandR@development (>= 1.2.0.9024)", ## leadingSpeciesProp()
     "PredictiveEcology/LandWebUtils@development (>= 1.0.3.9045)", ## sppEquiv_groups(), recode_cohorts()
     ## 0.2.10 floor, not 0.2.7: the LandWeb#118 tenure x sub-region crossings mint refCodes of the
@@ -39,7 +40,7 @@ defineModule(sim, list(
     ## metric envelopes are built from and returns exact quartiles; nrv_metric_info() names the
     ## axes; the plot functions take captions.
     "FOR-CAST/nrvtools (>= 0.3.4.9003)",
-    "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
+    "PredictiveEcology/pemisc@development (>= 0.0.4.9016)",
     "PredictiveEcology/SpaDES.core@development (>= 3.0.3.9000)"
   ),
   parameters = bindrows(
