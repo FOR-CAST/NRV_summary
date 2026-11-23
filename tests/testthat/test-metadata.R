@@ -50,11 +50,12 @@ test_that("parameters are the expected names", {
     sort(md$parameters$paramName),
     c(
       ".plotInitialTime", ".plotInterval", ".plots", ".seed", ".studyAreaName", ".useCache",
-      "ageClassCutOffs", "ageClasses", "ageClassMaxAge", "autocorrMaxLag", "ccStandAgeSource",
-      "mixedType", "mode", "nrvWindow", "patchDirections", "plotWorkers", "postprocessEvents",
+      "ageClassCutOffs", "ageClasses", "ageClassMaxAge", "autocorrMaxLag", "bigTreedQuantile", "ccStandAgeSource",
+      "mixedType", "mode", "nationalReportingLayers", "nationalReportingLayersPath", "nrvWindow", "patchDirections",
+      "plotWorkers", "postprocessEvents", "recentFireYears",
       "recordAnnualSeries", "reps", "reuseAggregates", "sieveThresh", "simTimes",
       "sppEquivCol", "sppEquivColReporting", "stabilityAlpha", "stabilityMinChange",
-      "stabilityWindow", "summaryInterval", "summaryPeriod", "timeSeriesTimes",
+      "stabilityWindow", "standOnlyLayers", "summaryInterval", "summaryPeriod", "timeSeriesTimes",
       "vegLeadingProportion"
 )
   )

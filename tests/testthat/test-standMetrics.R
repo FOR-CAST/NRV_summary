@@ -101,3 +101,138 @@ test_that("each leading type, the mixed class included, gets a figure with its p
   expect_identical(unique(f$lead_A$series$rep), 1:5)
   expect_silent(ggplot2::ggplot_build(.standSeriesPanels(f$lead_A)))
 })
+
+test_that("a snapshot's big-treed old, young and recently burned shares", {
+  ## 4 forested pixels (ages 10, 50, 130, 150) of 5; old (>= 120): pixel groups 3 (B 500) and 4 (B 900)
+  sam <- c(10, 50, 130, 150, NA)
+  pgm <- c(1L, 2L, 3L, 4L, 0L)
+  cd <- data.frame(pixelGroup = 1:4, B = c(100, 200, 500, 900))
+  expect_equal(.bigTreedThreshold(sam, pgm, cd, oldAge = 120, q = 0.75), 800) ## of 500 and 900
+  r <- .standRow(sam, rep("Pice_mar", 5), pgm, cd, pixelHa = 6.25, ageClassCutOffs = c(0, 40, 80, 120),
+                 ageClasses = c("Young", "Immature", "Mature", "Old"), bigTreedB = 800, recentYears = 40L,
+                 recentBurn = c(TRUE, FALSE, FALSE, FALSE, TRUE))
+  v <- setNames(r$value, r$metric)
+  expect_equal(v[["bigOld"]], 100 * 1 / 4)       ## of the forested
+  expect_equal(v[["youngRecent"]], 100 * 1 / 5)  ## of the area
+  expect_equal(v[["burnedRecent"]], 100 * 2 / 5) ## of the area
+  ## without them, the row is as before
+  r0 <- .standRow(sam, rep("Pice_mar", 5), pgm, cd, 6.25, c(0, 40, 80, 120), c("Young", "Immature", "Mature", "Old"))
+  expect_false(any(c("bigOld", "youngRecent", "burnedRecent") %in% r0$metric))
+})
+
+test_that("rows are labelled by the State of the Forest indicators they speak to", {
+  expect_identical(
+    .sofIndicator(c("age_Old", "bigOld", "burnedRecent", "biomassTg", "lead_Pice_mar")),
+    c("SoF-1 old growth", "SoF-1 old growth", "SoF-5 boreal caribou", "SoF-6 forest carbon", NA)
+  )
+  expect_identical(.sofIndicator(c("age_Old", "forested"), "Protected"),
+                   c("SoF-1 old growth; SoF-3 protected areas", "SoF-3 protected areas"))
+  expect_identical(.sofIndicator("burnedRecent", "BorealCaribou"), "SoF-5 boreal caribou")
+  expect_identical(.sofIndicator("ai", "ELF"), NA_character_)
+})
+
+test_that("the stand-level event reports the reporting area and each unit of each layer, with the new measures", {
+  withr::local_package("SpaDES.core")
+  ## 4 x 4 pixels of 6.25 ha, one pixel group each; the left half is protected
+  r0 <- terra::rast(nrows = 4, ncols = 4, xmin = 0, xmax = 1000, ymin = 0, ymax = 1000, crs = "EPSG:3978")
+  out <- withr::local_tempdir()
+  w <- function(vals, f, cat = FALSE) {
+    r <- terra::setValues(r0, vals)
+    if (cat) levels(r) <- data.frame(ID = 1L, code = "Pice_mar")
+    terra::writeRaster(r, f, overwrite = TRUE)
+    f
+  }
+  ages0 <- rep(c(150, 10, 60, 130), each = 4)      ## rows: old, young, mature, old
+  B <- c(100, 200, 300, 400, rep(50, 8), 500, 600, 700, 800)
+  for (rp in c("rep1", "rep2")) {
+    d <- file.path(out, rp)
+    dir.create(d)
+    for (yr in c("000", "100")) {
+      w(1:16, file.path(d, paste0("pixelGroupMap_year", yr, ".tif")))
+      w(rep(1L, 16), file.path(d, paste0("vegTypeMap_year", yr, ".tif")), cat = TRUE)
+      w(if (yr == "000") ages0 else ages0 + 100, file.path(d, paste0("standAgeMap_year", yr, ".tif")))
+      ## year 0: no time since fire in pixel 1; year 100: the top row burned 10 years before
+      w(if (yr == "000") c(NA, rep(50, 15)) else c(rep(10, 4), rep(200, 12)),
+        file.path(d, paste0("rstTimeSinceFire_year", yr, ".tif")))
+      qs2::qs_save(data.frame(pixelGroup = 1:16, B = B), file.path(d, paste0("cohortData_year", yr, ".qs2")))
+    }
+  }
+  sq <- function(x1) sf::st_sf(Name = c(ELFlayer = "ELF", Protected = "Protected")[[x1]],
+                               geometry = sf::st_as_sfc(sf::st_bbox(c(xmin = 0, ymin = 0, xmax = if (x1 == "ELFlayer") 1000 else 500, ymax = 1000), crs = 3978)))
+  snap <- function(kind, ext) file.path(out, c("rep1", "rep2"), paste0(kind, "_year100.", ext))
+  mod <- new.env()
+  mod$sam <- snap("standAgeMap", "tif"); mod$vtm <- snap("vegTypeMap", "tif")
+  mod$pgm <- snap("pixelGroupMap", "tif"); mod$cd <- snap("cohortData", "qs2")
+  mod$rep1Dir <- file.path(out, "rep1")
+  mod$fsam0 <- file.path(out, "rep1", "standAgeMap_year000.tif")
+  mod$fvtm0 <- file.path(out, "rep1", "vegTypeMap_year000.tif")
+  mod$ftsf0 <- file.path(out, "rep1", "rstTimeSinceFire_year000.tif")
+  mod$standPolyNames <- c("ELFlayer", "Protected")
+  mod$reportingPolygons <- list(ELFlayer = sq("ELFlayer"), Protected = sq("Protected"))
+  ## NBAC: one fire over the top-left two pixels (pixel 1 has no time since fire, so only pixel 2 counts)
+  testthat::local_mocked_bindings(
+    fetch_nbac_polys = function(study_area, fire_years, dest, ...) {
+      terra::vect("POLYGON ((0 750, 500 750, 500 1000, 0 1000, 0 750))", crs = "EPSG:3978")
+    },
+    .package = "fireregimetools"
+  )
+  sar <- sq("ELFlayer")
+  fn <- moduleFn("standMetrics", mod)
+  ## outside an event there is no current module, for standMetrics() and the helpers it calls
+  testthat::local_mocked_bindings(P = function(sim, ...) SpaDES.core::params(sim)$NRV_summary)
+  environment(fn)$P <- P
+  zoneOutputs <- moduleFn(".standZoneOutputs", mod) ## it, and the recorder it calls, read and write `mod`
+  environment(zoneOutputs)$.recordComparison <- moduleFn(".recordComparison", mod)
+  environment(fn)$.standZoneOutputs <- zoneOutputs
+  sim <- SpaDES.core::simInit(
+    times = list(start = 0, end = 100),
+    params = list(NRV_summary = list(mode = "multi", reps = 1:2, .plots = "png", .studyAreaName = "ELF",
+                                     simTimes = c(0, 100), summaryPeriod = c(0L, 100L), nrvWindow = 0.5)),
+    modules = moduleName, paths = utils::modifyList(testPaths, list(outputPath = file.path(out, "mainSim"))),
+    objects = list(reportingPolygons = list(ELFlayer = sq("ELFlayer"), Protected = sq("Protected")),
+                   studyAreaReporting = sar)
+  )
+  sim <- fn(sim)
+
+  csv <- file.path(out, "postprocess", "csv", "st")
+  read <- function(...) utils::read.csv(file.path(csv, ...))
+  cc <- function(d) setNames(d$value, d$metric)
+  ## the reporting area: old is 8 of 16 pixels; the threshold is the 0.75 quantile of their B (625)
+  ccSA <- cc(read("ELF", "st_CC.csv"))
+  expect_equal(ccSA[["bigOld"]], 100 * 2 / 16)       ## B 700 and 800
+  expect_equal(ccSA[["youngRecent"]], 100 * 4 / 16)  ## the age-10 row
+  expect_equal(ccSA[["burnedRecent"]], 100 * 1 / 16) ## NBAC pixel 2
+  ## the protected half: pixels 1, 2, 5, 6, 9, 10, 13, 14
+  ccP <- cc(read("Protected", "Protected", "st_CC.csv"))
+  expect_equal(ccP[["bigOld"]], 0)                   ## its old pixels have B 100, 200, 500, 600
+  expect_equal(ccP[["youngRecent"]], 100 * 2 / 8)
+  expect_equal(ccP[["burnedRecent"]], 100 * 1 / 8)
+  ## simulated year 100: the burned top row
+  s <- read("Protected", "Protected", "st.csv")
+  expect_equal(unique(s$value[s$metric == "burnedRecent"]), 100 * 2 / 8)
+  ## the layer that is the reporting area itself is not reported again
+  expect_false(dir.exists(file.path(csv, "ELFlayer")))
+  ## the comparisons carry the indicator labels
+  cmp <- read("Protected", "Protected", "st_nrvComparison.csv")
+  expect_identical(cmp$sofIndicator[cmp$metric == "bigOld"], "SoF-1 old growth; SoF-3 protected areas")
+  expect_identical(read("ELF", "st_nrvComparison.csv")$sofIndicator[cmp$metric == "biomassTg"], "SoF-6 forest carbon")
+  expect_true(file.exists(file.path(out, "postprocess", "figures", "st", "Protected", "Protected",
+                                    "current_condition_overview.png")))
+})
+
+test_that("the landscape-metric comparisons of a national layer carry its indicator", {
+  withr::local_package("SpaDES.core")
+  mod <- new.env()
+  fn <- moduleFn(".writeNrvComparisonCSV", mod)
+  environment(fn)$.recordComparison <- moduleFn(".recordComparison", mod)
+  testthat::local_mocked_bindings(P = function(sim, ...) SpaDES.core::params(sim)$NRV_summary)
+  out <- withr::local_tempdir()
+  sim <- SpaDES.core::simInit(times = list(start = 0, end = 100),
+                              params = list(NRV_summary = list(mode = "multi", reps = 1L, summaryPeriod = c(0L, 100L))),
+                              modules = moduleName, objects = list(reportingPolygons = list(ELF = "placeholder")),
+                              paths = utils::modifyList(testPaths, list(outputPath = file.path(out, "mainSim"))))
+  env <- data.frame(poly = "Chinchaga", metric = "ai", time = c(80, 100), mean = 5, min = 1, max = 9)
+  fn(sim, env, data.frame(poly = "Chinchaga", metric = "ai", mean = 4), "lm", "BorealCaribou")
+  cmp <- utils::read.csv(file.path(out, "postprocess", "csv", "lm", "BorealCaribou", "lm_nrvComparison.csv"))
+  expect_identical(cmp$sofIndicator, "SoF-5 boreal caribou")
+})

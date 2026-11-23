@@ -60,6 +60,16 @@ test_that("each replicate contributes each analysis year once, however often a f
   expect_identical(unname(lengths(.filesByRep(m$vtm))), c(4L, 4L))
 })
 
+test_that("an analysis year is matched in the file name, not elsewhere in the path", {
+  ## a temporary folder named e.g. .../file12a2820b... held "2820", so every file of every year matched
+  root <- withr::local_tempdir(pattern = "run2820_")
+  m <- modOf(runInit(makeMultiSim(makeOutputsDF(root), reps = 1:2)))
+  for (x in c("vtm", "sam", "cd", "pgm")) {
+    expect_length(m[[x]], 2L * length(analysisTimes))
+  }
+  expect_false(any(grepl("year2020", c(m$vtm, m$sam))))
+})
+
 test_that("the veg-type and stand-age maps of a rep are listed in the same year order", {
   ## the patch metrics pair them by position
   root <- withr::local_tempdir()
@@ -88,4 +98,38 @@ test_that("a missing LandTypeCC_reporting is warned about, not silent", {
                         debug = FALSE),
     "LandTypeCC_reporting"
   )
+})
+
+test_that("national layers join the reporting polygons; standOnlyLayers get only the stand-level measures", {
+  root <- withr::local_tempdir()
+  sim <- makeMultiSim(makeOutputsDF(root), reps = 1:2)
+  SpaDES.core::params(sim)$NRV_summary$nationalReportingLayers <- c("Province", "Protected")
+  sim$studyAreaReporting <- sf::st_sf(geometry = sf::st_as_sfc(sf::st_bbox(c(xmin = 0, ymin = 0, xmax = 10, ymax = 10),
+                                                                           crs = 3978)))
+  asked <- NULL
+  testthat::local_mocked_bindings(
+    buildReportingPolygons = function(studyArea, destinationPath, targetCRS, layers, ...) {
+      asked <<- layers$NAME_SHORT
+      sapply(layers$NAME_SHORT, function(n) terra::vect(sf::st_sf(Name = n, geometry = sf::st_geometry(sim$studyAreaReporting))),
+             simplify = FALSE)
+    },
+    .package = "LandWebUtils"
+  )
+  sim <- runInit(sim)
+  m <- modOf(sim)
+  expect_identical(asked, c("Province", "Protected"))
+  expect_identical(names(m$reportingPolygons), c("ELF", "Province", "Protected"))
+  expect_s3_class(m$reportingPolygons$Protected, "sf")
+  expect_identical(names(sim$reportingPolygons), "ELF") ## the input is not changed
+  expect_identical(m$standPolyNames, c("ELF", "Province", "Protected"))
+  expect_identical(m$rptPolyNames, c("ELF", "Province")) ## no landscape or patch metrics of the protected areas
+})
+
+test_that("an unknown national layer stops the run before any work", {
+  root <- withr::local_tempdir()
+  sim <- makeMultiSim(makeOutputsDF(root), reps = 1:2)
+  SpaDES.core::params(sim)$NRV_summary$nationalReportingLayers <- "Parks"
+  sim$studyAreaReporting <- sf::st_sf(geometry = sf::st_as_sfc(sf::st_bbox(c(xmin = 0, ymin = 0, xmax = 10, ymax = 10),
+                                                                           crs = 3978)))
+  expect_error(runInit(sim), "unknown nationalReportingLayers.*Parks")
 })
