@@ -188,6 +188,14 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
   switch(
     eventType,
     init = {
+      ## No tree species in this study area (sppEquiv has no rows, e.g. a non-forested study area):
+      ## there is no vegetation to summarise, so schedule nothing.
+      if (.noTreeSpecies(sim)) {
+        message(.noTreeMsg)
+        mod$noTreeSpecies <- TRUE
+        return(invisible(sim))
+      }
+
       if (min(P(sim)$summaryPeriod) < start(sim) || max(P(sim)$summaryPeriod) > end(sim)) {
         stop("summaryPeriod values are outside the range of simulation times")
       }
@@ -266,6 +274,8 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       ## summary event sees inputs set by any module's init.
       if (!isTRUE(mod$inputsChecked)) {
         if (!isTRUE(.checkSingleInputs(sim))) {
+          ## no tree species: save_single, scheduled alongside, must do nothing as well
+          mod$noTreeSpecies <- TRUE
           return(invisible(sim))
         }
         mod$inputsChecked <- TRUE
@@ -327,6 +337,9 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       sim <- makeAnimation(sim)
     },
     save_single = {
+      if (isTRUE(mod$noTreeSpecies)) {
+        return(invisible(sim))
+      }
       padYear <- paddedFloatToChar(time(sim), padL = ceiling(log10(end(sim) + 1)))
 
       ## objects to save at start of simulation ---------------------------------------------------
@@ -632,9 +645,26 @@ InitMulti <- function(sim) {
 ## its group (`grp` from LandWebUtils::sppEquiv_groups()), so that LandR::vegTypeMapGenerator(),
 ## which sums B within a species code, sums it within a group before deciding the leading type.
 ## Stops, naming the inputs, when single mode lacks any of the objects the vegetation modules supply.
+## Returns FALSE, with a message, when `sppEquiv` has no tree species: there is nothing to summarise.
+.noTreeMsg <- "NRV_summary: no tree species in sppEquiv; nothing to summarise"
+
+## TRUE when `sppEquiv` is present but has no rows for the module's `sppEquivCol` species.
+.noTreeSpecies <- function(sim) {
+  eq <- sim$sppEquiv
+  if (!is.data.frame(eq)) {
+    return(FALSE)
+  }
+  col <- P(sim)$sppEquivCol
+  nrow(eq) == 0L || (col %in% names(eq) && !any(!is.na(eq[[col]])))
+}
+
 .checkSingleInputs <- function(sim) {
   needed <- c("cohortData", "pixelGroupMap", "speciesLayers", "sppColorVect", "sppEquiv", "studyAreaReporting")
   missing <- needed[vapply(needed, function(nm) is.null(sim[[nm]]), logical(1))]
+  if (!"sppEquiv" %in% missing && .noTreeSpecies(sim)) {
+    message(.noTreeMsg)
+    return(FALSE)
+  }
   if (length(missing)) {
     stop(
       "NRV_summary (mode = 'single') needs ", paste(missing, collapse = ", "),

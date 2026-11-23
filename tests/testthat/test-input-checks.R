@@ -50,3 +50,35 @@ test_that("the first map_generators stops on a NULL speciesLayers", {
     "speciesLayers"
   )
 })
+
+test_that("zero-row sppEquiv at init schedules no NRV_summary events", {
+  objs <- stubObjects()
+  objs$sppEquiv <- objs$sppEquiv[0L]
+  sim <- stubSim(objs, withr::local_tempdir())
+  expect_message(
+    sim <- suppressWarnings(
+      SpaDES.core::spades(sim, events = list(NRV_summary = "init"), debug = FALSE)
+    ),
+    "no tree species"
+  )
+  ev <- SpaDES.core::events(sim)
+  expect_false(any(ev$moduleName == "NRV_summary"))
+})
+
+test_that("zero-row sppEquiv by the first event: a message, no error, nothing scheduled", {
+  objs <- stubObjects()
+  objs$sppEquiv <- NULL
+  root <- withr::local_tempdir()
+  sim <- stubSim(objs, root)
+  sim <- suppressWarnings(
+    SpaDES.core::spades(sim, events = list(NRV_summary = "init"), debug = FALSE)
+  )
+  ## another module's init supplies the empty table after NRV_summary's init
+  sim$sppEquiv <- stubObjects()$sppEquiv[0L]
+  expect_message(
+    sim <- suppressWarnings(SpaDES.core::spades(sim, debug = FALSE)),
+    "no tree species"
+  )
+  expect_length(list.files(file.path(root, "out"), pattern = "_year"), 0L)
+  expect_false(any(SpaDES.core::events(sim)$moduleName == "NRV_summary"))
+})
