@@ -4,17 +4,15 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 * **A run shorter than 650 years gets a time series (`2.0.0.9040`).** The default `timeSeriesTimes` is the last 50 years of the run when the run ends before year 650, and years 601 to 650 otherwise.
 
-* **A study area with no tree species is skipped (`2.0.0.9040`).** If `sppEquiv` holds no tree species, the module summarises and saves nothing and says so in a message.
+* **A study area with no tree species is skipped (`2.0.0.9040`).** If `sppEquiv` holds no tree species, the module summarises and saves nothing and says so in a message. This applies only when `sppEquiv` has no tree species; with tree species, outputs are unchanged.
 
 * **Each summary year is summarised once (`2.0.0.9040`).** Year 1000 was summarised and saved twice; every summary time now gets one summary and one save.
 
 * **Inputs from another module's init are accepted (`2.0.0.9040`).** In `mode = "single"` the inputs are checked at the first summary event rather than at init, so a module loaded after NRV_summary can supply them; a missing input is reported by name, all at once.
 
-* **Analysis years and replicates are matched exactly (`2.0.0.9040`).** In `mode = "multi"`, a year is read from the `_year<YYYY>.` in a file name and a replicate from a whole folder name, so digits elsewhere in a path no longer select every year and `rep1` no longer picks up `rep10` to `rep12`. Auxiliary `.aux.xml` files are no longer read as cohort or pixel-group files.
+* **`InitMulti()` matches analysis years and replicate folders exactly (`2.0.0.9040`).** In `mode = "multi"`, a year is read from the `_year<YYYY>.` in a file name and a replicate from a whole folder name, so digits elsewhere in a path no longer select every year and `rep1` no longer picks up `rep10` to `rep12`. Auxiliary `.aux.xml` files are no longer read as cohort or pixel-group files. On LandWeb's WesternBoreal outputs (15 replicates, years 0 to 1000) it selects the same files as before, so its multi-mode summaries are unchanged.
 
 * **The module declares every package it calls (`2.0.0.9040`).** `arrow`, `crayon`, `future`, `reproducible` and `rlang` are added to `reqdPkgs`, and `pemisc` requires 0.0.4.9016 or later.
-
-None of these changes LandWeb's outputs: its replicate folders are `rep01` to `rep10` and its runs span years 0 to 1000.
 
 * **A vegetation type absent from a snapshot has no leading proportion there (`2.0.0.9036`).** `leadingProp` is the share of a type's own forest in each age class, which has no value (0 of 0 ha) where the type is absent, so the `lw` zero rows (`lw_zeros.parquet`) no longer fill it: the leading-proportion boxplots and CSVs summarise the replicate-years in which the type leads. The area metrics (`leadingShare`, large-patch counts and areas) keep their zeros, and a type absent today has no current-condition `leadingProp`. **This changes the leading-proportion boxplots and CSVs** wherever a type is absent from some replicate-years (in LandWeb's WesternAlbertaUpland, fir in all 10 tenures).
 
