@@ -1,7 +1,7 @@
 ---
 title: "NRV_summary Manual"
 subtitle: "v.2.0.0.9039"
-date: "Last updated: 2026-11-16"
+date: "Last updated: 2026-11-23"
 output:
   bookdown::html_document2:
     toc: true
@@ -179,6 +179,15 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
+   <td style="text-align:left;"> bigTreedQuantile </td>
+   <td style="text-align:left;"> numeric </td>
+   <td style="text-align:left;"> 0.75 </td>
+   <td style="text-align:left;"> 0 </td>
+   <td style="text-align:left;"> 1 </td>
+   <td style="text-align:left;"> stand-level event: a stand is big-treed old forest (`bigOld`) when it is in the oldest age class and its biomass is at least this quantile of the biomass of the oldest age class at the current condition over the reporting area. A stand-in for site productivity, until that is available. </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
    <td style="text-align:left;"> ccStandAgeSource </td>
    <td style="text-align:left;"> character </td>
    <td style="text-align:left;"> standAgeMap </td>
@@ -251,6 +260,15 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
+   <td style="text-align:left;"> recentFireYears </td>
+   <td style="text-align:left;"> integer </td>
+   <td style="text-align:left;"> 1985, 2024 </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> stand-level event: the observed fire years (NBAC) whose burned area is the current condition of `burnedRecent`; their number (40 by default, as ECCC's boreal caribou disturbance measure) is also the window of the simulated time since fire (`burnedRecent`) and of stand age (`youngRecent`). </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
    <td style="text-align:left;"> reps </td>
    <td style="text-align:left;"> integer </td>
    <td style="text-align:left;"> 1, 2, 3,.... </td>
@@ -287,6 +305,24 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
+   <td style="text-align:left;"> standOnlyLayers </td>
+   <td style="text-align:left;"> character </td>
+   <td style="text-align:left;"> Protected </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> reporting layers summarised by the stand-level event (`st`) only, not by the landscape and patch metrics: layers of units too small or scattered for patch structure to mean much, such as the protected areas. </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> sofIndicators </td>
+   <td style="text-align:left;"> logical </td>
+   <td style="text-align:left;"> FALSE </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> the State of the Forest indicator outputs: the stand-level measures `bigOld`, `youngRecent` and `burnedRecent` (the last fetches NBAC fires for its current condition), the `sofIndicator` column of the `lm_` and `st_nrvComparison.csv` tables, and the stand_disturbance figure. FALSE (the default) writes none of them. </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
    <td style="text-align:left;"> stabilityAlpha </td>
    <td style="text-align:left;"> numeric </td>
    <td style="text-align:left;"> 0.05 </td>
@@ -311,6 +347,24 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> 0 </td>
    <td style="text-align:left;"> 1 </td>
    <td style="text-align:left;"> (mode = 'multi') the last fraction of `summaryPeriod` over which the stability check looks for a directional trend (0.5 = the last half). A run whose metrics are still trending there needs to be longer. It does not define the NRV (see `nrvWindow`). </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> nationalReportingLayers </td>
+   <td style="text-align:left;"> character </td>
+   <td style="text-align:left;">  </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> (mode = 'multi') layers of `LandWebUtils::nationalReportingLayers()` to add to `reportingPolygons`, by `NAME_SHORT`: any of 'Province', 'Ecozone', 'Protected', 'BorealCaribou'. Each is clipped to `studyAreaReporting`, so a run reports its own pieces of a province or an ecozone. </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> nationalReportingLayersPath </td>
+   <td style="text-align:left;"> character </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> where the national layers are downloaded (once, and shared by every run that points here); `NA` is `inputPath(sim)`. </td>
    <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
