@@ -195,14 +195,8 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       mod$analysesOutputsTimes <- analysesOutputsTimes(P(sim)$summaryPeriod, P(sim)$summaryInterval)
 
       if (P(sim)$mode == "single") {
-        stopifnot(
-          !is.null(sim$cohortData),
-          !is.null(sim$pixelGroupMap),
-          !is.null(sim$speciesLayers),
-          !is.null(sim$sppColorVect),
-          !is.null(sim$sppEquiv),
-          !is.null(sim$studyAreaReporting)
-        )
+        ## The vegetation inputs are checked at the first map_generators, not here: a module that
+        ## loads after this one may provide them in its own init.
         if (!P(sim)$ccStandAgeSource %in% c("standAgeMap", "cohortData")) {
           stop("ccStandAgeSource must be 'standAgeMap' or 'cohortData'.", call. = FALSE)
         }
@@ -263,6 +257,14 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       }
     },
     map_generators = {
+      ## The year-0 event runs after every module's init (.first() + 1), so the check at the first
+      ## summary event sees inputs set by any module's init.
+      if (!isTRUE(mod$inputsChecked)) {
+        if (!isTRUE(.checkSingleInputs(sim))) {
+          return(invisible(sim))
+        }
+        mod$inputsChecked <- TRUE
+      }
       mod$vegTypeMap <- LandR::vegTypeMapGenerator(
         sim$cohortData,
         sim$pixelGroupMap,
@@ -622,6 +624,21 @@ InitMulti <- function(sim) {
 ## One vegetation-type map by reporting group: a copy of `cohortData` with each species recoded to
 ## its group (`grp` from LandWebUtils::sppEquiv_groups()), so that LandR::vegTypeMapGenerator(),
 ## which sums B within a species code, sums it within a group before deciding the leading type.
+## Stops, naming the inputs, when single mode lacks any of the objects the vegetation modules supply.
+.checkSingleInputs <- function(sim) {
+  needed <- c("cohortData", "pixelGroupMap", "speciesLayers", "sppColorVect", "sppEquiv", "studyAreaReporting")
+  missing <- needed[vapply(needed, function(nm) is.null(sim[[nm]]), logical(1))]
+  if (length(missing)) {
+    stop(
+      "NRV_summary (mode = 'single') needs ", paste(missing, collapse = ", "),
+      " in the simList by the first summary event, but not found; ",
+      "they come from the vegetation modules (e.g. Biomass_core).",
+      call. = FALSE
+    )
+  }
+  invisible(TRUE)
+}
+
 .reportingVegTypeMap <- function(cohortData, pixelGroupMap, grp, colors, vegLeadingProportion,
                                  mixedType) {
   LandR::vegTypeMapGenerator(
