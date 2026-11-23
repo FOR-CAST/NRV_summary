@@ -210,11 +210,13 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
 
         ## The later years at the end of their year, also each timeSeriesTimes year so the
         ## animation has its frames (read back in mode = "multi"); those typically fall outside
-        ## summaryPeriod, so the summaryInterval reschedule does not cover them. A time equal to
-        ## start(sim) is left out: a second year-0 save would overwrite the one above.
+        ## summaryPeriod, so the summaryInterval reschedule does not cover them. The start of the
+        ## summary period, the end and the timeSeriesTimes can coincide: each distinct time is
+        ## scheduled once, and a time equal to start(sim) is left out (a second year-0 save would
+        ## overwrite the one above). The summaryInterval reschedule skips these times too.
         ## map_generators before save_single, so the maps exist when saved.
-        later <- c(P(sim)$summaryPeriod[1], end(sim), P(sim)$timeSeriesTimes)
-        for (t in later[later != start(sim)]) {
+        mod$initTimes <- unique(c(start(sim), P(sim)$summaryPeriod[1], end(sim), P(sim)$timeSeriesTimes))
+        for (t in mod$initTimes[mod$initTimes != start(sim)]) {
           sim <- scheduleEvent(sim, t, "NRV_summary", "map_generators", .last())
           sim <- scheduleEvent(sim, t, "NRV_summary", "save_single", .last())
         }
@@ -289,9 +291,10 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       }
       mod$standAgeMap <- terra::mask(mod$standAgeMap, sim$studyAreaReporting)
 
-      if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2]) {
-        ## fmt: skip
-        sim <- scheduleEvent(sim, time(sim) + P(sim)$summaryInterval, "NRV_summary", "map_generators", .last())
+      nextTime <- time(sim) + P(sim)$summaryInterval
+      ## times scheduled by init are not scheduled a second time here
+      if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2] && !nextTime %in% mod$initTimes) {
+        sim <- scheduleEvent(sim, nextTime, "NRV_summary", "map_generators", .last())
       }
     },
     postprocess = {
@@ -365,9 +368,10 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         terra::writeRaster(sim$pixelGroupMap, f_pixelGroupMap, datatype = "INT4U", overwrite = TRUE)
         sim <- registerOutputs(f_pixelGroupMap, sim)
 
-        if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2]) {
-          ## fmt: skip
-          sim <- scheduleEvent(sim, time(sim) + P(sim)$summaryInterval, "NRV_summary", "save_single", .last())
+        nextTime <- time(sim) + P(sim)$summaryInterval
+        ## times scheduled by init are not scheduled a second time here
+        if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2] && !nextTime %in% mod$initTimes) {
+          sim <- scheduleEvent(sim, nextTime, "NRV_summary", "save_single", .last())
         }
       }
 
