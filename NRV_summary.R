@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9040"),
+  version = list(NRV_summary = "2.0.0.9041"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -41,7 +41,10 @@ defineModule(sim, list(
     ## axes; the plot functions take captions.
     "FOR-CAST/nrvtools (>= 0.3.4.9003)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9016)",
-    "PredictiveEcology/SpaDES.core@development (>= 3.0.3.9000)"
+    ## 3.2.1.9057: InitMulti calls dirnamesFromSet(..., leafOnly = FALSE) and resolveSimYears();
+    ## it relies on dirnamesFromSet() keeping zero-padded folders (rep01) as found (from 3.2.1.9038)
+    ## and on its bare-number folder fallback (1/, 2/; PredictiveEcology/NRV_summary#20).
+    "PredictiveEcology/SpaDES.core@development (>= 3.2.1.9057)"
   ),
   parameters = bindrows(
     defineParameter("ageClasses", "character", LandWebUtils:::.ageClasses, NA, NA,
@@ -154,6 +157,10 @@ defineModule(sim, list(
                               "water/barren/snow are already NA on both sides.")),
     expectsInput("flammableMap", "SpatRaster",
                  desc = "binary flammability map (required with `type = 'single'`)"),
+    expectsInput("outputsDF", "data.frame",
+                 desc = paste("(mode = 'multi', optional) the files the replicate simulations saved, with at least a",
+                              "`file` column (e.g. their `outputs(sim)` row-bound). When absent, the replicate",
+                              "folders under `outputPath(sim)` are listed.")),
     expectsInput("pixelGroupMap", "SpatRaster",
                  desc = "Required in single mode."),
     expectsInput("reportingPolygons", "list",
@@ -414,22 +421,46 @@ InitMulti <- function(sim) {
   mod$ppFiles <- character(0) ## files the postprocess events write; see .registerPostprocessOutputs()
   ## check for necessary output files -----------------------------------------------
   ## NOTE: don't load simLists -- slow and unreliable
-  allReps <- sprintf("rep%02d", P(sim)$reps)
+  ## the saved files: those listed in `sim$outputsDF` (runs that register them, e.g. FireSense, in
+  ## folders `rep1`, `rep2`, ...), else those found under `outputPath(sim)` (`rep01`, `rep02`, ...)
+  useOutputs <- .hasOutputsDF(sim)
+  files <- .discoverOutputFiles(sim)
+  ## dirnamesFromSet() answers `rep<reps>` for no files at all; with none, no replicate was found
+  mod$allReps <- if (length(files) > 0L) dirnamesFromSet(files, P(sim)$reps) else character(0)
+  if (length(mod$allReps) < length(P(sim)$reps)) {
+    stop(
+      "found the files of ", length(mod$allReps), " replicate(s) ",
+      if (useOutputs) "in `outputsDF`" else paste0("under ", outputPath(sim)),
+      " but reps asks for ", length(P(sim)$reps), ": ", paste(P(sim)$reps, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  allReps <- mod$allReps
+  ## where the replicates' folders are: wherever they were saved when listed in `outputsDF`
+  ## (in multi mode `outputPath(sim)` is the summary folder, not a replicate's), else under `outputPath(sim)`
+  repDirs <- if (useOutputs) {
+    dirnamesFromSet(files, P(sim)$reps, leafOnly = FALSE)
+  } else {
+    file.path(outputPath(sim), allReps)
+  }
+  mod$rep1Dir <- repDirs[1]
+  ## simTimes unset (NA): take the run's start and end. A given simTimes is kept as is.
+  P(sim)$simTimes <- SpaDES.core::resolveSimYears(P(sim)$simTimes, sim)
   padL <- ceiling(log10(P(sim)$simTimes[2] + 1))
   padYearStart <- paddedFloatToChar(P(sim)$simTimes[1], padL = padL)
   padYearEnd <- paddedFloatToChar(P(sim)$simTimes[2], padL = padL)
 
   ## all reps have same flammable map
-  mod$flm <- file.path(outputPath(sim), allReps[1], paste0("flammableMap_year", padYearEnd, ".tif"))
+  mod$flm <- file.path(mod$rep1Dir, paste0("flammableMap_year", padYearEnd, ".tif"))
 
   ## current-conditions reference = the sim's saved year-0 state (the deterministic
   ## initial condition, identical across reps -- read from rep 1). Read directly so
   ## the CC snapshot needs no regeneration from speciesLayers / no "CC SAM" input,
   ## and no write-before-read ordering between the landscape + patch metric events.
-  mod$fvtm0 <- file.path(outputPath(sim), allReps[1], paste0("vegTypeMap_year", padYearStart, ".tif"))
-  mod$fsam0 <- file.path(outputPath(sim), allReps[1], paste0("standAgeMap_year", padYearStart, ".tif"))
+  mod$fvtm0 <- file.path(mod$rep1Dir, paste0("vegTypeMap_year", padYearStart, ".tif"))
+  mod$fsam0 <- file.path(mod$rep1Dir, paste0("standAgeMap_year", padYearStart, ".tif"))
   ## current-conditions time-since-fire (burnSummaries output); age basis for the LandWeb summaries.
-  mod$ftsf0 <- file.path(outputPath(sim), allReps[1], paste0("rstTimeSinceFire_year", padYearStart, ".tif"))
+  mod$ftsf0 <- file.path(mod$rep1Dir, paste0("rstTimeSinceFire_year", padYearStart, ".tif"))
 
   ## The year-0 rasters are the SIMULATION's initial state, in which urban has been imputed to its
   ## nearest forest type so the run approximates a pre-industrial landscape. Reporting current
@@ -456,27 +487,19 @@ InitMulti <- function(sim) {
     mod$ftsf0 <- .maskCC(mod$ftsf0, urbanMask, ccDir)
   }
 
-  cdpgm <- fs::dir_ls(
-    outputPath(sim),
-    regexp = "cohortData|pixelGroupMap",
-    recurse = 1,
-    type = "file"
-  )
+  ## the name and type filters read the file name, not the folders above it
+  cdpgm <- files[grepl("cohortData|pixelGroupMap", basename(files))]
   cdpgm <- cdpgm[.inReps(cdpgm, allReps) & .inYears(cdpgm, mod$analysesOutputsTimes)]
-  allouts <- fs::dir_ls(
-    outputPath(sim),
-    regexp = "vegType|standAge",
-    recurse = 1,
-    type = "file"
-  )
-  mod$allouts <- grep("gri|png|txt|xml", allouts[.inReps(allouts, allReps)], value = TRUE, invert = TRUE)
+  allouts <- files[grepl("vegType|standAge", basename(files))]
+  allouts <- allouts[.inReps(allouts, allReps)]
+  mod$allouts <- allouts[!grepl("gri|png|txt|xml", basename(allouts))]
   ## drop the files of the years only the time series needs (not analysed)
   seriesOnlyYears <- setdiff(c(0, P(sim)$timeSeriesTimes), mod$analysesOutputsTimes)
   mod$allouts2 <- mod$allouts[!.inYears(mod$allouts, seriesOnlyYears)]
 
   filesUserHas <- c(cdpgm, mod$allouts2)
 
-  dirsExpected <- file.path(outputPath(sim), allReps)
+  dirsExpected <- repDirs
   filesExpected <- as.character(sapply(dirsExpected, function(d) {
     c(
       file.path(d, sprintf("cohortData_year%04d.qs2", mod$analysesOutputsTimes)),
@@ -486,7 +509,7 @@ InitMulti <- function(sim) {
     )
   }))
 
-  filesNeeded <- data.frame(file = filesExpected, exists = filesExpected %in% filesUserHas)
+  filesNeeded <- data.frame(file = filesExpected, exists = filesExpected %in% filesUserHas & file.exists(filesExpected))
 
   if (!all(filesNeeded$exists)) {
     missing <- filesNeeded[filesNeeded$exists == FALSE, ]$file
@@ -801,6 +824,26 @@ InitMulti <- function(sim) {
   reproducible::checkPath(file.path(.ppRoot(sim), "csv", kind, layer, ...), create = TRUE)
 }
 
+## TRUE when `sim$outputsDF` was given: a data.frame with rows. The one test for it, so the files are
+## read from the same place the messages say.
+.hasOutputsDF <- function(sim) {
+  is.data.frame(sim$outputsDF) && NROW(sim$outputsDF) > 0L
+}
+
+## The saved files of the replicates: those in `sim$outputsDF$file` (each once, in a fixed order, as
+## a file saved twice is listed twice), or, when there is none, those one folder down under
+## `outputPath(sim)`.
+.discoverOutputFiles <- function(sim) {
+  if (.hasOutputsDF(sim)) {
+    if (!"file" %in% names(sim$outputsDF)) {
+      stop("NRV_summary: `outputsDF` has no `file` column", call. = FALSE)
+    }
+    sort(unique(as.character(sim$outputsDF$file)))
+  } else {
+    as.character(fs::dir_ls(outputPath(sim), recurse = 1, type = "file"))
+  }
+}
+
 ## The year of each saved file, from the `_year<digits>.<ext>` of its name (NA for a name without one).
 ## Only the file name is read, so digits in a folder name are never taken for a year.
 .fileYear <- function(files) {
@@ -821,6 +864,21 @@ InitMulti <- function(sim) {
     strsplit(as.character(files), "[/\\\\]"),
     function(p) any(p %in% reps),
     logical(1L)
+  )
+}
+
+## the files of `files` in the first replicate's folder (`rep1Dir`): those under its full path, so a
+## folder of the same name under another parent, or `rep10` for `rep1`, is not matched.
+.firstRepFiles <- function(files, rep1Dir) {
+  files <- files[!is.na(files)]
+  files[startsWith(files, paste0(sub("/+$", "", rep1Dir), "/"))]
+}
+
+## the year-0 cohortData and pixelGroupMap paths in the first replicate's folder.
+.repYear0Files <- function(rep1Dir) {
+  list(
+    cohortData = file.path(rep1Dir, "cohortData_year0000.qs2"),
+    pixelGroupMap = file.path(rep1Dir, "pixelGroupMap_year0000.tif")
   )
 }
 
@@ -1281,8 +1339,9 @@ makeSeralStageMapsBC <- function(sim) {
   sf::st_write(NDTBEC, fNDTBEC, append = FALSE, quiet = TRUE)
   rm(studyAreaReporting, NDTBEC)
 
-  fcd0 <- file.path(outputPath(sim), "rep01", "cohortData_year0000.qs2")
-  fpgm0 <- file.path(outputPath(sim), "rep01", "pixelGroupMap_year0000.tif")
+  year0 <- .repYear0Files(mod$rep1Dir)
+  fcd0 <- year0$cohortData
+  fpgm0 <- year0$pixelGroupMap
 
   fcd <- c(fcd0, mod$cd)
   fpgm <- c(fpgm0, mod$pgm)
@@ -1428,9 +1487,9 @@ patchMetricsSeralBC <- function(sim) {
 makeAnimation <- function(sim) {
   ## animate replicate 1's saved stand-age time series (the deterministic first rep,
   ## matching the CC snapshot); frames were masked to studyAreaReporting when saved.
-  samFiles <- grep("rep01", mod$samTimeSeries, value = TRUE)
+  samFiles <- .firstRepFiles(mod$samTimeSeries, mod$rep1Dir)
   if (length(samFiles) == 0L) {
-    warning("NRV_summary animation: no rep01 standAgeMap time-series files found; skipping.")
+    warning("NRV_summary animation: no ", basename(mod$rep1Dir), " standAgeMap time-series files found; skipping.")
     return(invisible(sim))
   }
   yrs <- as.integer(gsub(".*year0*([0-9]+)\\.tif$", "\\1", samFiles))

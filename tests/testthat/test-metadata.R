@@ -23,6 +23,7 @@ test_that("inputs are the expected names and classes", {
       "cohortData"           = "data.table",
       "flammableMap"         = "SpatRaster",
       "LandTypeCC_reporting" = "SpatRaster",
+      "outputsDF"            = "data.frame",
       "pixelGroupMap"        = "SpatRaster",
       "reportingPolygons"    = "list",
       "speciesLayers"        = "SpatRaster",
