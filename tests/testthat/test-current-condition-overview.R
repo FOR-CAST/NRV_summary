@@ -97,3 +97,44 @@ test_that("the canvas follows the page's panel count, up to 24 panels", {
   expect_gt(lay(12L)$height, lay(4L)$height)
   expect_equal(lay(1L)$ncol, 1L)
 })
+
+test_that("a year that is only partly NA still leaves the range of the other values", {
+  nrvRange <- moduleFn(".nrvRange", new.env())
+  env <- overviewEnv()
+  i <- env$metric == "ai" & env$time == 200
+  env$min[i] <- NA_real_ ## the max and mean of that year remain
+  r <- nrvRange(env, period = c(100, 300))
+  r <- r[r$metric == "ai", ]
+  expect_equal(c(r$lo, r$hi), c(8, 52))
+  env$mean[i] <- NA_real_
+  expect_equal(nrvRange(env, c(100, 300))$mid[nrvRange(env, c(100, 300))$metric == "ai"], median(c(50, 10)))
+})
+
+test_that("a comparison with no rows gives an empty overview, not an error", {
+  ccData <- moduleFn(".ccOverviewData", new.env())
+  cc <- data.frame(poly = "ELF", metric = "not_in_env", mean = 1)
+  d <- ccData(overviewEnv(), cc, c(100, 300))
+  expect_equal(nrow(d), 0L)
+  expect_true("panel" %in% names(d))
+  expect_length(moduleFn(".ccOverviewPages", new.env())(d), 0L)
+})
+
+test_that("a last page of one or two panels gets the small canvas", {
+  lay <- moduleFn(".ccOverviewLayout", new.env())
+  expect_equal(lay(1L)$ncol, 1L)
+  expect_equal(lay(2L)$ncol, 2L)
+  expect_equal(lay(1L)$nrow, 1L)
+  expect_equal(lay(2L)$nrow, 1L)
+  expect_equal(lay(2L)$width, 8)
+  expect_lt(lay(2L)$height, lay(5L)$height)
+  expect_lt(lay(1L)$height, lay(24L)$height / 2)
+  ## a 25-panel layer: pages of 24 and 1, the last on the small canvas
+  ccData <- moduleFn(".ccOverviewData", new.env())
+  pages <- moduleFn(".ccOverviewPages", new.env())
+  polys <- sprintf("P%02d", 1:13)
+  d <- ccData(overviewEnv(polys), overviewCC(polys), c(100, 300))
+  d <- d[seq_len(25L), ]
+  sizes <- vapply(pages(d), function(p) length(unique(p$panel)), integer(1))
+  expect_equal(sizes, c(24L, 1L))
+  expect_equal(lay(sizes[2L])$height, lay(1L)$height)
+})

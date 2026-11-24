@@ -103,7 +103,8 @@ defineModule(sim, list(
                           "'pm' for default patch metrics;",
                           "'on' for ON patch metrics;",
                           "'stability' for the check that the run is long enough (is each metric still",
-                          "trending over the end of the NRV period?), `stability.csv` and its figures.",
+                          "trending over the end of the NRV period?), `stability.csv` and its figures, and,",
+                          "with 'lm' in the same run, the current-condition overview of each lm layer.",
                           "Not in the default: it runs only when asked for.",
                           "Any other value is an error ('fd', forest degradation indicators, is not",
                           "implemented).")),
@@ -2497,6 +2498,10 @@ makeAnimation <- function(sim) {
 .ccOverviewData <- function(env, cc, period, level = "landscape") {
   d <- .nrvComparison(env, cc, period)
   d <- d[order(d$poly, d$metric), , drop = FALSE]
+  if (!nrow(d)) {
+    d$panel <- character(0)
+    return(d)
+  }
   mets <- unique(d$metric)
   title <- stats::setNames(vapply(mets, .metricTitle, character(1), level = level), mets)
   d$panel <- paste0(if (length(unique(d$poly)) > 1L) paste0(d$poly, ": ") else "", title[d$metric])
@@ -2523,7 +2528,7 @@ makeAnimation <- function(sim) {
 .currentConditionOverview <- function(d, title = "Current condition relative to the NRV") {
   positionColour <- c(inside = "#1b9e77", below = "#2166ac", above = "#7b3294")
   positionLabels <- c(inside = "inside the NRV range", below = "below the NRV range", above = "above the NRV range")
-  midLabel <- "NRV median"
+  midLabel <- "median of NRV-year means"
   d$panel <- factor(d$panel, levels = unique(d$panel))
   lay <- .ccOverviewLayout(nlevels(d$panel))
   ggplot2::ggplot(d) +
@@ -2546,6 +2551,7 @@ makeAnimation <- function(sim) {
 ## `mod`. Returns the files; none when the lm event did not run or a layer has no envelope or current condition.
 .ccOverviewFigs <- function(sim) {
   if (!"lm" %in% tolower(P(sim)$postprocessEvents)) {
+    message("NRV_summary stability: no current-condition overview; it needs the lm event in the same run")
     return(character(0))
   }
   period <- .nrvPeriod(sim)

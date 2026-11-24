@@ -376,3 +376,60 @@ test_that("the overview pages are written under figures/stability, with the rest
   ## no lm event, no overview
   expect_length(withP(moduleFn(".ccOverviewFigs", m), postprocessEvents = "stability")(sim), 0L)
 })
+
+test_that("stability asked for without lm says the overview needs lm", {
+  withr::local_package("SpaDES.core")
+  sim <- stabSim()
+  fn <- withP(moduleFn(".ccOverviewFigs", new.env()), postprocessEvents = "stability")
+  expect_message(files <- fn(sim), "needs the lm event")
+  expect_length(files, 0L)
+})
+
+## the check with its series stubbed and the real overview writer over `m`'s envelope
+overviewCheck <- function(m) {
+  g <- expand.grid(rep = 1:2, time = seq(0, 1000, 100))
+  one <- function(metric) {
+    data.frame(kind = "lm", layer = "A", poly = "A", level = "landscape", class = NA_character_,
+               metric = metric, g, value = g$time / 100 + g$rep)
+  }
+  series <- rbind(one("ai01"), one("ai02")) ## as in the check test above
+  check <- withP(moduleFn("stabilityCheck", m), postprocessEvents = c("lm", "stability"),
+                 stabilityAlpha = 0.05, stabilityMinChange = 0.1)
+  environment(check)$.stabilitySeries <- function(sim) series
+  environment(check)$.stabilityWindow <- function(sim) c(500, 1000)
+  environment(check)$.metricTitle <- function(met, level) met
+  fig <- withP(moduleFn(".ccOverviewFigs", m), postprocessEvents = c("lm", "stability"))
+  environment(fig)$.nrvPeriod <- function(sim) c(100, 300)
+  environment(check)$.ccOverviewFigs <- fig
+  check
+}
+
+test_that("the check registers the overview files as outputs", {
+  withr::local_package("SpaDES.core")
+  sim <- stabSim()
+  m <- new.env()
+  m$rptPolyNames <- "A"
+  refCode <- LandWebUtils::refCodeFor("lm", "A")
+  m[[refCode]] <- ccOverviewEnv("A")
+  m[[paste0(refCode, "_CC")]] <- ccOverviewCC("A")
+  sim <- suppressMessages(overviewCheck(m)(sim))
+  out <- SpaDES.core::outputs(sim)$file
+  ov <- out[grepl("current_condition_A_p1.png", out, fixed = TRUE)]
+  expect_length(ov, 1L)
+  expect_true(file.exists(ov))
+})
+
+test_that("an overview with no comparable metric draws nothing and stability.csv is still written", {
+  withr::local_package("SpaDES.core")
+  sim <- stabSim()
+  m <- new.env()
+  m$rptPolyNames <- "A"
+  refCode <- LandWebUtils::refCodeFor("lm", "A")
+  m[[refCode]] <- ccOverviewEnv("A")
+  cc <- ccOverviewCC("A")
+  cc$metric <- "not_in_env"
+  m[[paste0(refCode, "_CC")]] <- cc
+  expect_no_error(sim <- suppressMessages(overviewCheck(m)(sim)))
+  expect_true(file.exists(file.path(moduleFn(".ppCsvDir", m)(sim, "stability", "all"), "stability.csv")))
+  expect_false(any(grepl("current_condition", SpaDES.core::outputs(sim)$file)))
+})
