@@ -120,13 +120,60 @@ test_that("each key combination is its own series, and NA keys are kept", {
 test_that("the verdict line counts the series still changing", {
   res <- data.frame(flag = c("stable", "still changing", "stable", "insufficient"))
   expect_identical(
-    stabilityVerdict(res),
-    "1 of 3 metrics still changing; consider a longer run (1 with too few summary times to test)"
+    stabilityVerdict(res, c(850, 1000)),
+    "1 of 3 series still changing; consider a longer run (1 with too few summary times to test)"
   )
   expect_identical(
-    stabilityVerdict(data.frame(flag = "stable")),
-    "0 of 1 metrics still changing; the run is long enough"
+    stabilityVerdict(data.frame(flag = "stable"), c(850, 1000)),
+    "0 of 1 series still changing; the run is long enough for the series tested"
   )
+})
+
+test_that("the verdict does not call the run long enough when no series could be tested", {
+  res <- data.frame(flag = c("insufficient", "insufficient"))
+  v <- stabilityVerdict(res, c(850, 1000))
+  expect_identical(
+    v,
+    paste0("no series could be tested: the stability window 850-1000 holds fewer than 3 summary times; ",
+           "lower summaryInterval or raise stabilityWindow")
+  )
+  expect_false(grepl("long enough", v))
+})
+
+test_that("the stability window's summary times follow the NRV period's grid", {
+  times <- moduleFn(".stabilityTimes", new.env())
+  ## the module's defaults: only 900 and 1000 lie in 850-1000
+  expect_identical(times(c(700L, 1000L), 100L, 1, 0.5), c(900L, 1000L))
+  ## LandWeb-like settings
+  expect_identical(times(c(700L, 1000L), 50L, 1, 0.5), seq(850L, 1000L, 50L))
+  ## the window shrinks with nrvWindow: 925-1000
+  expect_identical(times(c(700L, 1000L), 50L, 0.5, 0.5), c(950L, 1000L))
+})
+
+test_that("a stability window with fewer than 3 summary times warns, naming the window", {
+  warnWindow <- moduleFn(".warnStabilityWindow", new.env())
+  expect_warning(
+    warnWindow(c(700L, 1000L), 100L, 1, 0.5),
+    "stability window 850-1000 holds fewer than 3 summary times.*summaryInterval.*stabilityWindow"
+  )
+  expect_no_warning(warnWindow(c(700L, 1000L), 50L, 1, 0.5))
+})
+
+test_that("init warns, and does not stop, when stability is asked for with too short a window", {
+  withr::local_package("SpaDES.core")
+  run <- function(events) {
+    SpaDES.core::spades(initSim(events = events), events = list(NRV_summary = "init"), debug = FALSE)
+  }
+  ## summaryInterval 300 over 700-1000: the window 850-1000 holds only 1000
+  expect_warning(sim <- run(c("lm", "stability")), "fewer than 3 summary times")
+  expect_true("postprocess_stability" %in% SpaDES.core::events(sim)$eventType)
+  ## not asked for: no such warning
+  w <- character(0)
+  withCallingHandlers(run(c("lm", "pm")), warning = function(c) {
+    w <<- c(w, conditionMessage(c))
+    invokeRestart("muffleWarning")
+  })
+  expect_false(any(grepl("fewer than 3 summary times", w)))
 })
 
 test_that(".pages splits the series ids into pages of at most perPage", {
@@ -333,7 +380,7 @@ test_that("the check writes stability.csv and one figure per page of series, eac
     drawn[[length(drawn) + 1L]] <<- list(kind = unique(d$kind), ids = unique(idOf(d)), panels = unique(g$data$panel))
     g
   }
-  expect_message(sim <- check(sim), "NRV_summary stability \\(500-1000\\): 14 of 14 metrics still changing")
+  expect_message(sim <- check(sim), "NRV_summary stability \\(500-1000\\): 14 of 14 series still changing")
   res <- utils::read.csv(file.path(moduleFn(".ppCsvDir", m)(sim, "stability", "all"), "stability.csv"))
   expect_equal(nrow(res), 14L)
   figs <- basename(list.files(moduleFn(".ppFigDir", m)(sim, "stability", "all")))

@@ -250,6 +250,11 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
              call. = FALSE)
       }
 
+      if ("stability" %in% tolower(P(sim)$postprocessEvents)) {
+        .warnStabilityWindow(P(sim)$summaryPeriod, P(sim)$summaryInterval, P(sim)$nrvWindow,
+                             P(sim)$stabilityWindow)
+      }
+
       mod$analysesOutputsTimes <- analysesOutputsTimes(P(sim)$summaryPeriod, P(sim)$summaryInterval)
 
       if (P(sim)$mode == "single") {
@@ -973,6 +978,24 @@ InitMulti <- function(sim) {
   times <- seq(sp[1L], sp[2L], by = interval)
   win <- .lastFraction(sp, nrvWindow)
   as.integer(round(times[times >= win[1L] - 1e-8 & times <= win[2L] + 1e-8]))
+}
+
+## The summary times in the stability window (the last `stabilityWindow` of the NRV period)
+.stabilityTimes <- function(summaryPeriod, interval, nrvWindow, stabilityWindow) {
+  win <- .lastFraction(.lastFraction(summaryPeriod, nrvWindow), stabilityWindow)
+  nrv <- .nrvYears(summaryPeriod, interval, nrvWindow)
+  nrv[nrv >= win[1L] - 1e-8 & nrv <= win[2L] + 1e-8]
+}
+
+## Warns when the stability window holds fewer than the 3 summary times the check needs: it would then test
+## no series. A warning, not an error: the other events still run.
+.warnStabilityWindow <- function(summaryPeriod, interval, nrvWindow, stabilityWindow) {
+  if (length(.stabilityTimes(summaryPeriod, interval, nrvWindow, stabilityWindow)) < 3L) {
+    win <- .lastFraction(.lastFraction(summaryPeriod, nrvWindow), stabilityWindow)
+    warning("the stability window ", win[1L], "-", win[2L], " holds fewer than 3 summary times, so the stability ",
+            "event will test no series; lower summaryInterval or raise stabilityWindow", call. = FALSE)
+  }
+  invisible(NULL)
 }
 
 ## What a dataset pooled over the NRV years records, in `<root>/nrvYears.txt`, of the years it holds
@@ -2446,13 +2469,17 @@ makeAnimation <- function(sim) {
     ggplot2::theme_bw(base_size = 9)
 }
 
-## "N of M metrics still changing; consider a longer run"
-.stabilityVerdict <- function(res) {
+## "N of M series still changing; consider a longer run", or, when no series could be tested, why not
+.stabilityVerdict <- function(res, window) {
   tested <- res$flag != "insufficient"
+  if (!any(tested)) {
+    return(paste0("no series could be tested: the stability window ", window[1L], "-", window[2L],
+                  " holds fewer than 3 summary times; lower summaryInterval or raise stabilityWindow"))
+  }
   n <- sum(res$flag == "still changing")
   paste0(
-    n, " of ", sum(tested), " metrics still changing",
-    if (n > 0L) "; consider a longer run" else "; the run is long enough",
+    n, " of ", sum(tested), " series still changing",
+    if (n > 0L) "; consider a longer run" else "; the run is long enough for the series tested",
     if (any(!tested)) paste0(" (", sum(!tested), " with too few summary times to test)")
   )
 }
@@ -2601,7 +2628,7 @@ stabilityCheck <- function(sim) {
   utils::write.csv(res, f_csv, row.names = FALSE)
   files <- c(f_csv, ccFiles)
 
-  message("NRV_summary stability (", window[1L], "-", window[2L], "): ", .stabilityVerdict(res))
+  message("NRV_summary stability (", window[1L], "-", window[2L], "): ", .stabilityVerdict(res, window))
 
   figDir <- .ppFigDir(sim, "stability", "all")
   res$id <- .stabilityId(res)
