@@ -147,14 +147,27 @@ In `mode = "multi"`, `plotFun` writes these figures for each reporting-polygon l
 - `lm/<layer>/per-metric/`: the envelopes of each landscape metric with a panel per subregion,
   up to 12 panels to a page.
 - `pm/<layer>/per-metric/`: box and violin plots of each patch metric for each vegetation type,
-  a panel per subregion, from the values of each replicate and summary year (a patch-level
+  a panel per subregion, from the values of each replicate and NRV year (a patch-level
   metric averaged over each replicate's patches), with the current condition as a red point.
+  The NRV years are the summary years in the last `nrvWindow` of `summaryPeriod`: all the summary
+  years when `nrvWindow` is 1 (the default).
   Patch area has no pages of its own: a replicate's mean patch area is the class's `area_mn`.
 - `boxplots/<layer>/` and `histograms/<layer>/`: the LandWeb summaries (`lw`), with the current
-  condition in red. Besides a boxplot per subregion and leading vegetation type,
+  condition in red, pooled over the replicates and the NRV years. Besides a boxplot per subregion and leading vegetation type,
   `boxplots/<layer>/<subregion> share of forest.png` has a panel per age class and a box per
   leading type of its share of the subregion's forested area.
 - `sspm/<layer>/`: the BC seral patch metrics (`bc`), one paginated envelope figure-set per metric.
+- `stability/all/` (only with `"stability"` in `postprocessEvents`): the check that the run is
+  long enough, with pages of series over time (reps as thin lines, the median in bold, the stability
+  window shaded, the verdict in each panel's title) and a summary of the verdicts. With `lm` in the
+  same run, `stability/all/current_condition/` shows, for each lm layer, where each metric's current
+  condition lies against its NRV range, on the metric's own scale, up to 24 panels to a page.
+  The verdicts are also in `csv/stability/all/stability.csv`. The check needs at least 3 summary times
+  in the stability window (the last `stabilityWindow` of the NRV years); `init` warns when there are
+  fewer, and the verdict then says that no series could be tested.
+
+When `nrvWindow` is below 1, the envelope figures still show every summary year, and shade the NRV
+years.
 
 The y axes name each metric and its unit, and each envelope and per-class figure has a caption
 saying what its marks show, with the numbers of replicates and simulation years drawn. A class
