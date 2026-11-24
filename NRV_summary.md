@@ -1,6 +1,6 @@
 ---
 title: "NRV_summary Manual"
-subtitle: "v.2.0.0.9042"
+subtitle: "v.2.0.0.9043"
 date: "Last updated: 2026-11-24"
 output:
   bookdown::html_document2:
@@ -212,6 +212,15 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
+   <td style="text-align:left;"> nrvWindow </td>
+   <td style="text-align:left;"> numeric </td>
+   <td style="text-align:left;"> 1 </td>
+   <td style="text-align:left;"> 0 </td>
+   <td style="text-align:left;"> 1 </td>
+   <td style="text-align:left;"> the NRV is the last fraction of `summaryPeriod` (1, the default, is all of it; 0.3 is the last 30%: with the default `summaryPeriod`, years 910-1000). Must be above 0 and at most 1. The LandWeb summaries (lw) and the per-class patch metric pages (pm) pool only the summary times in it, and the envelope figures shade it; their time series still show all of `summaryPeriod`. </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
    <td style="text-align:left;"> reuseAggregates </td>
    <td style="text-align:left;"> logical </td>
    <td style="text-align:left;"> FALSE </td>
@@ -235,7 +244,34 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> lm, pm </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
-   <td style="text-align:left;"> Specify which subset of postprocessing events to run. At least one of: 'am' for the stand-age time-series animation (GIF); 'bc' for BC seral stage patch metrics; 'lm' for default landscape metrics; 'lw' for default LandWeb summaries 'pm' for default patch metrics; 'on' for ON patch metrics. Any other value is an error ('fd', forest degradation indicators, is not implemented). </td>
+   <td style="text-align:left;"> Specify which subset of postprocessing events to run. At least one of: 'am' for the stand-age time-series animation (GIF); 'bc' for BC seral stage patch metrics; 'lm' for default landscape metrics; 'lw' for default LandWeb summaries 'pm' for default patch metrics; 'on' for ON patch metrics; 'stability' for the check that the run is long enough (is each metric still trending over the end of the NRV period?), `stability.csv` and its figures, and, with 'lm' in the same run, the current-condition overview of each lm layer. Not in the default: it runs only when asked for. Any other value is an error ('fd', forest degradation indicators, is not implemented). </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> stabilityAlpha </td>
+   <td style="text-align:left;"> numeric </td>
+   <td style="text-align:left;"> 0.05 </td>
+   <td style="text-align:left;"> 0 </td>
+   <td style="text-align:left;"> 1 </td>
+   <td style="text-align:left;"> (mode = 'multi') significance level of the Mann-Kendall trend test in the stability check (the `stability` event). </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> stabilityMinChange </td>
+   <td style="text-align:left;"> numeric </td>
+   <td style="text-align:left;"> 0.1 </td>
+   <td style="text-align:left;"> 0 </td>
+   <td style="text-align:left;"> 1 </td>
+   <td style="text-align:left;"> (mode = 'multi') a series is flagged 'still changing' only if its fitted change across the stability window exceeds this fraction of the series' range (its largest minus smallest value over all reps within the window), as well as being a significant trend. </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> stabilityWindow </td>
+   <td style="text-align:left;"> numeric </td>
+   <td style="text-align:left;"> 0.5 </td>
+   <td style="text-align:left;"> 0 </td>
+   <td style="text-align:left;"> 1 </td>
+   <td style="text-align:left;"> (mode = 'multi') the last fraction of the NRV period (`summaryPeriod` when `nrvWindow` is 1) over which the stability check looks for a directional trend (0.5 = the last half). A run whose metrics are still trending there needs to be longer. It does not define the NRV (see `nrvWindow`). </td>
    <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
@@ -461,13 +497,13 @@ Table \@ref(tab:eventObjects-NRV-summary) lists, for each object, the code that 
   </tr>
 </tbody>
 <tfoot><tr><td style="padding: 0; " colspan="100%">
-<sup></sup> Not shown, off with the default parameters: postprocess_lw, postprocess_bc, postprocess_on, animation. Not shown, touching no object in the metadata: .inputObjects, init: .checkPostprocessEvents(), save_single, postprocess. Not traced to any code (e.g. reached indirectly): cohortData, flammableMap, pixelGroupMap, speciesLayers, sppColorVect, standAgeMap.</td></tr></tfoot>
+<sup></sup> Not shown, off with the default parameters: postprocess_lw, postprocess_bc, postprocess_on, postprocess_stability, animation. Not shown, touching no object in the metadata: .inputObjects, init: .checkNrvWindow(), init: .nrvYears(), init: .warnStabilityWindow(), init: .checkPostprocessEvents(), save_single, postprocess. Not traced to any code (e.g. reached indirectly): cohortData, flammableMap, pixelGroupMap, speciesLayers, sppColorVect, standAgeMap.</td></tr></tfoot>
 </table>
 
 
 #### .noTreeSpecies() {-}
 
-init event, step 1 of 3
+init event, step 1 of 6
 
 ![](figures/NRV_summary_io_init_.noTreeSpecies.png){width=100%}
 
@@ -475,7 +511,7 @@ init event, step 1 of 3
 
 #### InitMulti() {-}
 
-init event, step 3 of 3
+init event, step 6 of 6
 
 ![](figures/NRV_summary_io_init_InitMulti.png){width=100%}
 
@@ -526,14 +562,27 @@ In `mode = "multi"`, `plotFun` writes these figures for each reporting-polygon l
 - `lm/<layer>/per-metric/`: the envelopes of each landscape metric with a panel per subregion,
   up to 12 panels to a page.
 - `pm/<layer>/per-metric/`: box and violin plots of each patch metric for each vegetation type,
-  a panel per subregion, from the values of each replicate and summary year (a patch-level
+  a panel per subregion, from the values of each replicate and NRV year (a patch-level
   metric averaged over each replicate's patches), with the current condition as a red point.
+  The NRV years are the summary years in the last `nrvWindow` of `summaryPeriod`: all the summary
+  years when `nrvWindow` is 1 (the default).
   Patch area has no pages of its own: a replicate's mean patch area is the class's `area_mn`.
 - `boxplots/<layer>/` and `histograms/<layer>/`: the LandWeb summaries (`lw`), with the current
-  condition in red. Besides a boxplot per subregion and leading vegetation type,
+  condition in red, pooled over the replicates and the NRV years. Besides a boxplot per subregion and leading vegetation type,
   `boxplots/<layer>/<subregion> share of forest.png` has a panel per age class and a box per
   leading type of its share of the subregion's forested area.
 - `sspm/<layer>/`: the BC seral patch metrics (`bc`), one paginated envelope figure-set per metric.
+- `stability/all/` (only with `"stability"` in `postprocessEvents`): the check that the run is
+  long enough, with pages of series over time (reps as thin lines, the median in bold, the stability
+  window shaded, the verdict in each panel's title) and a summary of the verdicts. With `lm` in the
+  same run, `stability/all/current_condition/` shows, for each lm layer, where each metric's current
+  condition lies against its NRV range, on the metric's own scale, up to 24 panels to a page.
+  The verdicts are also in `csv/stability/all/stability.csv`. The check needs at least 3 summary times
+  in the stability window (the last `stabilityWindow` of the NRV years); `init` warns when there are
+  fewer, and the verdict then says that no series could be tested.
+
+When `nrvWindow` is below 1, the envelope figures still show every summary year, and shade the NRV
+years.
 
 The y axes name each metric and its unit, and each envelope and per-class figure has a caption
 saying what its marks show, with the numbers of replicates and simulation years drawn. A class
