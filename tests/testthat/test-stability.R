@@ -226,11 +226,57 @@ test_that("fireBlocks beside the output path is read", {
                        areaBurnedHa = c(100, 0, 50, 7, 7, 7))
   utils::write.csv(blocks, file.path(SpaDES.core::outputPath(sim), "burnSummaries_fireBlocks.csv"),
                    row.names = FALSE)
-  b <- withP(moduleFn(".stabilityBurn", new.env()))(sim)
+  burn <- withP(moduleFn(".stabilityBurn", new.env()))
+  environment(burn)$.stabilityWindow <- function(sim) c(2000, 2320)
+  b <- burn(sim)
   expect_setequal(b$kind, "burn")
   expect_equal(b$value[b$rep == 1], c(100, 0, 50))
   expect_equal(b$time[b$rep == 1], c(2020, 2120, 2220))
   expect_true(all(b$value[b$rep == 2] == 7))
+})
+
+test_that("a burn block that ends past the stability window is left out", {
+  ## a block stamped b covers (b, b + 100]; the last one here ends at 2320
+  f <- file.path(withr::local_tempdir(), "burnSummaries_fireBlocks.csv")
+  blocks <- data.frame(rep = rep(1:2, each = 4), block = rep(c(1920, 2020, 2120, 2220), 2), nFires = 1L,
+                       areaBurnedHa = 1)
+  utils::write.csv(blocks, f, row.names = FALSE)
+  series <- moduleFn(".burnSeries", new.env())
+  expect_setequal(series(f, c(2000, 2320))$time, c(2020, 2120, 2220)) ## 1920 starts before the window
+  expect_setequal(series(f, c(2000, 2300))$time, c(2020, 2120)) ## 2220 ends at 2320, past 2300
+  expect_setequal(series(f)$time, c(1920, 2020, 2120, 2220)) ## no window: all
+})
+
+test_that("an NA among the registered files does not break the lookup", {
+  blockFile <- moduleFn(".burnBlocksFile", new.env())
+  other <- file.path(withr::local_tempdir(), "burnSummaries_fireBlocks.csv")
+  expect_identical(blockFile(c(NA, other, NA), withr::local_tempdir()), other)
+  expect_null(blockFile(c(NA_character_), withr::local_tempdir()))
+})
+
+test_that("a level filter that leaves no rows gives no series, not an error", {
+  withr::local_package("SpaDES.core")
+  sim <- stabSim()
+  m <- new.env()
+  m$rptPolyNames <- "A"
+  raw <- data.frame(level = "patch", class = "Pine", id = 1:3, metric = "area", rep = 1L, time = 0L,
+                    value = 1, poly = "A")
+  aggRoot <- moduleFn(".nrvAggRoot", new.env())(sim, LandWebUtils::refCodeFor("lm", "A"))
+  nrvtools::write_nrv_parquet(raw, aggRoot, "rep01")
+  fn <- withP(moduleFn(".stabilitySeries", m), postprocessEvents = "lm")
+  environment(fn)$open_nrv_dataset <- nrvtools::open_nrv_dataset
+  environment(fn)$.stabilityBurn <- function(sim) NULL
+  expect_null(fn(sim))
+})
+
+test_that("a panel with no layer or poly name leaves them out of its label", {
+  panels <- moduleFn(".stabilityPanels", new.env())
+  d <- data.frame(kind = "burn", layer = NA_character_, poly = NA_character_, level = "landscape",
+                  class = NA, metric = "m", rep = 1L, time = 1:2, value = 1:2)
+  flags <- stats::setNames("stable", moduleFn(".stabilityId", new.env())(d[1L, ]))
+  lab <- unique(panels(d, flags, c(1, 2))$data$panel)
+  expect_false(grepl("NA", lab))
+  expect_identical(lab, "m\nstable")
 })
 
 test_that("a registered fireBlocks file is preferred to the one beside the output path", {
@@ -277,11 +323,26 @@ test_that("the check writes stability.csv and one figure per page of series, eac
   environment(check)$.stabilitySeries <- function(sim) series
   environment(check)$.stabilityWindow <- function(sim) c(500, 1000)
   environment(check)$.metricTitle <- function(met, level) met ## the metric codes here are made up
+  ## record the series each page draws
+  drawn <- list()
+  panels <- moduleFn(".stabilityPanels", new.env())
+  idOf <- moduleFn(".stabilityId", new.env())
+  environment(check)$.stabilityPanels <- function(d, ...) {
+    g <- panels(d, ...)
+    drawn[[length(drawn) + 1L]] <<- list(kind = unique(d$kind), ids = unique(idOf(d)), panels = unique(g$data$panel))
+    g
+  }
   expect_message(sim <- check(sim), "NRV_summary stability \\(500-1000\\): 14 of 14 metrics still changing")
   res <- utils::read.csv(file.path(moduleFn(".ppCsvDir", m)(sim, "stability", "all"), "stability.csv"))
   expect_equal(nrow(res), 14L)
   figs <- basename(list.files(moduleFn(".ppFigDir", m)(sim, "stability", "all")))
   expect_setequal(figs, c("stability_lm_p1.png", "stability_lm_p2.png", "stability_burn_p1.png", "stability_summary.png"))
+  ## each page draws only its own series: 12 + 1 for lm, 1 for burn, no series twice, none missing
+  expect_equal(vapply(drawn, function(p) length(p$ids), integer(1L)), c(12L, 1L, 1L))
+  expect_equal(vapply(drawn, function(p) length(p$panels), integer(1L)), c(12L, 1L, 1L))
+  expect_identical(vapply(drawn, function(p) p$kind, character(1L)), c("lm", "lm", "burn"))
+  expect_false(anyDuplicated(unlist(lapply(drawn, `[[`, "ids"))) > 0L)
+  expect_identical(sort(unlist(lapply(drawn, `[[`, "ids"))), sort(moduleFn(".stabilityId", m)(unique(series[names(series) %in% c("kind", "layer", "poly", "level", "class", "metric")]))))
   expect_true(all(file.exists(SpaDES.core::outputs(sim)$file)))
   expect_equal(length(SpaDES.core::outputs(sim)$file), 5L)
 })

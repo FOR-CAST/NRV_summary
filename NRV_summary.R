@@ -2312,7 +2312,7 @@ makeAnimation <- function(sim) {
 .burnBlocksFile <- function(files, dir) {
   name <- "burnSummaries_fireBlocks.csv"
   files <- as.character(files)
-  f <- files[basename(files) == name]
+  f <- files[which(basename(files) == name)] ## which(): a registered NA is not a match
   if (length(f)) {
     return(f[length(f)])
   }
@@ -2320,9 +2320,16 @@ makeAnimation <- function(sim) {
   if (file.exists(f)) f
 }
 
-## The area burned per block, from that table: rep, time (the block's first year), value.
-.burnSeries <- function(file) {
+## The area burned per block, from that table: rep, time, value. burnSummaries stamps a block with the
+## year before its first year: block `b` covers (b, b + width]. With a `window`, only the blocks wholly
+## inside it are kept (b >= window[1] and b + width <= window[2]), the width being the spacing of the
+## blocks (0 for a single block).
+.burnSeries <- function(file, window = NULL) {
   b <- data.table::fread(file)
+  if (!is.null(window)) {
+    width <- if (length(unique(b$block)) > 1L) min(diff(sort(unique(b$block)))) else 0
+    b <- b[b$block >= window[1L] & b$block + width <= window[2L], ]
+  }
   data.frame(rep = b$rep, time = b$block, value = b$areaBurnedHa)
 }
 
@@ -2337,7 +2344,11 @@ makeAnimation <- function(sim) {
     )
     return(NULL)
   }
-  b <- .burnSeries(f)
+  b <- .burnSeries(f, .stabilityWindow(sim))
+  if (!nrow(b)) {
+    message("NRV_summary stability: no burn block lies inside the stability window; no burn series")
+    return(NULL)
+  }
   data.frame(
     kind = "burn", layer = P(sim)$.studyAreaName, poly = P(sim)$.studyAreaName, level = "landscape",
     class = NA_character_, metric = "areaBurnedHa per block", rep = b$rep, time = b$time, value = b$value
@@ -2360,6 +2371,9 @@ makeAnimation <- function(sim) {
       }
       raw <- dplyr::filter(raw, level %in% c("landscape", "class"))
       raw <- as.data.frame(dplyr::collect(raw))
+      if (!nrow(raw)) {
+        return(NULL)
+      }
       if (kind == "pm") {
         raw <- nrvtools::label_vegtype_classes(raw, vtmRAT)
       }
@@ -2398,9 +2412,13 @@ makeAnimation <- function(sim) {
 ## the verdict (`flags`, named by series id) in each panel title. `d` holds only the series of one page.
 .stabilityPanels <- function(d, flags, window, ncol = 4L) {
   id <- .stabilityId(d)
+  ## layer/poly, leaving out a name that is missing (the burn series' study area name may be NA)
+  where <- vapply(seq_len(nrow(d)), function(i) {
+    paste(c(d$layer[i], d$poly[i])[!is.na(c(d$layer[i], d$poly[i]))], collapse = "/")
+  }, character(1L))
   d$panel <- paste0(
     ifelse(is.na(d$class), "", paste0(d$class, " ")), .stabilityTitle(d$kind, d$metric, d$level),
-    "\n", d$layer, "/", d$poly, ": ", flags[id]
+    "\n", ifelse(nzchar(where), paste0(where, ": "), ""), flags[id]
   )
   ggplot2::ggplot(d, ggplot2::aes(time, value)) +
     ggplot2::annotate("rect", xmin = window[1L], xmax = window[2L], ymin = -Inf, ymax = Inf,
