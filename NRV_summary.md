@@ -1,6 +1,6 @@
 ---
 title: "NRV_summary Manual"
-subtitle: "v.2.0.0.9040"
+subtitle: "v.2.0.0.9041"
 date: "Last updated: 2026-11-24"
 output:
   bookdown::html_document2:
@@ -72,6 +72,12 @@ Table \@ref(tab:moduleInputs-NRV-summary) shows the full list of module inputs.
    <td style="text-align:left;"> flammableMap </td>
    <td style="text-align:left;"> SpatRaster </td>
    <td style="text-align:left;"> binary flammability map (required with `type = 'single'`) </td>
+   <td style="text-align:left;"> NA </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> outputsDF </td>
+   <td style="text-align:left;"> data.frame </td>
+   <td style="text-align:left;"> (mode = 'multi', optional) the files the replicate simulations saved, with at least a `file` column (e.g. their `outputs(sim)` row-bound). When absent, the replicate folders under `outputPath(sim)` are listed. </td>
    <td style="text-align:left;"> NA </td>
   </tr>
   <tr>
@@ -422,7 +428,7 @@ Table \@ref(tab:eventObjects-NRV-summary) lists, for each object, the code that 
   </tr>
  </thead>
 <tbody>
-  <tr grouplength="5"><td colspan="3" style="border-bottom: 1px solid;"><strong>Inputs</strong></td></tr>
+  <tr grouplength="6"><td colspan="3" style="border-bottom: 1px solid;"><strong>Inputs</strong></td></tr>
 <tr>
    <td style="text-align:left;padding-left: 2em;" indentlevel="1"> sppEquiv </td>
    <td style="text-align:left;">  </td>
@@ -430,6 +436,11 @@ Table \@ref(tab:eventObjects-NRV-summary) lists, for each object, the code that 
   </tr>
   <tr>
    <td style="text-align:left;padding-left: 2em;" indentlevel="1"> LandTypeCC_reporting </td>
+   <td style="text-align:left;">  </td>
+   <td style="text-align:left;"> init: InitMulti() </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;padding-left: 2em;" indentlevel="1"> outputsDF </td>
    <td style="text-align:left;">  </td>
    <td style="text-align:left;"> init: InitMulti() </td>
   </tr>
