@@ -53,7 +53,8 @@ test_that("parameters are the expected names", {
       ".plotInitialTime", ".plotInterval", ".plots", ".seed", ".studyAreaName",
       ".useCache", "ageClassCutOffs", "ageClasses", "ageClassMaxAge", "ccStandAgeSource", "mixedType",
       "mode", "nrvWindow", "patchDirections", "plotWorkers", "postprocessEvents", "reps",
-      "reuseAggregates", "sieveThresh", "simTimes", "sppEquivCol", "sppEquivColReporting", "summaryInterval",
+      "reuseAggregates", "sieveThresh", "simTimes", "sppEquivCol", "sppEquivColReporting", "stabilityAlpha",
+      "stabilityMinChange", "stabilityWindow", "summaryInterval",
       "summaryPeriod", "timeSeriesTimes", "vegLeadingProportion"
 )
   )

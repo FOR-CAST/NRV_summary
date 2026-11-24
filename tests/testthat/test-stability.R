@@ -1,0 +1,287 @@
+## The stability check asks whether a series is still trending over the last part of the NRV period.
+## It is an opt-in event ('stability' in `postprocessEvents`), not in the parameter's default.
+## Ported from the PE fork. Series are synthetic: 5 reps x the summary times, one metric.
+
+## a sim with its output path in a scratch directory, and no module loaded
+stabSim <- function(.env = parent.frame()) {
+  root <- withr::local_tempdir(.local_envir = .env)
+  SpaDES.core::simInit(paths = list(
+    modulePath = modulePath, outputPath = file.path(root, "mainSim"),
+    cachePath = file.path(root, "cache"), inputPath = file.path(root, "in")
+  ))
+}
+
+## `fn`, a module function, with P() answering `...` as the module's parameters (the module is not loaded)
+withP <- function(fn, ...) {
+  pars <- list(postprocessEvents = c("lm", "pm"), summaryPeriod = c(700L, 1000L), nrvWindow = 1,
+               stabilityWindow = 0.5, .studyAreaName = "SA")
+  pars[names(list(...))] <- list(...)
+  environment(fn)$P <- function(sim, ...) pars
+  fn
+}
+
+## a mode = "multi" sim of the module with its init scheduled but not run; `events` is
+## postprocessEvents (NULL: the parameter's default)
+initSim <- function(events = NULL, .env = parent.frame()) {
+  root <- withr::local_tempdir(.local_envir = .env)
+  rep1 <- file.path(root, "mainSim", "rep01")
+  dir.create(rep1, recursive = TRUE)
+  yrs <- c(700L, 1000L)
+  file.create(c(
+    file.path(rep1, sprintf("cohortData_year%04d.qs2", yrs)),
+    file.path(rep1, sprintf("pixelGroupMap_year%04d.tif", yrs)),
+    file.path(rep1, sprintf("standAgeMap_year%04d.tif", yrs)),
+    file.path(rep1, sprintf("vegTypeMap_year%04d.tif", yrs)),
+    file.path(rep1, "flammableMap_year1000.tif")
+  ))
+  pars <- c(
+    list(mode = "multi", reps = 1L, summaryPeriod = c(700L, 1000L), summaryInterval = 300L,
+         timeSeriesTimes = 701:702, simTimes = c(0, 1000)),
+    if (!is.null(events)) list(postprocessEvents = events)
+  )
+  SpaDES.core::simInit(
+    times = list(start = 0, end = 1000),
+    params = list(NRV_summary = pars),
+    modules = moduleName,
+    objects = list(reportingPolygons = list(A = "placeholder")),
+    paths = list(modulePath = modulePath, outputPath = file.path(root, "mainSim"),
+                 cachePath = file.path(root, "cache"), inputPath = file.path(root, "in"))
+  )
+}
+
+times <- seq(0, 1000, by = 100)
+window <- c(500, 1000)
+keys <- "metric"
+
+makeSeries <- function(f, sd = 0, reps = 1:5, metric = "m", seed = 1) {
+  set.seed(seed)
+  g <- expand.grid(rep = reps, time = times)
+  data.frame(metric = metric, rep = g$rep, time = g$time, value = f(g$time) + stats::rnorm(nrow(g), sd = sd))
+}
+
+trendStability <- moduleFn(".trendStability", new.env())
+stabilityVerdict <- moduleFn(".stabilityVerdict", new.env())
+
+verdict <- function(series) trendStability(series, keys, window, alpha = 0.05, minChange = 0.10)$flag
+
+test_that("a flat series is stable", {
+  expect_identical(verdict(makeSeries(function(t) 10 + 0 * t)), "stable")
+})
+
+test_that("a linear trend is still changing, with the right size", {
+  s <- makeSeries(function(t) 10 + 0.01 * t, sd = 0.2)
+  r <- trendStability(s, keys, window)
+  expect_identical(r$flag, "still changing")
+  expect_equal(r$slope, 0.01, tolerance = 0.1)
+  ## the NRV range is the window's (5 to 10 here); the fitted change over 500 years is 5
+  expect_equal(r$changePctRange, 100 * 5 / diff(range(s$value[s$time >= window[1]])), tolerance = 0.1)
+})
+
+test_that("a noisy flat series is stable", {
+  for (seed in 1:5) {
+    expect_identical(verdict(makeSeries(function(t) 10 + 0 * t, sd = 2, seed = seed)), "stable")
+  }
+})
+
+test_that("the range is the window's: a transient before the window does not hide a trend in it", {
+  ## values before the window run from 60 down to 10; inside it they drift from 10 to 15
+  f <- function(t) 10 + ifelse(t < 500, 50 * (500 - t) / 500, 0) + 0.01 * pmax(t - 500, 0)
+  s <- makeSeries(f, sd = 0.01)
+  r <- trendStability(s, keys, window)
+  ## the fitted change over the window (5) against the window's range (about 5), not the whole series' (about 55)
+  expect_equal(r$changePctRange, 100, tolerance = 0.1)
+  expect_identical(r$flag, "still changing")
+})
+
+test_that("an early transient that has levelled off does not count: only the window is tested", {
+  f <- function(t) 10 + ifelse(t < 500, 50 * (500 - t) / 500, 0)
+  expect_identical(verdict(makeSeries(f, sd = 0.2)), "stable")
+})
+
+test_that("fewer than 3 times in the window cannot be tested", {
+  s <- makeSeries(function(t) 10 + 0.01 * t)
+  r <- trendStability(s, keys, c(900, 1000))
+  expect_identical(r$flag, "insufficient")
+  expect_true(is.na(r$p))
+})
+
+test_that("each key combination is its own series, and NA keys are kept", {
+  s <- rbind(
+    makeSeries(function(t) 10 + 0 * t, metric = "flat"),
+    makeSeries(function(t) 10 + 0.02 * t, metric = "rising")
+  )
+  s$class <- c(NA, "Pine")[1 + (s$metric == "rising")]
+  r <- trendStability(s, c("metric", "class"), window)
+  expect_identical(r$metric, c("flat", "rising"))
+  expect_identical(r$flag, c("stable", "still changing"))
+  expect_true(is.na(r$class[1]))
+})
+
+test_that("the verdict line counts the series still changing", {
+  res <- data.frame(flag = c("stable", "still changing", "stable", "insufficient"))
+  expect_identical(
+    stabilityVerdict(res),
+    "1 of 3 metrics still changing; consider a longer run (1 with too few summary times to test)"
+  )
+  expect_identical(
+    stabilityVerdict(data.frame(flag = "stable")),
+    "0 of 1 metrics still changing; the run is long enough"
+  )
+})
+
+test_that(".pages splits the series ids into pages of at most perPage", {
+  pages <- moduleFn(".pages", new.env())
+  p <- pages(1:210)
+  expect_length(p, 18L)
+  expect_identical(sort(unlist(p)), 1:210)
+  expect_length(p[[18L]], 6L)
+  expect_identical(pages(1:13)[[2L]], 13L)
+  expect_identical(pages(character(0)), list())
+})
+
+test_that("a page draws only its own series, in a facet_wrap, with the median in bold", {
+  panels <- moduleFn(".stabilityPanels", new.env())
+  d <- data.frame(kind = "burn", layer = "a", poly = "a", level = "landscape", class = NA, metric = "m",
+                  rep = rep(1:3, each = 2), time = rep(1:2, 3), value = c(1, 1, 1, 1, 10, 10))
+  flags <- stats::setNames("stable", moduleFn(".stabilityId", new.env())(d[1L, ]))
+  g <- panels(d, flags, c(1, 2), ncol = 1L)
+  expect_s3_class(g$facet, "FacetWrap")
+  expect_match(g$labels$caption, "bold: median")
+  b <- ggplot2::ggplot_build(g)
+  expect_equal(b$data[[3]]$y, c(1, 1)) ## the median of 1, 1, 10; the mean would be 4
+  src <- file.path(moduleRoot, paste0(moduleName, ".R"))
+  skip_if_not(file.exists(src), "module source not found")
+  expect_false("facet_wrap_paginate" %in% all.names(parse(src, keep.source = FALSE)))
+})
+
+test_that("the stability series keep landscape and class rows, not one row per patch", {
+  withr::local_package("SpaDES.core")
+  sim <- stabSim()
+  m <- new.env()
+  m$rptPolyNames <- "A"
+  g <- expand.grid(rep = 1:2, time = c(0L, 100L))
+  raw <- rbind(
+    data.frame(level = "landscape", class = NA_character_, id = NA_integer_, metric = "ai", g, value = 1),
+    data.frame(level = "class", class = "Pine", id = NA_integer_, metric = "ca", g, value = 2),
+    data.frame(level = "patch", class = "Pine", id = 1:3, metric = "area",
+               g[rep(seq_len(nrow(g)), each = 3), ], value = 3)
+  )
+  raw$poly <- "A"
+  aggRoot <- moduleFn(".nrvAggRoot", new.env())(sim, LandWebUtils::refCodeFor("lm", "A"))
+  for (r in 1:2) {
+    nrvtools::write_nrv_parquet(raw[raw$rep == r, ], aggRoot, sprintf("rep%02d", r))
+  }
+  fn <- withP(moduleFn(".stabilitySeries", m), postprocessEvents = "lm")
+  environment(fn)$open_nrv_dataset <- nrvtools::open_nrv_dataset ## attached by reqdPkgs at run time
+  environment(fn)$.stabilityBurn <- function(sim) NULL ## the burn series has its own tests
+  series <- fn(sim)
+  expect_setequal(series$level, c("landscape", "class"))
+  expect_setequal(series$kind, "lm")
+  key <- c("level", "class", "metric", "rep", "time")
+  expect_false(anyDuplicated(series[key]) > 0L) ## one value per rep x time per series
+  expect_true(anyDuplicated(raw[key]) > 0L)
+})
+
+test_that("stability is not drawn unless postprocessEvents asks", {
+  withr::local_package("SpaDES.core")
+  scheduled <- function(sim) {
+    sim <- suppressWarnings(SpaDES.core::spades(sim, events = list(NRV_summary = "init"), debug = FALSE))
+    SpaDES.core::events(sim)$eventType
+  }
+  expect_false("stability" %in% SpaDES.core::params(initSim())$NRV_summary$postprocessEvents)
+  expect_false("postprocess_stability" %in% scheduled(initSim()))
+  expect_false("postprocess_stability" %in% scheduled(initSim(events = c("lm", "pm", "lw", "am"))))
+  expect_true("postprocess_stability" %in% scheduled(initSim(events = c("lm", "stability"))))
+})
+
+test_that("'stability' is an accepted postprocess event, in any case", {
+  expect_no_error(moduleFn(".checkPostprocessEvents", new.env())(c("lm", "Stability")))
+})
+
+test_that("the stability figures folder is cleared only when the stability event runs", {
+  withr::local_package("SpaDES.core")
+  sim <- stabSim()
+  clear <- moduleFn(".clearFigDirs", new.env())
+  f <- file.path(moduleFn(".ppFigDir", new.env())(sim, "stability", "all"), "stability_lm_p1.png")
+  file.create(f)
+  clear(sim, "lm")
+  expect_true(file.exists(f))
+  clear(sim, c("lm", "stability"))
+  expect_false(file.exists(f))
+})
+
+test_that("no fireBlocks file: a message, no burn series", {
+  withr::local_package("SpaDES.core")
+  sim <- stabSim()
+  expect_message(b <- withP(moduleFn(".stabilityBurn", new.env()))(sim), "burnSummaries_fireBlocks.csv")
+  expect_null(b)
+})
+
+test_that("fireBlocks beside the output path is read", {
+  withr::local_package("SpaDES.core")
+  sim <- stabSim()
+  dir.create(SpaDES.core::outputPath(sim), recursive = TRUE, showWarnings = FALSE)
+  ## burnSummaries' block table has the area burned; its fire sizes have no areaBurnedHa
+  blocks <- data.frame(rep = rep(1:2, each = 3), block = rep(c(2020, 2120, 2220), 2), nFires = 4L,
+                       areaBurnedHa = c(100, 0, 50, 7, 7, 7))
+  utils::write.csv(blocks, file.path(SpaDES.core::outputPath(sim), "burnSummaries_fireBlocks.csv"),
+                   row.names = FALSE)
+  b <- withP(moduleFn(".stabilityBurn", new.env()))(sim)
+  expect_setequal(b$kind, "burn")
+  expect_equal(b$value[b$rep == 1], c(100, 0, 50))
+  expect_equal(b$time[b$rep == 1], c(2020, 2120, 2220))
+  expect_true(all(b$value[b$rep == 2] == 7))
+})
+
+test_that("a registered fireBlocks file is preferred to the one beside the output path", {
+  blockFile <- moduleFn(".burnBlocksFile", new.env())
+  d <- withr::local_tempdir()
+  beside <- file.path(d, "burnSummaries_fireBlocks.csv")
+  file.create(beside)
+  other <- file.path(withr::local_tempdir(), "burnSummaries_fireBlocks.csv")
+  expect_identical(blockFile(c("x/burnSummaries_fireSizes_allReps.csv", other), d), other)
+  expect_identical(blockFile(NULL, d), beside)
+  expect_null(blockFile(character(0), withr::local_tempdir()))
+})
+
+test_that("the burn series sees a growing burn", {
+  f <- file.path(withr::local_tempdir(), "burnSummaries_fireBlocks.csv")
+  grow <- data.frame(rep = rep(1:5, each = 11), block = rep(seq(0, 1000, 100), 5), nFires = 1L,
+                     areaBurnedHa = rep(seq(0, 1000, 100), 5) + rep(1:5, each = 11))
+  utils::write.csv(grow, f, row.names = FALSE)
+  g <- moduleFn(".burnSeries", new.env())(f)
+  g$metric <- "areaBurnedHa per block"
+  expect_identical(trendStability(g, "metric", c(500, 1000))$flag, "still changing")
+})
+
+test_that("the stability window is the last stabilityWindow of the NRV period", {
+  w <- moduleFn(".stabilityWindow", new.env())
+  environment(w)$.nrvPeriod <- function(sim) c(700, 1000)
+  expect_equal(withP(w)(NULL), c(850, 1000))
+  environment(w)$.nrvPeriod <- function(sim) c(925, 1000)
+  expect_equal(withP(w, stabilityWindow = 0.2)(NULL), c(985, 1000))
+})
+
+test_that("the check writes stability.csv and one figure per page of series, each from its own series", {
+  withr::local_package("SpaDES.core")
+  sim <- stabSim()
+  ## 13 landscape series (two pages: 12 and 1) and the burn series
+  g <- expand.grid(rep = 1:2, time = seq(0, 1000, 100))
+  one <- function(kind, metric) {
+    data.frame(kind = kind, layer = "A", poly = "A", level = "landscape", class = NA_character_,
+               metric = metric, g, value = g$time / 100 + g$rep)
+  }
+  series <- rbind(do.call(rbind, lapply(sprintf("ai%02d", 1:13), function(m) one("lm", m))), one("burn", "areaBurnedHa per block"))
+  m <- new.env()
+  check <- withP(moduleFn("stabilityCheck", m), stabilityAlpha = 0.05, stabilityMinChange = 0.1)
+  environment(check)$.stabilitySeries <- function(sim) series
+  environment(check)$.stabilityWindow <- function(sim) c(500, 1000)
+  environment(check)$.metricTitle <- function(met, level) met ## the metric codes here are made up
+  expect_message(sim <- check(sim), "NRV_summary stability \\(500-1000\\): 14 of 14 metrics still changing")
+  res <- utils::read.csv(file.path(moduleFn(".ppCsvDir", m)(sim, "stability", "all"), "stability.csv"))
+  expect_equal(nrow(res), 14L)
+  figs <- basename(list.files(moduleFn(".ppFigDir", m)(sim, "stability", "all")))
+  expect_setequal(figs, c("stability_lm_p1.png", "stability_lm_p2.png", "stability_burn_p1.png", "stability_summary.png"))
+  expect_true(all(file.exists(SpaDES.core::outputs(sim)$file)))
+  expect_equal(length(SpaDES.core::outputs(sim)$file), 5L)
+})

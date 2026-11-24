@@ -101,9 +101,25 @@ defineModule(sim, list(
                           "'lm' for default landscape metrics;",
                           "'lw' for default LandWeb summaries",
                           "'pm' for default patch metrics;",
-                          "'on' for ON patch metrics.",
+                          "'on' for ON patch metrics;",
+                          "'stability' for the check that the run is long enough (is each metric still",
+                          "trending over the end of the NRV period?), `stability.csv` and its figures.",
+                          "Not in the default: it runs only when asked for.",
                           "Any other value is an error ('fd', forest degradation indicators, is not",
                           "implemented).")),
+    defineParameter("stabilityAlpha", "numeric", 0.05, 0, 1,
+                    paste("(mode = 'multi') significance level of the Mann-Kendall trend test in the",
+                          "stability check (the `stability` event).")),
+    defineParameter("stabilityMinChange", "numeric", 0.10, 0, 1,
+                    paste("(mode = 'multi') a series is flagged 'still changing' only if its fitted change",
+                          "across the stability window exceeds this fraction of the series' range",
+                          "(its largest minus smallest value over all reps within the window), as well as",
+                          "being a significant trend.")),
+    defineParameter("stabilityWindow", "numeric", 0.5, 0, 1,
+                    paste("(mode = 'multi') the last fraction of the NRV period (`summaryPeriod` when",
+                          "`nrvWindow` is 1) over which the stability check looks for a directional",
+                          "trend (0.5 = the last half). A run whose metrics are still trending there needs",
+                          "to be longer. It does not define the NRV (see `nrvWindow`).")),
     defineParameter("reps", "integer", 1L:10L, 1L, NA_integer_,
                     paste("number of replicates/runs per study area.")),
     defineParameter("sieveThresh", "integer", 1L, NA_integer_, NA_integer_,
@@ -295,6 +311,12 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
           sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_on", .last())
         }
 
+        ## opt-in; after the plot event (which clears the figure folders), and after the metric events
+        ## whose parquet datasets it reads
+        if ("stability" %in% tolower(P(sim)$postprocessEvents)) {
+          sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_stability", .last() + 1)
+        }
+
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess", .last())
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "plot", .last())
       }
@@ -367,6 +389,9 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
     postprocess_on = {
       ## TODO finalize implementation
       message("Ontario NRV metrics are not yet fully implemented.")
+    },
+    postprocess_stability = {
+      sim <- stabilityCheck(sim)
     },
     animation = {
       sim <- makeAnimation(sim)
@@ -796,7 +821,7 @@ InitMulti <- function(sim) {
 ## an unknown value would otherwise be skipped without a word, and 'fd' (forest degradation) was
 ## scheduled as a stub that stopped in browser() after the other summaries had run.
 .checkPostprocessEvents <- function(events) {
-  known <- c("am", "bc", "lm", "lw", "on", "pm")
+  known <- c("am", "bc", "lm", "lw", "on", "pm", "stability")
   bad <- setdiff(tolower(events), known)
   if (length(bad)) {
     stop(
@@ -839,7 +864,8 @@ InitMulti <- function(sim) {
 ## left 5,749 of them). The folders of events not run this time keep their figures.
 .clearFigDirs <- function(sim, events) {
   ## the figures/<kind> folders each postprocess event draws into
-  kindsByEvent <- list(lm = "lm", pm = "pm", lw = c("boxplots", "histograms"), bc = "sspm")
+  kindsByEvent <- list(lm = "lm", pm = "pm", lw = c("boxplots", "histograms"), bc = "sspm",
+                       stability = "stability")
   kinds <- unlist(kindsByEvent[intersect(events, names(kindsByEvent))], use.names = FALSE)
   for (d in file.path(.ppRoot(sim), "figures", kinds)) {
     unlink(list.files(d, full.names = TRUE, all.files = TRUE, no.. = TRUE), recursive = TRUE)
@@ -2221,6 +2247,234 @@ makeAnimation <- function(sim) {
   caption <- gg$labels$caption
   gg + ggplot2::labs(caption = if (is.null(caption)) "shaded: NRV years" else
     paste0(sub("\\.$", "", caption), "; shaded: NRV years."))
+}
+
+## ---- the stability check (the opt-in `stability` event) ----------------------------------------------
+## Is the run long enough? The summaries describe a landscape that is meant to be in equilibrium. A
+## metric still trending at the end of the run means the envelope mixes the transient with the
+## equilibrium, and the run needs to be longer. Each series (a landscape metric, a patch metric by
+## class, the area burned per block) is tested over the last `stabilityWindow` of the NRV period
+## (`summaryPeriod` when `nrvWindow` is 1), on the values of all reps pooled. The event is not in the
+## default of `postprocessEvents`: it runs only when asked for.
+## Test: Mann-Kendall (Kendall's tau of value against time) for the p-value and the Theil-Sen slope
+## (median of the pairwise slopes) for the size of the trend. Both use ranks and medians, so one odd
+## rep or a skewed metric does not decide the verdict, as it can with an OLS slope; and pooling the reps
+## keeps the spread among reps in the test, so a noisy series needs a larger trend to be significant.
+## A series is "still changing" when the trend is significant AND the fitted change over the window is
+## more than `minChange` of the series' range (largest minus smallest value over all reps in the
+## window, not the approach to it); a significant but tiny trend is not worth a longer run. Fewer than 3
+## distinct times in the window cannot be tested ("insufficient"). The window is not the NRV.
+
+## one series: Mann-Kendall p-value and Theil-Sen slope of `value` against `time`
+.senKendall <- function(time, value) {
+  if (length(unique(value)) < 2L) {
+    return(c(slope = 0, p = 1)) ## constant: no trend
+  }
+  pairs <- utils::combn(length(time), 2L)
+  dt <- time[pairs[2L, ]] - time[pairs[1L, ]]
+  dv <- value[pairs[2L, ]] - value[pairs[1L, ]]
+  p <- suppressWarnings(stats::cor.test(time, value, method = "kendall", exact = FALSE)$p.value)
+  c(slope = stats::median(dv[dt != 0] / dt[dt != 0]), p = p)
+}
+
+## `series`: one row per rep x time x series, with the `keys` columns identifying the series, plus
+## `rep`, `time` and `value`. `window` = c(from, to) in simulation time. Returns one row per series:
+## the keys, nTimes (distinct times in the window), slope (per time unit), p, changePctRange (the fitted
+## change over the window as % of the window's range), flag ("still changing", "stable" or "insufficient").
+.trendStability <- function(series, keys, window, alpha = 0.05, minChange = 0.10) {
+  id <- do.call(paste, c(lapply(series[keys], as.character), sep = "\r"))
+  rows <- lapply(split(seq_len(nrow(series)), factor(id, levels = unique(id))), function(i) {
+    s <- series[i, , drop = FALSE]
+    s <- s[is.finite(s$value), , drop = FALSE]
+    w <- s[s$time >= window[1L] & s$time <= window[2L], , drop = FALSE]
+    out <- cbind(series[i[1L], keys, drop = FALSE], nTimes = length(unique(w$time)), slope = NA_real_,
+                 p = NA_real_, changePctRange = NA_real_, flag = "insufficient")
+    if (out$nTimes >= 3L) {
+      tr <- .senKendall(w$time, w$value)
+      windowRange <- diff(range(w$value)) ## the window's values, not the transient before it
+      out$slope <- tr[["slope"]]
+      out$p <- tr[["p"]]
+      out$changePctRange <- if (windowRange > 0) 100 * out$slope * diff(range(w$time)) / windowRange else 0
+      out$flag <- if (out$p < alpha && abs(out$changePctRange) > 100 * minChange) "still changing" else "stable"
+    }
+    out
+  })
+  res <- do.call(rbind, rows)
+  rownames(res) <- NULL
+  res
+}
+
+
+## The per-block fire table burnSummaries writes (burnSummaries_fireBlocks.csv: rep, block, nFires,
+## areaBurnedHa; blocks with no fire are 0): the registered output `files` first, else `dir` (the output
+## path); NULL when neither has it. It is built from the fire sizes every fire model writes, so the area
+## burned is there for LandMine and scfm as well as fireSense (their fire-size table has no area column).
+.burnBlocksFile <- function(files, dir) {
+  name <- "burnSummaries_fireBlocks.csv"
+  files <- as.character(files)
+  f <- files[basename(files) == name]
+  if (length(f)) {
+    return(f[length(f)])
+  }
+  f <- file.path(dir, name)
+  if (file.exists(f)) f
+}
+
+## The area burned per block, from that table: rep, time (the block's first year), value.
+.burnSeries <- function(file) {
+  b <- data.table::fread(file)
+  data.frame(rep = b$rep, time = b$block, value = b$areaBurnedHa)
+}
+
+## The burn series in the form of the other stability series (see .stabilitySeries); NULL, with a message
+## naming the file, when burnSummaries has not written it.
+.stabilityBurn <- function(sim) {
+  f <- .burnBlocksFile(outputs(sim)$file, outputPath(sim))
+  if (is.null(f)) {
+    message(
+      "NRV_summary stability: burnSummaries_fireBlocks.csv is neither among the registered outputs nor in ",
+      outputPath(sim), "; no burn series"
+    )
+    return(NULL)
+  }
+  b <- .burnSeries(f)
+  data.frame(
+    kind = "burn", layer = P(sim)$.studyAreaName, poly = P(sim)$.studyAreaName, level = "landscape",
+    class = NA_character_, metric = "areaBurnedHa per block", rep = b$rep, time = b$time, value = b$value
+  )
+}
+
+## The series the stability check looks at: landscape and patch metrics per rep (from the _aggregates
+## parquet), and the area burned per block when burnSummaries wrote it. Columns:
+## kind, layer, poly, level, class, metric, rep, time, value. One value per rep x time per series, so
+## only the landscape and class levels (patch-level rows are one per patch); filtered in arrow, before
+## the rows are read into memory.
+.stabilitySeries <- function(sim) {
+  events <- tolower(P(sim)$postprocessEvents)
+  vtmRAT <- if ("pm" %in% events) terra::rast(mod$fvtm0)
+  one <- lapply(intersect(c("lm", "pm"), events), function(kind) {
+    lapply(mod$rptPolyNames, function(p) {
+      raw <- open_nrv_dataset(.nrvAggRoot(sim, LandWebUtils::refCodeFor(kind, p)))
+      if (is.null(raw)) {
+        return(NULL)
+      }
+      raw <- dplyr::filter(raw, level %in% c("landscape", "class"))
+      raw <- as.data.frame(dplyr::collect(raw))
+      if (kind == "pm") {
+        raw <- nrvtools::label_vegtype_classes(raw, vtmRAT)
+      }
+      raw$class <- as.character(raw$class)
+      data.frame(kind = kind, layer = p, raw[, c("poly", "level", "class", "metric", "rep", "time", "value")])
+    })
+  })
+  do.call(rbind, c(unlist(one, recursive = FALSE), list(.stabilityBurn(sim))))
+}
+
+.stabilityKeys <- function() c("kind", "layer", "poly", "level", "class", "metric")
+
+## one id per series: its key columns
+.stabilityId <- function(d) do.call(paste, c(unname(as.list(d[.stabilityKeys()])), sep = "\r"))
+
+## The window the check looks at: the last `stabilityWindow` of the NRV period
+.stabilityWindow <- function(sim) .lastFraction(.nrvPeriod(sim), P(sim)$stabilityWindow)
+
+## `ids` in pages of at most `perPage`: a list of id vectors.
+.pages <- function(ids, perPage = 12L) {
+  unname(split(ids, ceiling(seq_along(ids) / perPage)))
+}
+
+## The title of each series: nrvtools' name and unit of the metric (the burn series is named already).
+## Looked up once per distinct metric.
+.stabilityTitle <- function(kind, metric, level) {
+  key <- paste(kind, metric, level, sep = "\r")
+  u <- !duplicated(key)
+  title <- vapply(which(u), function(i) {
+    if (identical(kind[i], "burn")) metric[i] else .metricTitle(metric[i], level[i])
+  }, character(1L))
+  title[match(key, key[u])]
+}
+
+## Panels of the series in `d` over time (reps as thin lines, median in bold), the window shaded, and
+## the verdict (`flags`, named by series id) in each panel title. `d` holds only the series of one page.
+.stabilityPanels <- function(d, flags, window, ncol = 4L) {
+  id <- .stabilityId(d)
+  d$panel <- paste0(
+    ifelse(is.na(d$class), "", paste0(d$class, " ")), .stabilityTitle(d$kind, d$metric, d$level),
+    "\n", d$layer, "/", d$poly, ": ", flags[id]
+  )
+  ggplot2::ggplot(d, ggplot2::aes(time, value)) +
+    ggplot2::annotate("rect", xmin = window[1L], xmax = window[2L], ymin = -Inf, ymax = Inf,
+                      alpha = 0.15, fill = "orange") +
+    ggplot2::geom_line(ggplot2::aes(group = rep), colour = "grey60", linewidth = 0.3) +
+    ggplot2::stat_summary(fun = stats::median, geom = "line", linewidth = 0.8) +
+    ggplot2::facet_wrap(~panel, ncol = ncol, scales = "free_y") +
+    ggplot2::labs(x = "time", y = NULL, caption = "shaded: stability window; thin lines: reps; bold: median") +
+    ggplot2::theme_bw(base_size = 9)
+}
+
+## One summary of the verdicts: fitted change over the window as % of the window's range, one point per
+## series, by metric, coloured by verdict, with the `minChange` thresholds.
+.stabilitySummary <- function(res, minChange) {
+  res$label <- paste(res$kind, .stabilityTitle(res$kind, res$metric, res$level))
+  ggplot2::ggplot(res, ggplot2::aes(changePctRange, label, colour = flag)) +
+    ggplot2::geom_vline(xintercept = c(-1, 1) * 100 * minChange, linetype = "dashed") +
+    ggplot2::geom_point(alpha = 0.7) +
+    ggplot2::scale_colour_manual(
+      values = c(stable = "steelblue", `still changing` = "firebrick", insufficient = "grey60"),
+      drop = FALSE
+    ) +
+    ggplot2::labs(x = "fitted change over the window (% of the window's range)", y = NULL, colour = NULL) +
+    ggplot2::theme_bw(base_size = 9)
+}
+
+## "N of M metrics still changing; consider a longer run"
+.stabilityVerdict <- function(res) {
+  tested <- res$flag != "insufficient"
+  n <- sum(res$flag == "still changing")
+  paste0(
+    n, " of ", sum(tested), " metrics still changing",
+    if (n > 0L) "; consider a longer run" else "; the run is long enough",
+    if (any(!tested)) paste0(" (", sum(!tested), " with too few summary times to test)")
+  )
+}
+
+## The `postprocess_stability` event: stability.csv (csv/stability/all/) and the figures
+## (figures/stability/all/): one set of pages per kind of series, each page drawn from its own
+## series only, and a summary of the verdicts. Runs after the plot event, which clears the figures
+## folder of the events it draws (see .clearFigDirs).
+stabilityCheck <- function(sim) {
+  series <- .stabilitySeries(sim)
+  if (is.null(series) || !nrow(series)) {
+    message("NRV_summary stability: no series to test")
+    return(invisible(sim))
+  }
+  window <- .stabilityWindow(sim)
+  res <- .trendStability(series, .stabilityKeys(), window, P(sim)$stabilityAlpha, P(sim)$stabilityMinChange)
+
+  f_csv <- file.path(.ppCsvDir(sim, "stability", "all"), "stability.csv")
+  utils::write.csv(res, f_csv, row.names = FALSE)
+  files <- f_csv
+
+  message("NRV_summary stability (", window[1L], "-", window[2L], "): ", .stabilityVerdict(res))
+
+  figDir <- .ppFigDir(sim, "stability", "all")
+  res$id <- .stabilityId(res)
+  series$id <- .stabilityId(series)
+  flags <- stats::setNames(res$flag, res$id)
+  for (k in unique(series$kind)) {
+    pages <- .pages(res$id[res$kind == k])
+    for (pg in seq_along(pages)) {
+      lay <- .figLayout(length(pages[[pg]]), paginate = TRUE)
+      g <- .stabilityPanels(series[series$id %in% pages[[pg]], , drop = FALSE], flags, window, ncol = lay$ncol)
+      f <- file.path(figDir, paste0("stability_", k, "_p", pg, ".png"))
+      ggplot2::ggsave(f, g, width = lay$width, height = lay$height)
+      files <- c(files, f)
+    }
+  }
+  f <- file.path(figDir, "stability_summary.png")
+  ggplot2::ggsave(f, .stabilitySummary(res, P(sim)$stabilityMinChange), width = 10,
+                  height = max(4, 0.25 * length(unique(res$metric))))
+  invisible(registerOutputs(c(files, f), sim))
 }
 
 ### plotting
