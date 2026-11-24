@@ -155,3 +155,76 @@ test_that("init stops when no summary time falls in the NRV years", {
     "no summary time falls in the NRV years.*nrvWindow 0.1"
   )
 })
+
+test_that(".filesInPeriod keeps the files whose year is in the period, both ends included", {
+  filesInPeriod <- moduleFn(".filesInPeriod", new.env())
+  f <- sprintf("/o/mainSim/rep01/vegTypeMap_year%04d.tif", c(700, 900, 950, 1000))
+  expect_identical(filesInPeriod(f, c(900, 1000)), f[2:4]) ## 900 and 1000 are the ends
+  expect_identical(filesInPeriod(f, c(901, 999)), f[3])
+  expect_length(filesInPeriod(f, c(1001, 1100)), 0L)
+})
+
+test_that(".filesInPeriod drops a file with no year in its name, and reads only the file name", {
+  filesInPeriod <- moduleFn(".filesInPeriod", new.env())
+  f <- c("/o/rep01/vegTypeMap_year0950.tif", "/o/rep01/vegTypeMap.tif", "/o/rep01/notes_yearX.tif")
+  expect_identical(filesInPeriod(f, c(900, 1000)), f[1])
+  ## digits in a folder name are not a year
+  g <- c("/o/rep0950/vegTypeMap_year0700.tif", "/o/rep01/year0950/vegTypeMap_year0950.tif")
+  expect_identical(filesInPeriod(g, c(900, 1000)), g[2])
+})
+
+test_that("lw pools only the NRV-year files, and stamps exactly those years", {
+  root <- withr::local_tempdir()
+  yrs <- seq(700L, 1000L, 50L)
+  files <- function(map) {
+    unlist(lapply(c("rep01", "rep02"), function(r) file.path(root, "mainSim", r, sprintf("%s_year%04d.tif", map, yrs))))
+  }
+  mod <- new.env()
+  mod$vtm <- files("vegTypeMap")
+  mod$tsf <- files("timeSinceFire")
+  mod$fvtm0 <- file.path(root, "year0", "vegTypeMap_year0000.tif")
+  mod$ftsf0 <- file.path(root, "year0", "timeSinceFire_year0000.tif")
+  mod$rptPolyNames <- "A"
+  poly <- sf::st_sf(Name = "a", geometry = sf::st_sfc(sf::st_polygon(list(
+    cbind(c(0, 1, 1, 0, 0), c(0, 0, 1, 1, 0))
+  ))))
+  sim <- list(studyAreaReporting = poly, reportingPolygons = list(A = poly))
+  pars <- list(summaryPeriod = c(700L, 1000L), summaryInterval = 50L, nrvWindow = 0.3,
+               ageClassCutOffs = 1, ageClasses = "a", patchDirections = 4L)
+  fileYear <- moduleFn(".fileYear", mod)
+  lwm <- moduleFn("landWebMetrics", mod)
+  e <- environment(lwm)
+  e$P <- function(sim, ...) pars
+  nrvPeriod <- moduleFn(".nrvPeriod", mod)
+  environment(nrvPeriod)$P <- e$P
+  e$.nrvPeriod <- nrvPeriod
+  e$default_landweb_metrics <- function() list()
+  e$.cropToStudyArea <- function(x, y) x
+  e$.nrvAggRoot <- function(sim, refCode) file.path(root, "_aggregates", refCode)
+  e$.fillLeadingZeros <- function(roots) NULL
+  e$.summarizeRepDataset <- function(root, id_cols = NULL, perReplicate = FALSE) NULL
+  e$.writeNrvSummaryCSVs <- function(...) NULL
+  ## the maps each replicate's metrics are computed from
+  read <- list()
+  e$Cache <- function(f, ..., vtm, age) {
+    read[[length(read) + 1L]] <<- list(vtm = vtm, age = age)
+    data.frame(level = "landscape", class = NA_character_, id = NA_integer_, metric = "leadingProp",
+               value = 1, rep = "x", time = 700L, poly = "A", metric.1 = "Pine")
+  }
+  wrd <- moduleFn(".writeRepDataset", mod)
+  environment(wrd)$tidy_nrv_metrics <- function(x, ...) x
+  environment(wrd)$write_nrv_parquet <- nrvtools::write_nrv_parquet
+  e$.writeRepDataset <- wrd
+
+  suppressMessages(lwm(sim))
+
+  simReads <- read[vapply(read, function(r) length(r$vtm) > 1L, logical(1L))]
+  expect_length(simReads, 2L) ## the two replicates
+  for (r in simReads) {
+    expect_identical(sort(fileYear(r$vtm)), c(950L, 1000L))
+    expect_identical(sort(fileYear(r$age)), c(950L, 1000L))
+  }
+  expect_identical(unique(basename(dirname(unlist(lapply(simReads, `[[`, "vtm"))))), c("rep01", "rep02"))
+  stamp <- readLines(file.path(root, "_aggregates", LandWebUtils::refCodeFor("lw", "A"), "nrvYears.txt"))
+  expect_identical(stamp, "950,1000")
+})
