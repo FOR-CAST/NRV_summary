@@ -10,7 +10,7 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 * **BC seral stages and the stand-age animation read the first replicate found (`2.0.0.9041`).** They no longer assume a folder called `rep01`.
 
-* **SpaDES.core 3.2.1.9057 or later is required (`2.0.0.9041`).** `InitMulti()` uses `dirnamesFromSet(leafOnly = FALSE)` and `resolveSimYears()`, relies on `dirnamesFromSet()` keeping zero-padded folders such as `rep01` (from 3.2.1.9037), and on its bare-number folder fallback (`1/`, `2/`; from 3.2.1.9057).
+* **SpaDES.core 3.2.1.9057 or later is required (`2.0.0.9041`).** `InitMulti()` uses `dirnamesFromSet(leafOnly = FALSE)` and `resolveSimYears()`, relies on `dirnamesFromSet()` keeping zero-padded folders such as `rep01` (from 3.2.1.9038), and on its bare-number folder fallback (`1/`, `2/`; from 3.2.1.9057).
 
 * **LandWeb multi-mode summaries are unchanged (`2.0.0.9041`).** For LandWeb (`rep01` folders, no `outputsDF`), `InitMulti()` selects the same files as before (checked on one study area's outputs).
 
