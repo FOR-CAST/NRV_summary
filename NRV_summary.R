@@ -42,7 +42,7 @@ defineModule(sim, list(
     "FOR-CAST/nrvtools (>= 0.3.4.9003)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9016)",
     ## 3.2.1.9057: InitMulti calls dirnamesFromSet(..., leafOnly = FALSE) and resolveSimYears();
-    ## it relies on dirnamesFromSet() keeping zero-padded folders (rep01) as found (from 3.2.1.9037)
+    ## it relies on dirnamesFromSet() keeping zero-padded folders (rep01) as found (from 3.2.1.9038)
     ## and on its bare-number folder fallback (1/, 2/; PredictiveEcology/NRV_summary#20).
     "PredictiveEcology/SpaDES.core@development (>= 3.2.1.9057)"
   ),
@@ -423,7 +423,7 @@ InitMulti <- function(sim) {
   ## NOTE: don't load simLists -- slow and unreliable
   ## the saved files: those listed in `sim$outputsDF` (runs that register them, e.g. FireSense, in
   ## folders `rep1`, `rep2`, ...), else those found under `outputPath(sim)` (`rep01`, `rep02`, ...)
-  useOutputs <- NROW(sim$outputsDF) > 0
+  useOutputs <- .hasOutputsDF(sim)
   files <- .discoverOutputFiles(sim)
   ## dirnamesFromSet() answers `rep<reps>` for no files at all; with none, no replicate was found
   mod$allReps <- if (length(files) > 0L) dirnamesFromSet(files, P(sim)$reps) else character(0)
@@ -443,7 +443,7 @@ InitMulti <- function(sim) {
   } else {
     file.path(outputPath(sim), allReps)
   }
-  mod$rep1Dir <- if (useOutputs) repDirs[1] else file.path(outputPath(sim), mod$allReps[1])
+  mod$rep1Dir <- repDirs[1]
   ## simTimes unset (NA): take the run's start and end. A given simTimes is kept as is.
   P(sim)$simTimes <- SpaDES.core::resolveSimYears(P(sim)$simTimes, sim)
   padL <- ceiling(log10(P(sim)$simTimes[2] + 1))
@@ -824,13 +824,21 @@ InitMulti <- function(sim) {
   reproducible::checkPath(file.path(.ppRoot(sim), "csv", kind, layer, ...), create = TRUE)
 }
 
+## TRUE when `sim$outputsDF` was given: a data.frame with rows. The one test for it, so the files are
+## read from the same place the messages say.
+.hasOutputsDF <- function(sim) {
+  is.data.frame(sim$outputsDF) && NROW(sim$outputsDF) > 0L
+}
+
 ## The saved files of the replicates: those in `sim$outputsDF$file` (each once, in a fixed order, as
 ## a file saved twice is listed twice), or, when there is none, those one folder down under
 ## `outputPath(sim)`.
 .discoverOutputFiles <- function(sim) {
-  out <- sim$outputsDF
-  if (is.data.frame(out) && NROW(out) > 0) {
-    sort(unique(as.character(out$file)))
+  if (.hasOutputsDF(sim)) {
+    if (!"file" %in% names(sim$outputsDF)) {
+      stop("NRV_summary: `outputsDF` has no `file` column", call. = FALSE)
+    }
+    sort(unique(as.character(sim$outputsDF$file)))
   } else {
     as.character(fs::dir_ls(outputPath(sim), recurse = 1, type = "file"))
   }
@@ -859,10 +867,11 @@ InitMulti <- function(sim) {
   )
 }
 
-## the files of `files` in the first replicate's folder (`rep1Dir`), matched by whole path component.
+## the files of `files` in the first replicate's folder (`rep1Dir`): those under its full path, so a
+## folder of the same name under another parent, or `rep10` for `rep1`, is not matched.
 .firstRepFiles <- function(files, rep1Dir) {
   files <- files[!is.na(files)]
-  files[.inReps(files, basename(rep1Dir))]
+  files[startsWith(files, paste0(sub("/+$", "", rep1Dir), "/"))]
 }
 
 ## the year-0 cohortData and pixelGroupMap paths in the first replicate's folder.

@@ -23,7 +23,8 @@ touchFiles <- function(files) {
 }
 
 initMultiSim <- function(root, reps, outputsFiles = NULL, times = c(0, 1000), simTimes = c(0, 1000),
-                         summaryPeriod = c(700L, 1000L), timeSeriesTimes = 701:702) {
+                         summaryPeriod = c(700L, 1000L), timeSeriesTimes = 701:702,
+                         outputsDF = NULL) {
   sim <- SpaDES.core::simInit(
     times = list(start = times[1], end = times[2]),
     params = list(NRV_summary = c(
@@ -33,7 +34,8 @@ initMultiSim <- function(root, reps, outputsFiles = NULL, times = c(0, 1000), si
     )),
     modules = moduleName,
     objects = c(list(reportingPolygons = list(ELF = "placeholder")),
-                if (!is.null(outputsFiles)) list(outputsDF = data.frame(file = outputsFiles))),
+                if (!is.null(outputsFiles)) list(outputsDF = data.frame(file = outputsFiles)),
+                if (!is.null(outputsDF)) list(outputsDF = outputsDF)),
     paths = list(modulePath = modulePath, outputPath = file.path(root, "mainSim"),
                  cachePath = file.path(root, "cache"), inputPath = file.path(root, "in"))
   )
@@ -139,11 +141,13 @@ test_that("fewer reps found than asked stops", {
   root <- withr::local_tempdir()
   out <- file.path(root, "mainSim")
   touchFiles(unlist(lapply(file.path(out, sprintf("rep%02d", 1:2)), repFiles)))
-  expect_error(runInit(initMultiSim(root, reps = 1:3)), "replicate")
+  expect_error(runInit(initMultiSim(root, reps = 1:3)),
+               "found the files of 2 replicate\\(s\\) under .* but reps asks for 3")
 
   ## and with nothing at all
   root0 <- withr::local_tempdir()
-  expect_error(runInit(initMultiSim(root0, reps = 1:3)), "replicate")
+  expect_error(runInit(initMultiSim(root0, reps = 1:3)),
+               "found the files of 0 replicate\\(s\\) under .* but reps asks for 3")
 })
 
 test_that("file-type filters read the file name, not the folder names", {
@@ -182,10 +186,68 @@ test_that("BC seral and animation read the first replicate folder found", {
 
   sel <- moduleFn(".firstRepFiles", new.env())
   sam <- file.path("out", c("rep1", "rep2", "rep10"), "standAgeMap_year0701.tif")
+  ## NA entries are dropped
+  expect_identical(sel(c(NA, sam[1:2], NA), file.path("out", "rep1")), sam[1])
+  ## a folder of the same name under another parent is not the first replicate's
+  expect_identical(sel(file.path("other", "rep1", "a_year0701.tif"), file.path("out", "rep1")), character(0))
+  expect_identical(sel(file.path("out", "sub", "rep1", "a_year0701.tif"), file.path("out", "rep1")), character(0))
+  expect_identical(sel(file.path("out", "rep1", "a_year0701.tif"), file.path("out", "rep1")),
+                   file.path("out", "rep1", "a_year0701.tif"))
   expect_identical(sel(sam, file.path("out", "rep1")), sam[1])
   ## a name that merely contains the folder name is not a match
   expect_identical(sel(file.path("rep1x", "a_year0701.tif"), file.path("out", "rep1")), character(0))
   ## LandWeb-style folders still work
   expect_identical(sel(file.path("o", c("rep01", "rep02"), "a.tif"), file.path("o", "rep01")),
                    file.path("o", "rep01", "a.tif"))
+})
+
+test_that("outputsDF with rows but no `file` column stops with a clear message", {
+  root <- withr::local_tempdir()
+  expect_error(
+    runInit(initMultiSim(root, reps = 1:2, outputsDF = data.frame(path = "x/rep1/a_year0001.tif"))),
+    "`outputsDF` has no `file` column",
+    fixed = TRUE
+  )
+})
+
+test_that(".hasOutputsDF is TRUE only for a data.frame with rows", {
+  has <- moduleFn(".hasOutputsDF", new.env())
+  sim <- list2env(list())
+  expect_false(has(sim))
+  sim$outputsDF <- data.frame(file = character(0))
+  expect_false(has(sim))
+  sim$outputsDF <- list(file = "a", b = 1)
+  expect_false(has(sim))
+  sim$outputsDF <- data.frame(file = "a")
+  expect_true(has(sim))
+})
+
+test_that("files listed out of order are paired by replicate and year", {
+  ## the patch metrics pair the veg-type and stand-age maps by position
+  root <- withr::local_tempdir()
+  files <- unlist(lapply(file.path(root, c("rep1", "rep2")), repFiles))
+  touchFiles(files)
+  set.seed(42)
+  shuffled <- sample(files)
+  expect_false(identical(shuffled, sort(files)))
+
+  m <- modOf(runInit(initMultiSim(root, reps = 1:2, outputsFiles = shuffled)))
+  byRep <- moduleFn(".filesByRep", new.env())
+  yearsByRep <- function(f) lapply(byRep(f), function(x) sub(".*_year(\\d+)\\..*", "\\1", x))
+  expect_identical(yearsByRep(m$vtm), list(rep1 = c("0700", "1000"), rep2 = c("0700", "1000")))
+  expect_identical(yearsByRep(m$vtm), yearsByRep(m$sam))
+  expect_identical(names(byRep(m$vtm)), names(byRep(m$sam)))
+  expect_identical(yearsByRep(m$cd), yearsByRep(m$pgm))
+})
+
+test_that("bare-number replicate folders (1/, 2/) are found through outputsDF", {
+  root <- withr::local_tempdir()
+  files <- unlist(lapply(file.path(root, c("1", "2")), repFiles))
+  touchFiles(files)
+
+  m <- modOf(runInit(initMultiSim(root, reps = 1:2, outputsFiles = files)))
+  expect_identical(m$allReps, c("1", "2"))
+  expect_identical(m$rep1Dir, file.path(root, "1"))
+  expect_length(m$vtm, 2L * length(yrs))
+  expect_length(m$cd, 2L * length(yrs))
 })
