@@ -163,6 +163,19 @@ test_that("file-type filters read the file name, not the folder names", {
   expect_length(m$sam, 2L * length(yrs))
 })
 
+test_that("aux.xml sidecars are not taken as cohort or pixelGroup files", {
+  root <- withr::local_tempdir()
+  out <- file.path(root, "mainSim")
+  files <- unlist(lapply(file.path(out, sprintf("rep%02d", 1:2)), repFiles))
+  touchFiles(c(files, file.path(out, "rep01", c("pixelGroupMap_year0700.tif.aux.xml",
+                                                "cohortData_year0700.qs2.aux.xml"))))
+
+  m <- modOf(runInit(initMultiSim(root, reps = 1:2)))
+  expect_false(any(grepl("xml$", c(m$cd, m$pgm))))
+  expect_length(m$cd, 2L * length(yrs))
+  expect_length(m$pgm, 2L * length(yrs))
+})
+
 test_that(".discoverOutputFiles uses the outputsDF when it has rows, the disk otherwise", {
   discover <- moduleFn(".discoverOutputFiles", new.env())
   root <- withr::local_tempdir()

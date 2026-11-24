@@ -25,3 +25,11 @@ test_that(".inReps matches whole path components only", {
   expect_false(inReps("o/rep10/a.tif", "rep1"))
   expect_equal(inReps(f, c("rep01", "rep10")), c(TRUE, TRUE, FALSE))
 })
+
+test_that("aux.xml sidecars carry no year", {
+  fileYear <- moduleFn(".fileYear", new.env())
+  inYears <- moduleFn(".inYears", new.env())
+  f <- "o/rep01/pixelGroupMap_year0700.tif.aux.xml"
+  expect_true(is.na(fileYear(f)))
+  expect_false(inYears(f, 700))
+})
