@@ -75,10 +75,54 @@ test_that("zero-row sppEquiv by the first event: a message, no error, nothing sc
   )
   ## another module's init supplies the empty table after NRV_summary's init
   sim$sppEquiv <- stubObjects()$sppEquiv[0L]
+  msgs <- character()
+  sim <- withCallingHandlers(
+    suppressWarnings(SpaDES.core::spades(sim, debug = FALSE)),
+    message = function(m) {
+      msgs <<- c(msgs, conditionMessage(m))
+      invokeRestart("muffleMessage")
+    }
+  )
+  ## two map_generators events were queued at init (times 0 and 2): the message is printed once
+  expect_equal(sum(grepl("no tree species", msgs)), 1L)
+  expect_length(list.files(file.path(root, "out"), pattern = "_year"), 0L)
+  ## both queued times ran, and no event rescheduled itself or queued others
+  done <- SpaDES.core::completed(sim)
+  done <- done[done$moduleName == "NRV_summary" & done$eventType %in% c("map_generators", "save_single"), ]
+  expect_equal(done$eventType, c("map_generators", "save_single", "map_generators", "save_single"))
+  expect_equal(as.numeric(done$eventTime), c(0, 0, 2, 2))
+})
+
+test_that("zero-row sppEquiv with a NULL speciesLayers at the first event: a message, no error", {
+  objs <- stubObjects()
+  objs$sppEquiv <- NULL
+  objs$speciesLayers <- NULL
+  sim <- stubSim(objs, withr::local_tempdir())
+  sim <- suppressWarnings(
+    SpaDES.core::spades(sim, events = list(NRV_summary = "init"), debug = FALSE)
+  )
+  sim$sppEquiv <- stubObjects()$sppEquiv[0L]
+  ## the no-tree check runs before the missing-input stop
   expect_message(
-    sim <- suppressWarnings(SpaDES.core::spades(sim, debug = FALSE)),
+    expect_no_error(
+      suppressWarnings(SpaDES.core::spades(sim, events = list(NRV_summary = "map_generators"), debug = FALSE))
+    ),
     "no tree species"
   )
-  expect_length(list.files(file.path(root, "out"), pattern = "_year"), 0L)
-  expect_false(any(SpaDES.core::events(sim)$moduleName == "NRV_summary"))
+})
+
+test_that("an all-NA sppEquivCol is not read as 'no tree species'", {
+  objs <- stubObjects()
+  objs$sppEquiv$LandR <- NA_character_
+  sim <- stubSim(objs, withr::local_tempdir())
+  msgs <- character()
+  sim <- withCallingHandlers(
+    suppressWarnings(SpaDES.core::spades(sim, events = list(NRV_summary = "init"), debug = FALSE)),
+    message = function(m) {
+      msgs <<- c(msgs, conditionMessage(m))
+      invokeRestart("muffleMessage")
+    }
+  )
+  expect_false(any(grepl("no tree species", msgs)))
+  expect_true(any(SpaDES.core::events(sim)$moduleName == "NRV_summary"))
 })

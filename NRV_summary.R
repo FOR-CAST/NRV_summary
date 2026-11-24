@@ -270,6 +270,10 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       }
     },
     map_generators = {
+      ## no tree species: the first event's decision holds for the run (and the message is printed once)
+      if (isTRUE(mod$noTreeSpecies)) {
+        return(invisible(sim))
+      }
       ## The year-0 event runs after every module's init (.first() + 1), so the check at the first
       ## summary event sees inputs set by any module's init.
       if (!isTRUE(mod$inputsChecked)) {
@@ -641,23 +645,20 @@ InitMulti <- function(sim) {
   colors[want]
 }
 
-## One vegetation-type map by reporting group: a copy of `cohortData` with each species recoded to
-## its group (`grp` from LandWebUtils::sppEquiv_groups()), so that LandR::vegTypeMapGenerator(),
-## which sums B within a species code, sums it within a group before deciding the leading type.
-## Stops, naming the inputs, when single mode lacks any of the objects the vegetation modules supply.
-## Returns FALSE, with a message, when `sppEquiv` has no tree species: there is nothing to summarise.
+## Helpers for a study area with no tree species (see init and `.checkSingleInputs()`).
 .noTreeMsg <- "NRV_summary: no tree species in sppEquiv; nothing to summarise"
 
-## TRUE when `sppEquiv` is present but has no rows for the module's `sppEquivCol` species.
+## TRUE when `sppEquiv` is present but has no rows: there are no tree species to summarise.
 .noTreeSpecies <- function(sim) {
   eq <- sim$sppEquiv
   if (!is.data.frame(eq)) {
     return(FALSE)
   }
-  col <- P(sim)$sppEquivCol
-  nrow(eq) == 0L || (col %in% names(eq) && !any(!is.na(eq[[col]])))
+  nrow(eq) == 0L
 }
 
+## Stops, naming the inputs, when single mode lacks any of the objects the vegetation modules supply.
+## Returns FALSE, with a message, when `sppEquiv` has no tree species: there is nothing to summarise.
 .checkSingleInputs <- function(sim) {
   needed <- c("cohortData", "pixelGroupMap", "speciesLayers", "sppColorVect", "sppEquiv", "studyAreaReporting")
   missing <- needed[vapply(needed, function(nm) is.null(sim[[nm]]), logical(1))]
@@ -676,6 +677,9 @@ InitMulti <- function(sim) {
   invisible(TRUE)
 }
 
+## One vegetation-type map by reporting group: a copy of `cohortData` with each species recoded to
+## its group (`grp` from LandWebUtils::sppEquiv_groups()), so that LandR::vegTypeMapGenerator(),
+## which sums B within a species code, sums it within a group before deciding the leading type.
 .reportingVegTypeMap <- function(cohortData, pixelGroupMap, grp, colors, vegLeadingProportion,
                                  mixedType) {
   LandR::vegTypeMapGenerator(
