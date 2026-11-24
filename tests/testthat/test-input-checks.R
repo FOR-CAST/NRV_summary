@@ -47,7 +47,7 @@ test_that("the first map_generators stops on a NULL speciesLayers", {
     suppressWarnings(
       SpaDES.core::spades(sim, events = list(NRV_summary = c("init", "map_generators")), debug = FALSE)
     ),
-    "speciesLayers"
+    "needs speciesLayers in the simList"
   )
 })
 

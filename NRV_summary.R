@@ -7,17 +7,16 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9041"),
+  version = list(NRV_summary = "2.0.0.9042"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
   loadOrder = list(after = c("Biomass_core")),
   documentation = list("README.md", "NRV_summary.Rmd"), ## .md produced from .Rmd
   reqdPkgs = list(
-    "data.table", "dplyr", "fs", "future.apply", "future.callr",
+    "arrow", "crayon", "data.table", "dplyr", "fs", "future", "future.apply", "future.callr",
     "ggforce", "ggplot2", "gifski", "googledrive", "landscapemetrics", "qs2",
-    "RColorBrewer", "sf", "terra", "tidyterra",
-    "arrow", "crayon", "future", "reproducible", "rlang",
+    "RColorBrewer", "reproducible", "rlang", "sf", "terra", "tidyterra",
     "PredictiveEcology/LandR@development (>= 1.2.0.9024)", ## leadingSpeciesProp()
     "PredictiveEcology/LandWebUtils@development (>= 1.0.3.9045)", ## sppEquiv_groups(), recode_cohorts()
     ## 0.2.10 floor, not 0.2.7: the LandWeb#118 tenure x sub-region crossings mint refCodes of the
@@ -195,6 +194,15 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
   switch(
     eventType,
     init = {
+      ## timeSeriesTimes = NA: the parameter's default (see defineParameter above)
+      if (all(is.na(P(sim)$timeSeriesTimes))) {
+        P(sim)$timeSeriesTimes <- if (end(sim) >= start(sim) + 650) {
+          start(sim) + 601:650
+        } else {
+          seq(max(start(sim), end(sim) - 49), end(sim))
+        }
+      }
+
       ## No tree species in this study area (sppEquiv has no rows, e.g. a non-forested study area):
       ## there is no vegetation to summarise, so schedule nothing.
       if (.noTreeSpecies(sim)) {
@@ -316,8 +324,9 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       mod$standAgeMap <- terra::mask(mod$standAgeMap, sim$studyAreaReporting)
 
       nextTime <- time(sim) + P(sim)$summaryInterval
-      ## times scheduled by init are not scheduled a second time here
-      if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2] && !nextTime %in% mod$initTimes) {
+      ## times scheduled by init are not scheduled a second time here; only the summaryInterval grid
+      ## reschedules, so a timeSeriesTimes year off the grid is a one-off, not a second chain
+      if (time(sim) < P(sim)$summaryPeriod[2] && time(sim) %in% mod$analysesOutputsTimes && !nextTime %in% mod$initTimes) {
         sim <- scheduleEvent(sim, nextTime, "NRV_summary", "map_generators", .last())
       }
     },
@@ -382,7 +391,10 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         sim <- registerOutputs(f_standAgeMap, sim)
 
         f_vegTypeMap <- file.path(outputPath(sim), paste0("vegTypeMap_year", padYear, ".tif"))
-        terra::writeRaster(mod$vegTypeMap, f_vegTypeMap, datatype = "INT2U", overwrite = TRUE)
+        ## a byte raster: the colour table belongs with it (terra warns when it is written to a
+        ## wider type), and the few leading-type classes fit
+        .checkByteCodes(mod$vegTypeMap)
+        terra::writeRaster(mod$vegTypeMap, f_vegTypeMap, datatype = "INT1U", overwrite = TRUE)
         sim <- registerOutputs(f_vegTypeMap, sim)
       }
 
@@ -397,7 +409,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
 
         nextTime <- time(sim) + P(sim)$summaryInterval
         ## times scheduled by init are not scheduled a second time here
-        if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2] && !nextTime %in% mod$initTimes) {
+        if (time(sim) < P(sim)$summaryPeriod[2] && time(sim) %in% mod$analysesOutputsTimes && !nextTime %in% mod$initTimes) {
           sim <- scheduleEvent(sim, nextTime, "NRV_summary", "save_single", .last())
         }
       }
@@ -850,6 +862,16 @@ InitMulti <- function(sim) {
   b <- basename(as.character(files))
   pat <- "^.*_year([0-9]+)\\.[^.]*$"
   as.integer(ifelse(grepl(pat, b), sub(pat, "\\1", b), NA))
+}
+
+## Stops when a map holds a code of 255 or more: it could not be saved as INT1U, whose NA value is 255.
+.checkByteCodes <- function(r) {
+  top <- max(terra::minmax(r, compute = TRUE)["max", ], na.rm = TRUE)
+  if (is.finite(top) && top >= 255) {
+    stop("NRV_summary: vegTypeMap codes must be below 255 to be saved as INT1U; 255 is its NA value",
+         " (the largest code is ", top, ").", call. = FALSE)
+  }
+  invisible(r)
 }
 
 ## TRUE for each file whose year (see .fileYear()) is one of `years`; FALSE for a file with no year.

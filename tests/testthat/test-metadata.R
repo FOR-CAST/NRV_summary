@@ -59,16 +59,15 @@ test_that("parameters are the expected names", {
   )
 })
 
-
 test_that("every namespace the module calls is in reqdPkgs", {
+  src <- file.path(moduleRoot, paste0(moduleName, ".R"))
+  skip_if_not(file.exists(src), "module source not found")
   md <- SpaDES.core::moduleMetadata(module = moduleName, path = modulePath)
   declared <- unlist(md$reqdPkgs)
   declared <- sub("^.*/", "", declared) ## owner/
   declared <- sub("@.*$", "", declared) ## @ref
   declared <- trimws(sub("\\(.*$", "", declared)) ## (>= x)
 
-  src <- file.path(moduleRoot, paste0(moduleName, ".R"))
-  skip_if_not(file.exists(src), "module source not found")
   pd <- utils::getParseData(parse(src, keep.source = TRUE))
   called <- unique(pd$text[pd$token == "SYMBOL_PACKAGE"])
   called <- setdiff(
