@@ -1,6 +1,6 @@
 ---
 title: "NRV_summary Manual"
-subtitle: "v.2.0.0.9041"
+subtitle: "v.2.0.0.9042"
 date: "Last updated: 2026-11-24"
 output:
   bookdown::html_document2:
