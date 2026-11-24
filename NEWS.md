@@ -2,6 +2,14 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+* **`nrvWindow`: the NRV can be the last part of `summaryPeriod` (`2.0.0.9043`).** `nrvWindow` is the fraction of `summaryPeriod` that counts as the natural range of variation (default 1, the whole period). The lw pooling, the pm by-class pages and the NRV shading use those years, and the shading is drawn only when `nrvWindow` is below 1. Reused aggregates are recomputed when the NRV years change. `init` stops with a plain message when no summary time falls in the NRV years.
+
+* **Opt-in `stability` event (`2.0.0.9043`).** When `"stability"` is in `postprocessEvents`, the module tests each lm and pm metric series (and the burn series, read from burnSummaries' `burnSummaries_fireBlocks.csv`; a message says so if it is absent) for a trend, writes `csv/stability/all/stability.csv`, and draws paged figures with each page showing only its own series. New parameters: `stabilityAlpha`, `stabilityMinChange` and `stabilityWindow`.
+
+* **Current-condition overview (`2.0.0.9043`).** When `"stability"` and `"lm"` are both in `postprocessEvents`, the stability event also draws where each lm metric's current condition sits against its NRV range, on each metric's own scale, up to 24 panels per page.
+
+* **LandWeb summaries are unchanged (`2.0.0.9043`).** LandWeb leaves `nrvWindow` at 1 and does not run `stability`, so none of the new code runs: <pending>.
+
 * **`vegTypeMap` is saved as INT1U, and a `timeSeriesTimes` year off the `summaryInterval` grid no longer starts a second chain (`2.0.0.9042`).** Every replicate's saved `vegTypeMap_year*.tif` is now 8-bit (it keeps its colour table; values are unchanged), and the run stops if a code of 255 or more would not fit (255 is the NA value of an 8-bit raster). A `timeSeriesTimes` year inside `summaryPeriod` but off the grid (e.g. 725 for `summaryPeriod = c(700, 1000)`, `summaryInterval = 50`) runs once and no longer schedules extra years (775, 825, ...).
 
 * **`timeSeriesTimes = NA` takes the default (`2.0.0.9042`).** The default is `start + 601:650` when the run is that long, otherwise the last 50 years of the run. An explicit `NA` used to stop `init` with a missing-value error.
