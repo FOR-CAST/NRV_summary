@@ -2456,22 +2456,144 @@ makeAnimation <- function(sim) {
   )
 }
 
+## ---- the current-condition overview (drawn by the opt-in `stability` event) -------------------------
+## Where each metric's current condition (year 0) sits against its NRV range, on the metric's real scale.
+## One panel per subregion x metric of an lm reporting layer, at most 24 to a page.
+## Ported from the PE fork (PE#12); the range is that of the NRV years (`.nrvPeriod()`), as for the envelopes.
+
+## The NRV range of each poly x metric: smallest min, largest max and median of the mean, over the times of
+## `period` (the NRV years); NAs are ignored, so one all-NA year does not blank a range, and a poly x metric with
+## no value in the period has none. `env` has poly, metric, time, mean, min and max.
+.nrvRange <- function(env, period) {
+  env <- env[env$time >= min(period) & env$time <= max(period), , drop = FALSE]
+  env <- env[!(is.na(env$min) & is.na(env$max) & is.na(env$mean)), , drop = FALSE]
+  if (!nrow(env)) {
+    return(data.frame(poly = character(0), metric = character(0), lo = numeric(0), hi = numeric(0),
+                      mid = numeric(0)))
+  }
+  byMetric <- split(env, paste(env$poly, env$metric, sep = "\r"))
+  out <- do.call(rbind, lapply(byMetric, function(e) {
+    data.frame(poly = e$poly[1L], metric = e$metric[1L], lo = min(e$min, na.rm = TRUE),
+               hi = max(e$max, na.rm = TRUE), mid = stats::median(e$mean, na.rm = TRUE))
+  }))
+  rownames(out) <- NULL
+  out
+}
+
+## The current condition against the NRV, one row per poly x metric: the NRV range (lo, hi) and middle (mid) of
+## `.nrvRange()`, the current condition (`current`, the mean of `cc`: poly, metric, mean) and where it falls:
+## "inside", "above" or "below" the range.
+.nrvComparison <- function(env, cc, period) {
+  nrv <- .nrvRange(env, period)
+  cc <- cc[is.finite(cc$mean), c("poly", "metric", "mean"), drop = FALSE]
+  nrv <- merge(nrv, stats::setNames(cc, c("poly", "metric", "current")), by = c("poly", "metric"))
+  tol <- 1e-9 * pmax(1, abs(nrv$lo), abs(nrv$hi)) ## a value equal to an end is inside
+  nrv$position <- ifelse(nrv$current < nrv$lo - tol, "below", ifelse(nrv$current > nrv$hi + tol, "above", "inside"))
+  nrv
+}
+
+## The rows of the overview, one per panel: `.nrvComparison()` plus the panel's label, the subregion (when
+## there is more than one) and nrvtools' title of the metric, in subregion then metric order.
+.ccOverviewData <- function(env, cc, period, level = "landscape") {
+  d <- .nrvComparison(env, cc, period)
+  d <- d[order(d$poly, d$metric), , drop = FALSE]
+  mets <- unique(d$metric)
+  title <- stats::setNames(vapply(mets, .metricTitle, character(1), level = level), mets)
+  d$panel <- paste0(if (length(unique(d$poly)) > 1L) paste0(d$poly, ": ") else "", title[d$metric])
+  rownames(d) <- NULL
+  d
+}
+
+## `.ccOverviewData()` in pages of at most `perPage` panels: a list of data frames, each with only its own panels.
+.ccOverviewPages <- function(d, perPage = 24L) {
+  lapply(.pages(unique(d$panel), perPage), function(ids) d[d$panel %in% ids, , drop = FALSE])
+}
+
+## Panel grid and canvas (inches) of a page of `nPanels` panels, four to a row. Unlike `.figLayout()`, rows are
+## not capped at three: a page holds up to 24 panels, and the height follows its rows.
+.ccOverviewLayout <- function(nPanels) {
+  ncol <- max(1L, min(4L, as.integer(nPanels)))
+  nrow <- max(1L, as.integer(ceiling(nPanels / ncol)))
+  list(ncol = ncol, nrow = nrow, width = max(8, 4 * ncol), height = 2 + 1.1 * nrow)
+}
+
+## One page of the overview (`d`: rows of `.ccOverviewData()`), one facet per subregion x metric on its own x
+## scale. The grey bar is the NRV range (smallest min to largest max over the NRV years), the tick the NRV
+## median, the dot the current condition, coloured by its position against the range.
+.currentConditionOverview <- function(d, title = "Current condition relative to the NRV") {
+  positionColour <- c(inside = "#1b9e77", below = "#2166ac", above = "#7b3294")
+  positionLabels <- c(inside = "inside the NRV range", below = "below the NRV range", above = "above the NRV range")
+  midLabel <- "NRV median"
+  d$panel <- factor(d$panel, levels = unique(d$panel))
+  lay <- .ccOverviewLayout(nlevels(d$panel))
+  ggplot2::ggplot(d) +
+    ggplot2::geom_segment(ggplot2::aes(x = lo, xend = hi, y = 0, yend = 0), colour = "grey75", linewidth = 4) +
+    ggplot2::geom_point(ggplot2::aes(x = mid, y = 0, shape = midLabel), size = 3) +
+    ggplot2::geom_point(ggplot2::aes(x = current, y = 0, colour = position), size = 3) +
+    ggplot2::scale_colour_manual(values = positionColour, breaks = names(positionColour),
+                                 labels = unname(positionLabels), drop = FALSE, name = "current condition") +
+    ggplot2::scale_shape_manual(values = stats::setNames(124, midLabel), name = NULL) +
+    ggplot2::facet_wrap(~panel, scales = "free_x", ncol = lay$ncol, labeller = ggplot2::label_wrap_gen(30)) +
+    ggplot2::labs(x = "metric value (grey bar: NRV range over the NRV years)", y = NULL, title = title) +
+    ggplot2::theme_bw(base_size = 9) +
+    ggplot2::theme(legend.position = "bottom", axis.text.y = ggplot2::element_blank(),
+                   axis.ticks.y = ggplot2::element_blank(), panel.grid.major.y = ggplot2::element_blank(),
+                   panel.grid.minor.y = ggplot2::element_blank())
+}
+
+## The overview figures of the `stability` event, for each lm reporting layer: pages of at most 24 panels in
+## figures/stability/all/current_condition/. The envelope and current condition are those the lm event kept in
+## `mod`. Returns the files; none when the lm event did not run or a layer has no envelope or current condition.
+.ccOverviewFigs <- function(sim) {
+  if (!"lm" %in% tolower(P(sim)$postprocessEvents)) {
+    return(character(0))
+  }
+  period <- .nrvPeriod(sim)
+  safe <- function(s) gsub("[/\\\\]", "-", s)
+  files <- character(0)
+  for (p in mod$rptPolyNames) {
+    refCode <- LandWebUtils::refCodeFor("lm", p)
+    env <- mod[[refCode]]
+    cc <- mod[[paste0(refCode, "_CC")]]
+    if (is.null(env) || !nrow(env) || is.null(cc) || !nrow(cc)) {
+      next
+    }
+    d <- .ccOverviewData(env, cc, period)
+    if (!nrow(d)) {
+      next
+    }
+    pages <- .ccOverviewPages(d)
+    dir <- .ppFigDir(sim, "stability", "all", "current_condition")
+    for (pg in seq_along(pages)) {
+      lay <- .ccOverviewLayout(length(unique(pages[[pg]]$panel)))
+      g <- .currentConditionOverview(
+        pages[[pg]], title = .pageTitle(paste0("Current condition relative to the NRV: ", p), pg, length(pages))
+      )
+      f <- file.path(dir, paste0("current_condition_", safe(p), "_p", pg, ".png"))
+      ggplot2::ggsave(f, g, width = lay$width, height = lay$height)
+      files <- c(files, f)
+    }
+  }
+  files
+}
+
 ## The `postprocess_stability` event: stability.csv (csv/stability/all/) and the figures
 ## (figures/stability/all/): one set of pages per kind of series, each page drawn from its own
 ## series only, and a summary of the verdicts. Runs after the plot event, which clears the figures
 ## folder of the events it draws (see .clearFigDirs).
 stabilityCheck <- function(sim) {
+  ccFiles <- .ccOverviewFigs(sim) ## the current-condition overview, figures/stability/all/current_condition/
   series <- .stabilitySeries(sim)
   if (is.null(series) || !nrow(series)) {
     message("NRV_summary stability: no series to test")
-    return(invisible(sim))
+    return(invisible(if (length(ccFiles)) registerOutputs(ccFiles, sim) else sim))
   }
   window <- .stabilityWindow(sim)
   res <- .trendStability(series, .stabilityKeys(), window, P(sim)$stabilityAlpha, P(sim)$stabilityMinChange)
 
   f_csv <- file.path(.ppCsvDir(sim, "stability", "all"), "stability.csv")
   utils::write.csv(res, f_csv, row.names = FALSE)
-  files <- f_csv
+  files <- c(f_csv, ccFiles)
 
   message("NRV_summary stability (", window[1L], "-", window[2L], "): ", .stabilityVerdict(res))
 

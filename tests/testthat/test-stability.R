@@ -322,6 +322,7 @@ test_that("the check writes stability.csv and one figure per page of series, eac
   check <- withP(moduleFn("stabilityCheck", m), stabilityAlpha = 0.05, stabilityMinChange = 0.1)
   environment(check)$.stabilitySeries <- function(sim) series
   environment(check)$.stabilityWindow <- function(sim) c(500, 1000)
+  environment(check)$.ccOverviewFigs <- function(sim) character(0) ## the overview has its own tests
   environment(check)$.metricTitle <- function(met, level) met ## the metric codes here are made up
   ## record the series each page draws
   drawn <- list()
@@ -345,4 +346,33 @@ test_that("the check writes stability.csv and one figure per page of series, eac
   expect_identical(sort(unlist(lapply(drawn, `[[`, "ids"))), sort(moduleFn(".stabilityId", m)(unique(series[names(series) %in% c("kind", "layer", "poly", "level", "class", "metric")]))))
   expect_true(all(file.exists(SpaDES.core::outputs(sim)$file)))
   expect_equal(length(SpaDES.core::outputs(sim)$file), 5L)
+})
+
+## the overview's synthetic envelope and current condition (also in test-current-condition-overview.R)
+ccOverviewEnv <- function(polys = "ELF") {
+  g <- expand.grid(poly = polys, time = c(100, 200, 300), metric = c("ai", "area_mn"), stringsAsFactors = FALSE)
+  base <- ifelse(g$metric == "ai", 10, 5000)
+  data.frame(poly = g$poly, time = g$time, metric = g$metric, mean = base, min = base - 2, max = base + 2)
+}
+ccOverviewCC <- function(polys = "ELF") {
+  g <- expand.grid(poly = polys, metric = c("ai", "area_mn"), stringsAsFactors = FALSE)
+  data.frame(poly = g$poly, metric = g$metric, mean = ifelse(g$metric == "ai", 11, 5000))
+}
+
+test_that("the overview pages are written under figures/stability, with the rest of the event", {
+  withr::local_package("SpaDES.core")
+  sim <- stabSim()
+  m <- new.env()
+  m$rptPolyNames <- "A"
+  refCode <- LandWebUtils::refCodeFor("lm", "A")
+  m[[refCode]] <- ccOverviewEnv("A")
+  m[[paste0(refCode, "_CC")]] <- ccOverviewCC("A")
+  fn <- withP(moduleFn(".ccOverviewFigs", m), postprocessEvents = c("lm", "stability"))
+  environment(fn)$.nrvPeriod <- function(sim) c(100, 300)
+  files <- fn(sim)
+  expect_true(length(files) >= 1L)
+  expect_true(all(file.exists(files)))
+  expect_true(all(grepl(file.path("figures", "stability"), files, fixed = TRUE)))
+  ## no lm event, no overview
+  expect_length(withP(moduleFn(".ccOverviewFigs", m), postprocessEvents = "stability")(sim), 0L)
 })
