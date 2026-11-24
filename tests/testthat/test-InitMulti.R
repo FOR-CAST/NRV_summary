@@ -139,3 +139,22 @@ test_that(".discoverOutputFiles uses the outputsDF when it has rows, the disk ot
   sim$outputsDF <- data.frame(file = file.path(root, "z", c("q_year0001.tif", "p_year0001.tif", "q_year0001.tif")))
   expect_identical(discover(sim), file.path(root, "z", c("p_year0001.tif", "q_year0001.tif")))
 })
+
+test_that("BC seral and animation read the first replicate folder found", {
+  rep1 <- file.path("x", "rep1")
+  year0 <- moduleFn(".repYear0Files", new.env())
+  expect_identical(
+    year0(rep1),
+    list(cohortData = file.path(rep1, "cohortData_year0000.qs2"),
+         pixelGroupMap = file.path(rep1, "pixelGroupMap_year0000.tif"))
+  )
+
+  sel <- moduleFn(".firstRepFiles", new.env())
+  sam <- file.path("out", c("rep1", "rep2", "rep10"), "standAgeMap_year0701.tif")
+  expect_identical(sel(sam, file.path("out", "rep1")), sam[1])
+  ## a name that merely contains the folder name is not a match
+  expect_identical(sel(file.path("rep1x", "a_year0701.tif"), file.path("out", "rep1")), character(0))
+  ## LandWeb-style folders still work
+  expect_identical(sel(file.path("o", c("rep01", "rep02"), "a.tif"), file.path("o", "rep01")),
+                   file.path("o", "rep01", "a.tif"))
+})

@@ -854,6 +854,20 @@ InitMulti <- function(sim) {
   )
 }
 
+## the files of `files` in the first replicate's folder (`rep1Dir`), matched by whole path component.
+.firstRepFiles <- function(files, rep1Dir) {
+  files <- files[!is.na(files)]
+  files[.inReps(files, basename(rep1Dir))]
+}
+
+## the year-0 cohortData and pixelGroupMap paths in the first replicate's folder.
+.repYear0Files <- function(rep1Dir) {
+  list(
+    cohortData = file.path(rep1Dir, "cohortData_year0000.qs2"),
+    pixelGroupMap = file.path(rep1Dir, "pixelGroupMap_year0000.tif")
+  )
+}
+
 ## split a per-replicate map-file vector (`.../rep<NN>/<map>_year<YYYY>.tif`) into a named list by rep.
 .filesByRep <- function(files) {
   split(files, basename(dirname(files)))
@@ -1311,8 +1325,9 @@ makeSeralStageMapsBC <- function(sim) {
   sf::st_write(NDTBEC, fNDTBEC, append = FALSE, quiet = TRUE)
   rm(studyAreaReporting, NDTBEC)
 
-  fcd0 <- file.path(outputPath(sim), "rep01", "cohortData_year0000.qs2")
-  fpgm0 <- file.path(outputPath(sim), "rep01", "pixelGroupMap_year0000.tif")
+  year0 <- .repYear0Files(mod$rep1Dir)
+  fcd0 <- year0$cohortData
+  fpgm0 <- year0$pixelGroupMap
 
   fcd <- c(fcd0, mod$cd)
   fpgm <- c(fpgm0, mod$pgm)
@@ -1458,9 +1473,9 @@ patchMetricsSeralBC <- function(sim) {
 makeAnimation <- function(sim) {
   ## animate replicate 1's saved stand-age time series (the deterministic first rep,
   ## matching the CC snapshot); frames were masked to studyAreaReporting when saved.
-  samFiles <- grep("rep01", mod$samTimeSeries, value = TRUE)
+  samFiles <- .firstRepFiles(mod$samTimeSeries, mod$rep1Dir)
   if (length(samFiles) == 0L) {
-    warning("NRV_summary animation: no rep01 standAgeMap time-series files found; skipping.")
+    warning("NRV_summary animation: no ", basename(mod$rep1Dir), " standAgeMap time-series files found; skipping.")
     return(invisible(sim))
   }
   yrs <- as.integer(gsub(".*year0*([0-9]+)\\.tif$", "\\1", samFiles))
