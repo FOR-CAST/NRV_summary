@@ -36,20 +36,8 @@ writeGrowthStandIn <- function(dir) {
 test_that("year 0 is saved before any time-0 dynamics, once", {
   mods <- writeGrowthStandIn(withr::local_tempdir())
   out <- file.path(testPaths$outputPath, "currentCondition")
-  crs <- "EPSG:3400"
-  rtm <- terra::rast(nrows = 2, ncols = 2, xmin = 0, xmax = 500, ymin = 0, ymax = 500, crs = crs)
-  spp <- c("Pice_gla", "Popu_tre")
-  sppEquiv <- LandR::sppEquivalencies_CA
-  sppEquiv <- sppEquiv[sppEquiv[["LandR"]] %in% spp, ]
-  cohortData <- data.table::data.table(
-    pixelGroup = c(1L, 1L, 2L, 3L),
-    speciesCode = factor(c("Pice_gla", "Popu_tre", "Pice_gla", "Popu_tre"), levels = spp),
-    age = c(80L, 40L, 150L, 20L),
-    B = c(6000L, 2000L, 9000L, 1500L)
-  )
-  speciesLayers <- c(terra::rast(rtm, vals = c(60L, 60L, 100L, 0L)),
-                     terra::rast(rtm, vals = c(40L, 40L, 0L, 100L)))
-  names(speciesLayers) <- spp
+  fx <- singleRunFixture()
+  cohortData <- fx$cohortData
 
   sim <- SpaDES.core::simInitAndSpades(
     times = list(start = 0, end = 10),
@@ -59,15 +47,7 @@ test_that("year 0 is saved before any time-0 dynamics, once", {
       ccStandAgeSource = "cohortData" ## no age layer here; see the stand-age tests below
     )),
     modules = c("NRV_summary", "growthStandIn"),
-    objects = list(
-      cohortData = data.table::copy(cohortData),
-      pixelGroupMap = terra::rast(rtm, vals = c(1L, 1L, 2L, 3L)),
-      speciesLayers = speciesLayers,
-      sppEquiv = sppEquiv,
-      sppColorVect = LandR::sppColors(sppEquiv, "LandR", newVals = "Mixed", palette = "Accent"),
-      studyAreaReporting = terra::as.polygons(terra::ext(rtm), crs = crs),
-      flammableMap = terra::rast(rtm, vals = 1L)
-    ),
+    objects = fx$objects,
     paths = utils::modifyList(testPaths, list(modulePath = c(testPaths$modulePath, mods),
                                               outputPath = out))
   )
