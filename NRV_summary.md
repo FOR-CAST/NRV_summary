@@ -1,7 +1,7 @@
 ---
 title: "NRV_summary Manual"
-subtitle: "v.2.0.0.9036"
-date: "Last updated: 2026-11-13"
+subtitle: "v.2.0.0.9040"
+date: "Last updated: 2026-11-24"
 output:
   bookdown::html_document2:
     toc: true
@@ -298,10 +298,10 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
   <tr>
    <td style="text-align:left;"> timeSeriesTimes </td>
    <td style="text-align:left;"> numeric </td>
-   <td style="text-align:left;"> 601, 602.... </td>
+   <td style="text-align:left;"> 0, 1, 2,.... </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
-   <td style="text-align:left;"> simulation times for which to build time steries animations. </td>
+   <td style="text-align:left;"> simulation times for which to build time series animations; the default is start + 601:650 when the run is that long, otherwise the last 50 years of the run. </td>
    <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
@@ -402,6 +402,103 @@ package), which needs no external tools. This deliberately avoids ImageMagick: t
 raising ImageMagick's `policy.xml` memory/disk limits (see
 [LandWeb #153](https://github.com/PredictiveEcology/LandWeb/issues/153)). With `gifski`
 **no such system configuration is required**.
+
+
+
+<div class="figure">
+<img src="figures/NRV_summary_eventFlow.png" alt="(ref:NRV-summary) events, as read from the module code with its default parameters." width="100%" />
+<p class="caption">(\#fig:eventFlow-NRV-summary)(ref:NRV-summary) events, as read from the module code with its default parameters.</p>
+</div>
+
+Table \@ref(tab:eventObjects-NRV-summary) lists, for each object, the code that writes it and the code that only reads it.
+
+<table class="table" style="width: auto !important; border-bottom: 0;">
+<caption>(\#tab:eventObjects-NRV-summary)Where each object of (ref:NRV-summary) is written and read, in run order.</caption>
+ <thead>
+  <tr>
+   <th style="text-align:left;"> Object </th>
+   <th style="text-align:left;"> Written by </th>
+   <th style="text-align:left;"> Read by </th>
+  </tr>
+ </thead>
+<tbody>
+  <tr grouplength="5"><td colspan="3" style="border-bottom: 1px solid;"><strong>Inputs</strong></td></tr>
+<tr>
+   <td style="text-align:left;padding-left: 2em;" indentlevel="1"> sppEquiv </td>
+   <td style="text-align:left;">  </td>
+   <td style="text-align:left;"> init: .noTreeSpecies(), init: InitMulti(), map_generators (single) </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;padding-left: 2em;" indentlevel="1"> LandTypeCC_reporting </td>
+   <td style="text-align:left;">  </td>
+   <td style="text-align:left;"> init: InitMulti() </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;padding-left: 2em;" indentlevel="1"> reportingPolygons </td>
+   <td style="text-align:left;">  </td>
+   <td style="text-align:left;"> init: InitMulti(), plot (multi), postprocess_lm (multi), postprocess_pm (multi) </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;padding-left: 2em;" indentlevel="1"> sppColorVectReporting </td>
+   <td style="text-align:left;">  </td>
+   <td style="text-align:left;"> init: InitMulti() </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;padding-left: 2em;" indentlevel="1"> studyAreaReporting </td>
+   <td style="text-align:left;">  </td>
+   <td style="text-align:left;"> postprocess_lm (multi), postprocess_pm (multi) </td>
+  </tr>
+</tbody>
+<tfoot><tr><td style="padding: 0; " colspan="100%">
+<sup></sup> Not shown, off with the default parameters: postprocess_lw, postprocess_bc, postprocess_on, animation. Not shown, touching no object in the metadata: .inputObjects, init: .checkPostprocessEvents(), save_single, postprocess. Not traced to any code (e.g. reached indirectly): cohortData, flammableMap, pixelGroupMap, speciesLayers, sppColorVect, standAgeMap.</td></tr></tfoot>
+</table>
+
+
+#### .noTreeSpecies() {-}
+
+init event, step 1 of 3
+
+![](figures/NRV_summary_io_init_.noTreeSpecies.png){width=100%}
+
+
+
+#### InitMulti() {-}
+
+init event, step 3 of 3
+
+![](figures/NRV_summary_io_init_InitMulti.png){width=100%}
+
+
+
+#### map\_generators {-}
+
+mode = "single": once, at start and at times set in the code
+
+![](figures/NRV_summary_io_map_generators.png){width=100%}
+
+
+
+#### plot {-}
+
+mode = "multi": once, at end
+
+![](figures/NRV_summary_io_plot.png){width=100%}
+
+
+
+#### postprocess\_lm {-}
+
+mode = "multi": once, at end
+
+![](figures/NRV_summary_io_postprocess_lm.png){width=100%}
+
+
+
+#### postprocess\_pm {-}
+
+mode = "multi": once, at end
+
+![](figures/NRV_summary_io_postprocess_pm.png){width=100%}
 
 ### Plotting
 
