@@ -74,6 +74,12 @@ defineModule(sim, list(
     defineParameter("mode", "character", "single", NA, NA,
                     paste("use 'single' to run part of a simulation;",
                           "use 'multi' to run as part of postprocessing multiple runs.")),
+    defineParameter("nrvWindow", "numeric", 1, 0, 1,
+                    paste("the NRV is the last fraction of `summaryPeriod` (1, the default, is all of it;",
+                          "0.3 is the last 30%, so years 700-1000 of a 1000-year run). Must be above 0 and",
+                          "at most 1. The LandWeb summaries (lw) and the per-class patch metric pages (pm)",
+                          "pool only the summary times in it, and the envelope figures shade it; their",
+                          "time series still show all of `summaryPeriod`.")),
     defineParameter("reuseAggregates", "logical", FALSE, NA, NA,
                     paste("(mode = 'multi') if TRUE, reuse a complete per-replicate `_aggregates`",
                           "parquet dataset instead of recomputing it, re-summarizing the surviving",
@@ -216,6 +222,9 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       }
       if (min(P(sim)$timeSeriesTimes) < start(sim) || max(P(sim)$timeSeriesTimes) > end(sim)) {
         stop("timeSeriesTimes values are outside the range of simulation times")
+      }
+      if (!(P(sim)$nrvWindow > 0 && P(sim)$nrvWindow <= 1)) {
+        stop("nrvWindow must be above 0 and at most 1")
       }
 
       mod$analysesOutputsTimes <- analysesOutputsTimes(P(sim)$summaryPeriod, P(sim)$summaryInterval)
@@ -909,13 +918,47 @@ InitMulti <- function(sim) {
   split(files, basename(dirname(files)))
 }
 
+## The files of `files` (named `..._year<YYYY>.<ext>`) whose year is within `period`. Used for the pooled
+## (over time) NRV distributions, which cover the NRV years only.
+.filesInPeriod <- function(files, period) {
+  yr <- as.integer(sub("^.*_year([0-9]+)\\.[^.]*$", "\\1", basename(files)))
+  files[!is.na(yr) & yr >= min(period) & yr <= max(period)]
+}
+
+## The last `fraction` of `period` (the summary period), as c(from, to)
+.lastFraction <- function(period, fraction) {
+  sp <- range(period)
+  c(sp[2L] - fraction * diff(sp), sp[2L])
+}
+
+## The NRV years: the last `nrvWindow` of the summary period (a subset of it by construction), as c(from, to)
+.nrvPeriod <- function(sim) .lastFraction(P(sim)$summaryPeriod, P(sim)$nrvWindow)
+
+## The summary times (every `interval` from the start of `summaryPeriod`) that are NRV years
+.nrvYears <- function(summaryPeriod, interval, nrvWindow) {
+  sp <- range(summaryPeriod)
+  times <- seq(sp[1L], sp[2L], by = interval)
+  win <- .lastFraction(sp, nrvWindow)
+  as.integer(round(times[times >= win[1L] - 1e-8 & times <= win[2L] + 1e-8]))
+}
+
+## What a dataset pooled over the NRV years records, in `<root>/nrvYears.txt`, of the years it holds
+.nrvStamp <- function(root) file.path(root, "nrvYears.txt")
+
 ## TRUE iff `root` already holds a `replicate=<id>/*.parquet` partition for EVERY requested repID,
-## i.e. the parquet dataset is complete and can be reused instead of recomputed.
-.aggComplete <- function(root, repIDs) {
-  dir.exists(root) &&
+## i.e. the parquet dataset is complete and can be reused instead of recomputed. A dataset pooled
+## over the NRV years (`nrvYears` given) must also have been built for these years: the years it
+## was built for are in its `nrvYears.txt`, and a dataset without one (an earlier run's) is rebuilt.
+.aggComplete <- function(root, repIDs, nrvYears = NULL) {
+  complete <- dir.exists(root) &&
     all(vapply(repIDs, function(r) {
       length(list.files(file.path(root, paste0("replicate=", r)), pattern = "\\.parquet$")) > 0L
     }, logical(1L)))
+  if (!complete || is.null(nrvYears)) {
+    return(complete)
+  }
+  file.exists(.nrvStamp(root)) &&
+    identical(readLines(.nrvStamp(root), warn = FALSE), paste(nrvYears, collapse = ","))
 }
 
 ## Build the parquet dataset for one refCode: one partition per replicate. `compute_fn(repID)`
@@ -923,13 +966,19 @@ InitMulti <- function(sim) {
 ## the (expensive) recompute + rewrite when the dataset is already complete for `repIDs` (see
 ## `.aggComplete()`) -- useful for iterating on the plots/CSVs without re-running the
 ## landscape-metric aggregation.
+## A dataset pooled over the NRV years passes them as `nrvYears`, stamped beside it, so that changing
+## `nrvWindow` rebuilds it rather than reusing the years of the earlier run.
 .writeRepDataset <- function(root, repIDs, compute_fn, studyArea = NULL, scenario = NULL,
-                             reuse = getOption("NRV_summary.reuseAggregates", FALSE)) {
-  if (!(reuse && .aggComplete(root, repIDs))) {
+                             reuse = getOption("NRV_summary.reuseAggregates", FALSE),
+                             nrvYears = NULL) {
+  if (!(reuse && .aggComplete(root, repIDs, nrvYears))) {
     unlink(root, recursive = TRUE)
     for (repID in repIDs) {
       tidied <- tidy_nrv_metrics(compute_fn(repID), studyArea = studyArea, scenario = scenario)
       write_nrv_parquet(tidied, root, replicate = repID)
+    }
+    if (!is.null(nrvYears)) {
+      writeLines(paste(nrvYears, collapse = ","), .nrvStamp(root))
     }
   }
   invisible(root)
@@ -1276,13 +1325,16 @@ landWebMetrics <- function(sim) {
 
   studyAreaReporting <- sf::st_as_sf(sim$studyAreaReporting)
   funList <- default_landweb_metrics() ## TODO: pass this further up via parameter funList_lw
-  idCols <- c("poly", "level", "class", "metric", "metric.1") ## pool across rep x summary year (no time)
+  idCols <- c("poly", "level", "class", "metric", "metric.1") ## pool across rep x NRV year (no time)
 
   oldPlan <- .planWithWorkers(pemisc::optimalClusterNum(5000, length(fvtm)))
   on.exit(future::plan(oldPlan), add = TRUE)
 
-  vtmByRep <- .filesByRep(fvtm)
-  tsfByRep <- .filesByRep(ftsf)
+  ## pooled over summary years, so these are NRV distributions: only the NRV years
+  nrvPeriod <- .nrvPeriod(sim)
+  nrvYears <- .nrvYears(P(sim)$summaryPeriod, P(sim)$summaryInterval, P(sim)$nrvWindow)
+  vtmByRep <- .filesByRep(.filesInPeriod(fvtm, nrvPeriod))
+  tsfByRep <- .filesByRep(.filesInPeriod(ftsf, nrvPeriod))
 
   lapply(
     mod$rptPolyNames,
@@ -1332,7 +1384,8 @@ landWebMetrics <- function(sim) {
       .writeRepDataset(
         simRoot,
         repIDs = names(vtmByRep),
-        compute_fn = function(repID) lwRaw(vtmByRep[[repID]], tsfByRep[[repID]])
+        compute_fn = function(repID) lwRaw(vtmByRep[[repID]], tsfByRep[[repID]]),
+        nrvYears = nrvYears
       )
       .fillLeadingZeros(c(simRoot, ccRoot))
       mod[[refCodeCC]] <- .summarizeRepDataset(ccRoot, id_cols = idCols)
@@ -1862,7 +1915,7 @@ makeAnimation <- function(sim) {
 ## envelopes. The output dirs are created here (main worker).
 .envelopeFigTasks <- function(sim, kind, p, ylab = NULL, layout = c("subregion", "metric"),
                               subdir = NULL, titlePrefix = "", minSubregions = 1L,
-                              classLabels = NULL, captions = TRUE) {
+                              classLabels = NULL, captions = TRUE, nrvPeriod = NULL) {
   layout <- match.arg(layout)
   refCode <- LandWebUtils::refCodeFor(kind, p)
   env <- mod[[refCode]]
@@ -1881,7 +1934,7 @@ makeAnimation <- function(sim) {
   task <- function(sub, ccSub, type, facet, title, page, lay, file) {
     lev <- .levelOf(sub)
     list(
-      plotter = "envelope", df = sub, cc = ccSub, type = type, facet = facet,
+      plotter = "envelope", df = sub, cc = ccSub, type = type, facet = facet, nrvPeriod = nrvPeriod,
       ylab = if (is.null(ylab)) .metricTitle(unique(sub$metric), lev) else ylab,
       xlab = "Simulation year", title = title,
       caption = if (captions) {
@@ -1939,19 +1992,23 @@ makeAnimation <- function(sim) {
 ## Per-class distribution figure TASKS for one analysis `kind` (pm) x reporting `layer`: for each
 ## metric, box and violin plots of its values for each class, one panel per subregion, paginated
 ## (`<metric>_<box|violin>_p<pg>.png` in `subdir`), with the current-condition values as red
-## points. The values are those of each replicate and summary year, read from the raw parquet
+## points. The values are those of each replicate and NRV year, read from the raw parquet
 ## aggregates (nrvtools::nrv_replicate_values(), which averages a patch-level metric over each
 ## replicate's patches), so a box spans the variation across replicates and time. A layer this run
 ## did not summarise gets none: what is on disk may be another run's. Patch area has no pages of
 ## its own: a replicate's mean patch area is the class's mean patch area, area_mn. Only subregions
 ## with a value get a panel, so the pages counted here are those drawn.
 .byClassFigTasks <- function(sim, kind, p, xlab = "class", subdir = "per-metric", titlePrefix = "",
-                             classLabels = NULL) {
+                             classLabels = NULL, nrvPeriod = NULL) {
   refCode <- LandWebUtils::refCodeFor(kind, p)
   if (is.null(mod[[refCode]]) || !nrow(mod[[refCode]])) {
     return(list())
   }
   reps <- nrvtools::nrv_replicate_values(.nrvAggRoot(sim, refCode))
+  ## the NRV years only; the current condition is the one snapshot of year 0
+  if (!is.null(nrvPeriod)) {
+    reps <- reps[reps$time >= min(nrvPeriod) & reps$time <= max(nrvPeriod), , drop = FALSE]
+  }
   if (!nrow(reps)) {
     return(list())
   }
@@ -2048,11 +2105,14 @@ makeAnimation <- function(sim) {
       {
         gg <- switch(
           task[["plotter"]],
-          envelope = nrvtools::plot_nrv_envelope(
-            task[["df"]], type = task[["type"]], facet = task[["facet"]],
-            ylab = task[["ylab"]], title = task[["title"]], ncol = task[["ncol"]],
-            nrow = task[["nrow"]], page = task[["page"]], cc = task[["cc"]],
-            xlab = task[["xlab"]], caption = task[["caption"]]
+          envelope = .addNrvShading(
+            nrvtools::plot_nrv_envelope(
+              task[["df"]], type = task[["type"]], facet = task[["facet"]],
+              ylab = task[["ylab"]], title = task[["title"]], ncol = task[["ncol"]],
+              nrow = task[["nrow"]], page = task[["page"]], cc = task[["cc"]],
+              xlab = task[["xlab"]], caption = task[["caption"]]
+            ),
+            task[["nrvPeriod"]]
           ),
           byclass = nrvtools::plot_by_class(
             task[["df"]], type = task[["type"]], page = task[["page"]], cc = task[["cc"]],
@@ -2105,6 +2165,10 @@ makeAnimation <- function(sim) {
   ## resolves everything; each task's data is shipped on its own as the mapped argument. (globalenv,
   ## not baseenv -- the latter trips future's "cycles in parent chains" during serialization.)
   environment(render_one) <- new.env(parent = globalenv())
+  ## the module helper render_one uses, detached the same way
+  addNrv <- .addNrvShading
+  environment(addNrv) <- new.env(parent = globalenv())
+  assign(".addNrvShading", addNrv, envir = environment(render_one))
 
   nWorkers <- .plotWorkers(sim, length(tasks))
   message("NRV_summary: rendering ", length(tasks), " figure(s) across ", nWorkers, " worker(s)")
@@ -2128,6 +2192,31 @@ makeAnimation <- function(sim) {
   files[!is.na(files) & nzchar(files)]
 }
 
+## Shade the NRV years `period` on an envelope figure from `plot_nrv_envelope()`, behind the data. The
+## boxplot figure has a discrete time axis (one box per time), the ribbon figure a continuous one. The
+## shading is added to the figure's caption.
+.addNrvShading <- function(gg, period) {
+  if (is.null(gg) || is.null(period) || !"time" %in% names(gg$data)) {
+    return(gg)
+  }
+  times <- sort(unique(gg$data$time))
+  inNrv <- times >= min(period) & times <= max(period)
+  if (!any(inNrv)) {
+    return(gg)
+  }
+  box <- any(vapply(gg$layers, function(l) inherits(l$geom, "GeomBoxplot"), logical(1L)))
+  x <- if (box) range(which(inNrv)) + c(-0.5, 0.5) else range(times[inNrv])
+  gg$layers <- c(
+    ggplot2::annotate("rect", xmin = x[1L], xmax = x[2L], ymin = -Inf, ymax = Inf,
+                      alpha = 0.15, fill = "orange"),
+    gg$layers
+  )
+  ## added to the figure's caption, which says what its lines and marks show
+  caption <- gg$labels$caption
+  gg + ggplot2::labs(caption = if (is.null(caption)) "shaded: NRV years" else
+    paste0(sub("\\.$", "", caption), "; shaded: NRV years."))
+}
+
 ### plotting
 plotFun <- function(sim) {
   ## Build a flat list of self-contained render tasks across all enabled kinds, then render them in
@@ -2143,15 +2232,18 @@ plotFun <- function(sim) {
   events <- tolower(P(sim)$postprocessEvents)
   .clearFigDirs(sim, events)
   tasks <- list()
+  ## the NRV years; shaded on the envelopes only when they are fewer than the summary years
+  nrvPeriod <- .nrvPeriod(sim)
+  shadePeriod <- if (P(sim)$nrvWindow < 1) nrvPeriod
 
   ## y titles name each metric and its unit; vegetation types are shown by their display names
   if ("lm" %in% events) {
     for (p in mod$rptPolyNames) {
       tasks <- c(
         tasks,
-        .envelopeFigTasks(sim, "lm", p),
+        .envelopeFigTasks(sim, "lm", p, nrvPeriod = shadePeriod),
         .envelopeFigTasks(sim, "lm", p, layout = "metric", subdir = "per-metric",
-                          titlePrefix = paste0(p, " — "), minSubregions = 2L)
+                          titlePrefix = paste0(p, " — "), minSubregions = 2L, nrvPeriod = shadePeriod)
       )
     }
   }
@@ -2159,9 +2251,10 @@ plotFun <- function(sim) {
     for (p in mod$rptPolyNames) {
       tasks <- c(
         tasks,
-        .envelopeFigTasks(sim, "pm", p, classLabels = .vegTypeLabels),
+        .envelopeFigTasks(sim, "pm", p, classLabels = .vegTypeLabels, nrvPeriod = shadePeriod),
         .byClassFigTasks(sim, "pm", p, xlab = "Vegetation type",
-                         titlePrefix = paste0(p, " — "), classLabels = .vegTypeLabels)
+                         titlePrefix = paste0(p, " — "), classLabels = .vegTypeLabels,
+                         nrvPeriod = nrvPeriod)
       )
     }
   }
@@ -2176,7 +2269,7 @@ plotFun <- function(sim) {
     for (p in mod$rptPolyNames) {
       tasks <- c(tasks, .envelopeFigTasks(sim, "sspm", p, ylab = "seral patch area (ha)",
                                           layout = "metric", titlePrefix = saPrefix,
-                                          captions = FALSE))
+                                          captions = FALSE, nrvPeriod = shadePeriod))
     }
   }
 

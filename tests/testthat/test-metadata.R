@@ -52,7 +52,7 @@ test_that("parameters are the expected names", {
     c(
       ".plotInitialTime", ".plotInterval", ".plots", ".seed", ".studyAreaName",
       ".useCache", "ageClassCutOffs", "ageClasses", "ageClassMaxAge", "ccStandAgeSource", "mixedType",
-      "mode", "patchDirections", "plotWorkers", "postprocessEvents", "reps",
+      "mode", "nrvWindow", "patchDirections", "plotWorkers", "postprocessEvents", "reps",
       "reuseAggregates", "sieveThresh", "simTimes", "sppEquivCol", "sppEquivColReporting", "summaryInterval",
       "summaryPeriod", "timeSeriesTimes", "vegLeadingProportion"
 )
