@@ -39,3 +39,6 @@ vignettes/*.pdf
 .Renviron
 
 NRV_summary2.Rmd
+
+# rendered locally; CI commits only the .md
+NRV_summary.html

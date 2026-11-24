@@ -113,6 +113,25 @@ raising ImageMagick's `policy.xml` memory/disk limits (see
 [LandWeb #153](https://github.com/PredictiveEcology/LandWeb/issues/153)). With `gifski`
 **no such system configuration is required**.
 
+```{r eventFlowCheck-NRV-summary, include = FALSE, eval = TRUE, cache = FALSE}
+## the generated figures need SpaDES.core 3.2.1.9068 or later; older versions skip them
+.efOK <- utils::packageVersion("SpaDES.core") >= "3.2.1.9068"
+```
+
+```{r eventFlow-NRV-summary, echo = FALSE, eval = .efOK, cache = FALSE, out.width = "100%", fig.pos = "H", fig.cap = "(ref:NRV-summary) events, as read from the module code with its default parameters."}
+ef <- tryCatch(SpaDES.core::moduleEventFlow("NRV_summary", path = ".."), error = function(e) e)
+SpaDES.core::includeModuleEventFlow(ef, "figures/NRV_summary_eventFlow.png")
+```
+
+```{r eventObjects-NRV-summary, echo = FALSE, eval = .efOK, cache = FALSE}
+SpaDES.core::kableModuleObjects(ef, caption = "Where each object of (ref:NRV-summary) is written and read, in run order.",
+                                lead = "Table \\@ref(tab:eventObjects-NRV-summary) lists, for each object, the code that writes it and the code that only reads it.")
+```
+
+```{r eventFigures-NRV-summary, echo = FALSE, eval = .efOK, cache = FALSE, results = "asis"}
+SpaDES.core::moduleEventFigures(ef, figDir = "figures", level = 4)
+```
+
 ### Plotting
 
 In `mode = "multi"`, `plotFun` writes these figures for each reporting-polygon layer, under
