@@ -2,6 +2,8 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+* `NRV_summary.md` shows the module's events, the objects each reads and writes, and a figure per event, generated from the code (needs SpaDES.core 3.2.1.9068 or later; older versions leave them out).
+
 * **A run shorter than 650 years gets a time series (`2.0.0.9040`).** The default `timeSeriesTimes` is the last 50 years of the run when the run ends before year 650, and years 601 to 650 otherwise.
 
 * **A study area with no tree species is skipped (`2.0.0.9040`).** If `sppEquiv` holds no tree species, the module summarises and saves nothing and says so in a message.
