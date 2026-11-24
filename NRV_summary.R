@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9040"),
+  version = list(NRV_summary = "2.0.0.9041"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -41,7 +41,8 @@ defineModule(sim, list(
     ## axes; the plot functions take captions.
     "FOR-CAST/nrvtools (>= 0.3.4.9003)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9016)",
-    "PredictiveEcology/SpaDES.core@development (>= 3.0.3.9000)"
+    ## 3.2.1.9057: InitMulti uses dirnamesFromSet() and its bare-number folder fallback (rep1, rep2, ...).
+    "PredictiveEcology/SpaDES.core@development (>= 3.2.1.9057)"
   ),
   parameters = bindrows(
     defineParameter("ageClasses", "character", LandWebUtils:::.ageClasses, NA, NA,

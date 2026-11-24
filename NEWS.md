@@ -2,6 +2,16 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+* **`mode = "multi"` can take the replicate files from an `outputsDF` input (`2.0.0.9041`).** `outputsDF` is a new optional input: a data.frame with a `file` column, such as the replicate simulations' `outputs(sim)` tables row-bound together. When it is supplied, `InitMulti()` reads those files, and the replicate folders (`rep1`, `rep2`, ..., which may lie outside `outputPath`) are found with `SpaDES.core::dirnamesFromSet()`. Without it, the replicates are the folders under `outputPath` as before (`rep01`, `rep02`, ...), and `rep01`-style folders now also work when an outputs table is given.
+
+* **`InitMulti()` checks the replicate files and the replicate count (`2.0.0.9041`).** Missing files are reported in both cases (with or without `outputsDF`), and the run stops if fewer replicates are found than the `reps` parameter asks for. The cohort, pixelGroup and map file filters now match on the file name, not on the whole path.
+
+* **BC seral stages and the stand-age animation read the first replicate found (`2.0.0.9041`).** They no longer assume a folder called `rep01`.
+
+* **SpaDES.core 3.2.1.9057 or later is required (`2.0.0.9041`).** It supplies `dirnamesFromSet()`.
+
+* **LandWeb results (`2.0.0.9041`).** <pending>
+
 * **A run shorter than 650 years gets a time series (`2.0.0.9040`).** The default `timeSeriesTimes` is the last 50 years of the run when the run ends before year 650, and years 601 to 650 otherwise.
 
 * **A study area with no tree species is skipped (`2.0.0.9040`).** If `sppEquiv` holds no tree species, the module summarises and saves nothing and says so in a message.
