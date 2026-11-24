@@ -240,9 +240,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       if (min(P(sim)$timeSeriesTimes) < start(sim) || max(P(sim)$timeSeriesTimes) > end(sim)) {
         stop("timeSeriesTimes values are outside the range of simulation times")
       }
-      if (!(P(sim)$nrvWindow > 0 && P(sim)$nrvWindow <= 1)) {
-        stop("nrvWindow must be above 0 and at most 1")
-      }
+      .checkNrvWindow(P(sim)$nrvWindow)
       if (!length(.nrvYears(P(sim)$summaryPeriod, P(sim)$summaryInterval, P(sim)$nrvWindow))) {
         stop("no summary time falls in the NRV years: with summaryPeriod ",
              paste(P(sim)$summaryPeriod, collapse = "-"), " and summaryInterval ", P(sim)$summaryInterval,
@@ -961,6 +959,14 @@ InitMulti <- function(sim) {
 .filesInPeriod <- function(files, period) {
   yr <- .fileYear(files)
   files[!is.na(yr) & yr >= min(period) & yr <= max(period)]
+}
+
+## Stops unless `nrvWindow` is a single number above 0 and at most 1 (NA and a vector get the same message)
+.checkNrvWindow <- function(nrvWindow) {
+  if (!isTRUE(length(nrvWindow) == 1L && nrvWindow > 0 && nrvWindow <= 1)) {
+    stop("nrvWindow must be above 0 and at most 1", call. = FALSE)
+  }
+  invisible(nrvWindow)
 }
 
 ## The last `fraction` of `period` (the summary period), as c(from, to)
@@ -2386,6 +2392,9 @@ makeAnimation <- function(sim) {
 ## the rows are read into memory.
 .stabilitySeries <- function(sim) {
   events <- tolower(P(sim)$postprocessEvents)
+  if (!any(c("lm", "pm") %in% events)) {
+    message("NRV_summary stability: no lm or pm event in this run, so no lm/pm series are tested")
+  }
   vtmRAT <- if ("pm" %in% events) terra::rast(mod$fvtm0)
   one <- lapply(intersect(c("lm", "pm"), events), function(kind) {
     lapply(mod$rptPolyNames, function(p) {
@@ -2440,8 +2449,12 @@ makeAnimation <- function(sim) {
   where <- vapply(seq_len(nrow(d)), function(i) {
     paste(c(d$layer[i], d$poly[i])[!is.na(c(d$layer[i], d$poly[i]))], collapse = "/")
   }, character(1L))
+  ## pm classes are vegetation types, named as in the other pm figures
+  cls <- d$class
+  isPm <- d$kind == "pm" & !is.na(cls)
+  cls[isPm] <- .vegTypeLabels(cls[isPm])
   d$panel <- paste0(
-    ifelse(is.na(d$class), "", paste0(d$class, " ")), .stabilityTitle(d$kind, d$metric, d$level),
+    ifelse(is.na(cls), "", paste0(cls, " ")), .stabilityTitle(d$kind, d$metric, d$level),
     "\n", ifelse(nzchar(where), paste0(where, ": "), ""), flags[id]
   )
   ggplot2::ggplot(d, ggplot2::aes(time, value)) +
@@ -2550,8 +2563,8 @@ makeAnimation <- function(sim) {
 }
 
 ## One page of the overview (`d`: rows of `.ccOverviewData()`), one facet per subregion x metric on its own x
-## scale. The grey bar is the NRV range (smallest min to largest max over the NRV years), the tick the NRV
-## median, the dot the current condition, coloured by its position against the range.
+## scale. The grey bar is the NRV range (smallest min to largest max over the NRV years), the tick the median
+## of the NRV-year means, the dot the current condition, coloured by its position against the range.
 .currentConditionOverview <- function(d, title = "Current condition relative to the NRV") {
   positionColour <- c(inside = "#1b9e77", below = "#2166ac", above = "#7b3294")
   positionLabels <- c(inside = "inside the NRV range", below = "below the NRV range", above = "above the NRV range")
@@ -2619,6 +2632,7 @@ stabilityCheck <- function(sim) {
   series <- .stabilitySeries(sim)
   if (is.null(series) || !nrow(series)) {
     message("NRV_summary stability: no series to test")
+    unlink(file.path(.ppCsvDir(sim, "stability", "all"), "stability.csv")) ## an earlier run's
     return(invisible(if (length(ccFiles)) registerOutputs(ccFiles, sim) else sim))
   }
   window <- .stabilityWindow(sim)

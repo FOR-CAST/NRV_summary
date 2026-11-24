@@ -480,3 +480,69 @@ test_that("an overview with no comparable metric draws nothing and stability.csv
   expect_true(file.exists(file.path(moduleFn(".ppCsvDir", m)(sim, "stability", "all"), "stability.csv")))
   expect_false(any(grepl("current_condition", SpaDES.core::outputs(sim)$file)))
 })
+
+test_that("pm class names in the panels go through the vegetation-type labels", {
+  panels <- moduleFn(".stabilityPanels", new.env())
+  environment(panels)$.vegTypeLabels <- function(x) gsub("_", " ", x, fixed = TRUE)
+  d <- data.frame(kind = "pm", layer = "A", poly = "A", level = "class", class = c("Bl_Spruce", "Pine"),
+                  metric = "area_mn", rep = 1L, time = rep(1:2, each = 2), value = 1:4)
+  flags <- stats::setNames(rep("stable", 2L), unique(moduleFn(".stabilityId", new.env())(d)))
+  lab <- unique(panels(d, flags, c(1, 2))$data$panel)
+  expect_true(any(startsWith(lab, "Bl Spruce ")))
+  expect_false(any(grepl("Bl_Spruce", lab, fixed = TRUE)))
+  expect_true(any(startsWith(lab, "Pine ")))
+})
+
+## the check with no series at all (the overview files, if any, are stubbed)
+noSeriesCheck <- function(m, ccFiles = character(0)) {
+  check <- withP(moduleFn("stabilityCheck", m))
+  environment(check)$.stabilitySeries <- function(sim) NULL
+  environment(check)$.ccOverviewFigs <- function(sim) ccFiles
+  check
+}
+
+test_that("with no series, a stale stability.csv is removed and nothing is registered for it", {
+  withr::local_package("SpaDES.core")
+  sim <- stabSim()
+  m <- new.env()
+  csv <- file.path(moduleFn(".ppCsvDir", m)(sim, "stability", "all"), "stability.csv")
+  writeLines("stale", csv)
+  expect_message(sim <- noSeriesCheck(m)(sim), "no series to test")
+  expect_false(file.exists(csv))
+  expect_false(any(grepl("stability.csv", SpaDES.core::outputs(sim)$file, fixed = TRUE)))
+})
+
+test_that("with no series, the overview files are still registered as outputs", {
+  withr::local_package("SpaDES.core")
+  sim <- stabSim()
+  ov <- file.path(withr::local_tempdir(), "current_condition_A_p1.png")
+  file.create(ov)
+  sim <- suppressMessages(noSeriesCheck(new.env(), ov)(sim))
+  expect_identical(SpaDES.core::outputs(sim)$file, ov)
+})
+
+test_that("stability run without lm or pm says that no lm/pm series are tested", {
+  fn <- withP(moduleFn(".stabilitySeries", new.env()), postprocessEvents = "stability")
+  environment(fn)$.stabilityBurn <- function(sim) NULL
+  expect_message(fn(NULL), "no lm or pm event.*no lm/pm series")
+  ## with lm or pm in the run: no such message
+  fn <- withP(moduleFn(".stabilitySeries", new.env()), postprocessEvents = c("lm", "stability"))
+  environment(fn)$.stabilityBurn <- function(sim) NULL
+  environment(fn)$open_nrv_dataset <- function(...) NULL
+  environment(fn)$.nrvAggRoot <- function(sim, refCode) tempdir()
+  m <- environment(fn)$mod
+  m$rptPolyNames <- "A"
+  expect_no_message(fn(NULL))
+})
+
+test_that("nrvWindow must be a single number above 0 and at most 1", {
+  check <- moduleFn(".checkNrvWindow", new.env())
+  msg <- "nrvWindow must be above 0 and at most 1"
+  expect_error(check(NA_real_), msg)
+  expect_error(check(c(0.5, 1)), msg)
+  expect_error(check(0), msg)
+  expect_error(check(1.5), msg)
+  expect_error(check(numeric(0)), msg)
+  expect_no_error(check(1))
+  expect_no_error(check(0.01))
+})
