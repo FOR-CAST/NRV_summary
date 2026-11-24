@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9036"),
+  version = list(NRV_summary = "2.0.0.9040"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -17,6 +17,7 @@ defineModule(sim, list(
     "data.table", "dplyr", "fs", "future.apply", "future.callr",
     "ggforce", "ggplot2", "gifski", "googledrive", "landscapemetrics", "qs2",
     "RColorBrewer", "sf", "terra", "tidyterra",
+    "arrow", "crayon", "future", "reproducible", "rlang",
     "PredictiveEcology/LandR@development (>= 1.2.0.9024)", ## leadingSpeciesProp()
     "PredictiveEcology/LandWebUtils@development (>= 1.0.3.9045)", ## sppEquiv_groups(), recode_cohorts()
     ## 0.2.10 floor, not 0.2.7: the LandWeb#118 tenure x sub-region crossings mint refCodes of the
@@ -39,7 +40,7 @@ defineModule(sim, list(
     ## metric envelopes are built from and returns exact quartiles; nrv_metric_info() names the
     ## axes; the plot functions take captions.
     "FOR-CAST/nrvtools (>= 0.3.4.9003)",
-    "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
+    "PredictiveEcology/pemisc@development (>= 0.0.4.9016)",
     "PredictiveEcology/SpaDES.core@development (>= 3.0.3.9000)"
   ),
   parameters = bindrows(
@@ -117,8 +118,11 @@ defineModule(sim, list(
                     "simulation time interval at which to take 'snapshots' used for summary analyses."),
     defineParameter("summaryPeriod", "integer", start(sim) + c(700L, 1000L), NA, NA,
                     "lower and upper end of the range of simulation times used for summary analyses."),
-    defineParameter("timeSeriesTimes", "numeric", start(sim) + 601:650, NA, NA,
-                    "simulation times for which to build time steries animations."),
+    defineParameter("timeSeriesTimes", "numeric",
+                    if (end(sim) >= start(sim) + 650) start(sim) + 601:650 else seq(max(start(sim), end(sim) - 49), end(sim)),
+                    NA, NA,
+                    paste("simulation times for which to build time series animations; the default is",
+                          "start + 601:650 when the run is that long, otherwise the last 50 years of the run.")),
     defineParameter("vegLeadingProportion", "numeric", LandR::leadingSpeciesProp(), 0.0, 1.0,
                     paste("A number that defines whether a species is leading for a given pixel.",
                           "Default: `LandR::leadingSpeciesProp()`, i.e. option `LandR.leadingSpeciesProp`,",
@@ -184,6 +188,14 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
   switch(
     eventType,
     init = {
+      ## No tree species in this study area (sppEquiv has no rows, e.g. a non-forested study area):
+      ## there is no vegetation to summarise, so schedule nothing.
+      if (.noTreeSpecies(sim)) {
+        message(.noTreeMsg)
+        mod$noTreeSpecies <- TRUE
+        return(invisible(sim))
+      }
+
       if (min(P(sim)$summaryPeriod) < start(sim) || max(P(sim)$summaryPeriod) > end(sim)) {
         stop("summaryPeriod values are outside the range of simulation times")
       }
@@ -194,14 +206,8 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       mod$analysesOutputsTimes <- analysesOutputsTimes(P(sim)$summaryPeriod, P(sim)$summaryInterval)
 
       if (P(sim)$mode == "single") {
-        stopifnot(
-          !is.null(sim$cohortData),
-          !is.null(sim$pixelGroupMap),
-          !is.null(sim$speciesLayers),
-          !is.null(sim$sppColorVect),
-          !is.null(sim$sppEquiv),
-          !is.null(sim$studyAreaReporting)
-        )
+        ## The vegetation inputs are checked at the first map_generators, not here: a module that
+        ## loads after this one may provide them in its own init.
         if (!P(sim)$ccStandAgeSource %in% c("standAgeMap", "cohortData")) {
           stop("ccStandAgeSource must be 'standAgeMap' or 'cohortData'.", call. = FALSE)
         }
@@ -215,11 +221,13 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
 
         ## The later years at the end of their year, also each timeSeriesTimes year so the
         ## animation has its frames (read back in mode = "multi"); those typically fall outside
-        ## summaryPeriod, so the summaryInterval reschedule does not cover them. A time equal to
-        ## start(sim) is left out: a second year-0 save would overwrite the one above.
+        ## summaryPeriod, so the summaryInterval reschedule does not cover them. The start of the
+        ## summary period, the end and the timeSeriesTimes can coincide: each distinct time is
+        ## scheduled once, and a time equal to start(sim) is left out (a second year-0 save would
+        ## overwrite the one above). The summaryInterval reschedule skips these times too.
         ## map_generators before save_single, so the maps exist when saved.
-        later <- c(P(sim)$summaryPeriod[1], end(sim), P(sim)$timeSeriesTimes)
-        for (t in later[later != start(sim)]) {
+        mod$initTimes <- unique(c(start(sim), P(sim)$summaryPeriod[1], end(sim), P(sim)$timeSeriesTimes))
+        for (t in mod$initTimes[mod$initTimes != start(sim)]) {
           sim <- scheduleEvent(sim, t, "NRV_summary", "map_generators", .last())
           sim <- scheduleEvent(sim, t, "NRV_summary", "save_single", .last())
         }
@@ -262,6 +270,20 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       }
     },
     map_generators = {
+      ## no tree species: the first event's decision holds for the run (and the message is printed once)
+      if (isTRUE(mod$noTreeSpecies)) {
+        return(invisible(sim))
+      }
+      ## The year-0 event runs after every module's init (.first() + 1), so the check at the first
+      ## summary event sees inputs set by any module's init.
+      if (!isTRUE(mod$inputsChecked)) {
+        if (!isTRUE(.checkSingleInputs(sim))) {
+          ## no tree species: save_single, scheduled alongside, must do nothing as well
+          mod$noTreeSpecies <- TRUE
+          return(invisible(sim))
+        }
+        mod$inputsChecked <- TRUE
+      }
       mod$vegTypeMap <- LandR::vegTypeMapGenerator(
         sim$cohortData,
         sim$pixelGroupMap,
@@ -286,9 +308,10 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       }
       mod$standAgeMap <- terra::mask(mod$standAgeMap, sim$studyAreaReporting)
 
-      if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2]) {
-        ## fmt: skip
-        sim <- scheduleEvent(sim, time(sim) + P(sim)$summaryInterval, "NRV_summary", "map_generators", .last())
+      nextTime <- time(sim) + P(sim)$summaryInterval
+      ## times scheduled by init are not scheduled a second time here
+      if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2] && !nextTime %in% mod$initTimes) {
+        sim <- scheduleEvent(sim, nextTime, "NRV_summary", "map_generators", .last())
       }
     },
     postprocess = {
@@ -318,6 +341,9 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       sim <- makeAnimation(sim)
     },
     save_single = {
+      if (isTRUE(mod$noTreeSpecies)) {
+        return(invisible(sim))
+      }
       padYear <- paddedFloatToChar(time(sim), padL = ceiling(log10(end(sim) + 1)))
 
       ## objects to save at start of simulation ---------------------------------------------------
@@ -362,9 +388,10 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         terra::writeRaster(sim$pixelGroupMap, f_pixelGroupMap, datatype = "INT4U", overwrite = TRUE)
         sim <- registerOutputs(f_pixelGroupMap, sim)
 
-        if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2]) {
-          ## fmt: skip
-          sim <- scheduleEvent(sim, time(sim) + P(sim)$summaryInterval, "NRV_summary", "save_single", .last())
+        nextTime <- time(sim) + P(sim)$summaryInterval
+        ## times scheduled by init are not scheduled a second time here
+        if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2] && !nextTime %in% mod$initTimes) {
+          sim <- scheduleEvent(sim, nextTime, "NRV_summary", "save_single", .last())
         }
       }
 
@@ -434,28 +461,18 @@ InitMulti <- function(sim) {
     regexp = "cohortData|pixelGroupMap",
     recurse = 1,
     type = "file"
-  ) |>
-    grep(paste0("(", paste0(allReps, collapse = "|"), ")"), x = _, value = TRUE) |>
-    grep(paste(mod$analysesOutputsTimes, collapse = "|"), x = _, value = TRUE)
-  mod$allouts <- fs::dir_ls(
+  )
+  cdpgm <- cdpgm[.inReps(cdpgm, allReps) & .inYears(cdpgm, mod$analysesOutputsTimes)]
+  allouts <- fs::dir_ls(
     outputPath(sim),
     regexp = "vegType|standAge",
     recurse = 1,
     type = "file"
-  ) |>
-    grep(paste0("(", paste0(allReps, collapse = "|"), ")"), x = _, value = TRUE) |>
-    grep("gri|png|txt|xml", x = _, value = TRUE, invert = TRUE)
-  mod$allouts2 <- paste(
-    paste0(
-      "year",
-      paddedFloatToChar(
-        setdiff(c(0, P(sim)$timeSeriesTimes), mod$analysesOutputsTimes),
-        padL = padL
-      )
-    ),
-    collapse = "|"
-  ) |>
-    grep(pattern = _, x = mod$allouts, value = TRUE, invert = TRUE)
+  )
+  mod$allouts <- grep("gri|png|txt|xml", allouts[.inReps(allouts, allReps)], value = TRUE, invert = TRUE)
+  ## drop the files of the years only the time series needs (not analysed)
+  seriesOnlyYears <- setdiff(c(0, P(sim)$timeSeriesTimes), mod$analysesOutputsTimes)
+  mod$allouts2 <- mod$allouts[!.inYears(mod$allouts, seriesOnlyYears)]
 
   filesUserHas <- c(cdpgm, mod$allouts2)
 
@@ -484,19 +501,19 @@ InitMulti <- function(sim) {
   mod$layerName <- gsub(mod$layerName, pattern = "[/\\]", replacement = "_")
   mod$layerName <- gsub(mod$layerName, pattern = "^_", replacement = "")
 
-  mod$sam <- gsub(".*vegTypeMap.*", NA, mod$allouts2) |>
-    grep(paste(mod$analysesOutputsTimes, collapse = "|"), x = _, value = TRUE)
-  mod$vtm <- gsub(".*standAgeMap.*", NA, mod$allouts2) |>
-    grep(paste(mod$analysesOutputsTimes, collapse = "|"), x = _, value = TRUE)
+  mod$sam <- gsub(".*vegTypeMap.*", NA, mod$allouts2)
+  mod$sam <- mod$sam[.inYears(mod$sam, mod$analysesOutputsTimes)]
+  mod$vtm <- gsub(".*standAgeMap.*", NA, mod$allouts2)
+  mod$vtm <- mod$vtm[.inYears(mod$vtm, mod$analysesOutputsTimes)]
 
   ## time-since-fire per year (burnSummaries output), aligned with mod$vtm by rep/year path (see
   ## landWebMetrics(): the LandWeb summaries bin time-since-fire into age classes, matching v2).
   mod$tsf <- gsub("vegTypeMap", "rstTimeSinceFire", mod$vtm)
 
-  mod$samTimeSeries <- gsub(".*vegTypeMap.*", NA, mod$allouts) |>
-    grep(paste(P(sim)$timeSeriesTimes, collapse = "|"), x = _, value = TRUE)
-  mod$vtmTimeSeries <- gsub(".*standAgeMap.*", NA, mod$allouts) |>
-    grep(paste(P(sim)$timeSeriesTimes, collapse = "|"), x = _, value = TRUE)
+  mod$samTimeSeries <- gsub(".*vegTypeMap.*", NA, mod$allouts)
+  mod$samTimeSeries <- mod$samTimeSeries[.inYears(mod$samTimeSeries, P(sim)$timeSeriesTimes)]
+  mod$vtmTimeSeries <- gsub(".*standAgeMap.*", NA, mod$allouts)
+  mod$vtmTimeSeries <- mod$vtmTimeSeries[.inYears(mod$vtmTimeSeries, P(sim)$timeSeriesTimes)]
 
   ## cohortData and pixelGroupMap files
   mod$cd <- grep("cohortData", cdpgm, value = TRUE)
@@ -628,6 +645,38 @@ InitMulti <- function(sim) {
   colors[want]
 }
 
+## Helpers for a study area with no tree species (see init and `.checkSingleInputs()`).
+.noTreeMsg <- "NRV_summary: no tree species in sppEquiv; nothing to summarise"
+
+## TRUE when `sppEquiv` is present but has no rows: there are no tree species to summarise.
+.noTreeSpecies <- function(sim) {
+  eq <- sim$sppEquiv
+  if (!is.data.frame(eq)) {
+    return(FALSE)
+  }
+  nrow(eq) == 0L
+}
+
+## Stops, naming the inputs, when single mode lacks any of the objects the vegetation modules supply.
+## Returns FALSE, with a message, when `sppEquiv` has no tree species: there is nothing to summarise.
+.checkSingleInputs <- function(sim) {
+  needed <- c("cohortData", "pixelGroupMap", "speciesLayers", "sppColorVect", "sppEquiv", "studyAreaReporting")
+  missing <- needed[vapply(needed, function(nm) is.null(sim[[nm]]), logical(1))]
+  if (!"sppEquiv" %in% missing && .noTreeSpecies(sim)) {
+    message(.noTreeMsg)
+    return(FALSE)
+  }
+  if (length(missing)) {
+    stop(
+      "NRV_summary (mode = 'single') needs ", paste(missing, collapse = ", "),
+      " in the simList by the first summary event, but not found; ",
+      "they come from the vegetation modules (e.g. Biomass_core).",
+      call. = FALSE
+    )
+  }
+  invisible(TRUE)
+}
+
 ## One vegetation-type map by reporting group: a copy of `cohortData` with each species recoded to
 ## its group (`grp` from LandWebUtils::sppEquiv_groups()), so that LandR::vegTypeMapGenerator(),
 ## which sums B within a species code, sums it within a group before deciding the leading type.
@@ -750,6 +799,29 @@ InitMulti <- function(sim) {
 
 .ppCsvDir <- function(sim, kind, layer, ...) {
   reproducible::checkPath(file.path(.ppRoot(sim), "csv", kind, layer, ...), create = TRUE)
+}
+
+## The year of each saved file, from the `_year<digits>.<ext>` of its name (NA for a name without one).
+## Only the file name is read, so digits in a folder name are never taken for a year.
+.fileYear <- function(files) {
+  b <- basename(as.character(files))
+  pat <- "^.*_year([0-9]+)\\.[^.]*$"
+  as.integer(ifelse(grepl(pat, b), sub(pat, "\\1", b), NA))
+}
+
+## TRUE for each file whose year (see .fileYear()) is one of `years`; FALSE for a file with no year.
+.inYears <- function(files, years) {
+  .fileYear(files) %in% years
+}
+
+## TRUE for each file with a path component equal to one of `reps` (e.g. "rep01"), so "rep1" does not
+## match the files of rep10 to rep12.
+.inReps <- function(files, reps) {
+  vapply(
+    strsplit(as.character(files), "[/\\\\]"),
+    function(p) any(p %in% reps),
+    logical(1L)
+  )
 }
 
 ## split a per-replicate map-file vector (`.../rep<NN>/<map>_year<YYYY>.tif`) into a named list by rep.
