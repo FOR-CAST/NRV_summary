@@ -2,6 +2,8 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+* **`vegTypeMap` is saved as INT1U, and a `timeSeriesTimes` year off the `summaryInterval` grid no longer starts a second chain (`2.0.0.9042`).** Every replicate's saved `vegTypeMap_year*.tif` is now 8-bit (it keeps its colour table; values are unchanged), and the run stops if a value above 255 would not fit. A `timeSeriesTimes` year inside `summaryPeriod` but off the grid (e.g. 725 for `summaryPeriod = c(700, 1000)`, `summaryInterval = 50`) runs once and no longer schedules extra years (775, 825, ...).
+
 * **`timeSeriesTimes = NA` takes the default (`2.0.0.9042`).** The default is `start + 601:650` when the run is that long, otherwise the last 50 years of the run. An explicit `NA` used to stop `init` with a missing-value error.
 
 * **`mode = "multi"` can take the replicate files from an `outputsDF` input (`2.0.0.9041`).** `outputsDF` is a new optional input: a data.frame with a `file` column, such as the replicate simulations' `outputs(sim)` tables row-bound together. When it is supplied, `InitMulti()` reads those files, and the replicate folders (`rep1`, `rep2`, ..., which may lie outside `outputPath`) are found with `SpaDES.core::dirnamesFromSet()`. Without it, the replicates are the folders under `outputPath` as before (`rep01`, `rep02`, ...), and `rep01`-style folders now also work when an outputs table is given.

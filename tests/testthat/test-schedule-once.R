@@ -45,3 +45,22 @@ test_that("a timeSeriesTimes year inside summaryPeriod does not cut the summary 
   cmp <- runSchedule(timeSeriesTimes = c(601:650, 750))
   expectOncePerTime(cmp, c(0, 601:650, seq(700, 1000, 50)))
 })
+
+test_that("a timeSeriesTimes year off the summaryInterval grid is a one-off, not a second chain", {
+  ## 725 is inside summaryPeriod but not on 700, 750, ...: it runs once and reschedules nothing,
+  ## so 775, 825, ... never appear. The grid and the years before 700 are as without it.
+  cmp <- runSchedule(timeSeriesTimes = c(601:650, 725))
+  expectOncePerTime(cmp, c(0, 601:650, seq(700, 1000, 50), 725))
+})
+
+test_that("a saved year's vegTypeMap is INT1U and keeps its colour table", {
+  runSchedule(timeSeriesTimes = 601:602)
+  f <- list.files(file.path(testPaths$outputPath, "scheduleOnce"), "^vegTypeMap_year[0-9]+\\.tif$",
+                  full.names = TRUE)
+  expect_gt(length(f), 0L)
+  for (x in f) {
+    r <- terra::rast(x)
+    expect_identical(terra::datatype(r), "INT1U", info = x)
+    expect_true(terra::has.colors(r), info = x)
+  }
+})
