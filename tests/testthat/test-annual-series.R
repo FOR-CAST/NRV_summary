@@ -98,26 +98,98 @@ test_that("with LandWeb's parameters, init schedules the events it did before an
   sim <- suppressWarnings(SpaDES.core::spades(
     multiSim(events = events, yrs = yrs, interval = 50L), events = list(NRV_summary = "init"), debug = FALSE
   ))
-  expect_setequal(
-    SpaDES.core::events(sim)$eventType,
-    c("animation", "postprocess_lm", "postprocess_pm", "postprocess_lw", "postprocess", "plot")
+  ## development's schedule: the end-of-run events, in this order, at the last priority
+  scheduleOf <- function(sim) {
+    e <- as.data.frame(SpaDES.core::events(sim))[, c("eventTime", "eventType", "eventPriority")]
+    e$eventTime <- as.numeric(e$eventTime)
+    e$eventPriority <- as.numeric(e$eventPriority)
+    rownames(e) <- NULL
+    e[order(e$eventTime, e$eventPriority), ]
+  }
+  last <- as.numeric(SpaDES.core::.last())
+  expected <- data.frame(
+    eventTime = 1000,
+    eventType = c("animation", "postprocess_lm", "postprocess_pm", "postprocess_lw", "postprocess", "plot"),
+    eventPriority = last
   )
+  expect_equal(scheduleOf(sim), expected)
   expect_false(any(grepl("annualSeries|autocorrelation", SpaDES.core::outputs(sim)$file)))
 
-  single <- singleSim(end = 10, params = list(summaryPeriod = c(5L, 10L), summaryInterval = 5L))
-  expect_setequal(initEvents(single), c("map_generators", "save_single"))
+  ## single mode: year 0 at the first priority + 1; the start of the summary period, the end and each
+  ## timeSeriesTimes year at the last
+  single <- suppressWarnings(SpaDES.core::spades(
+    singleSim(end = 1000, params = list(summaryPeriod = c(700L, 1000L), summaryInterval = 50L)),
+    events = list(NRV_summary = "init"), debug = FALSE
+  ))
+  first1 <- as.numeric(SpaDES.core::.first()) + 1
+  expectedSingle <- data.frame(
+    eventTime = rep(c(0, 1, 700, 1000), each = 2),
+    eventType = rep(c("map_generators", "save_single"), 4),
+    eventPriority = rep(c(first1, last, last, last), each = 2)
+  )
+  expect_equal(scheduleOf(single), expectedSingle)
 })
 
-test_that("no annualSeries.csv: a message, no error", {
+test_that("no annualSeries.csv: a message, no error, and no stale csv left", {
   withr::local_package("SpaDES.core")
-  sim <- suppressWarnings(SpaDES.core::spades(
-    multiSim(events = "autocorr"), events = list(NRV_summary = "init"), debug = FALSE
-  ))
-  modEnv <- new.env()
-  modEnv$annualSeriesFiles <- character(0)
-  autocorrSummary <- moduleFn("autocorrSummary", modEnv)
-  expect_message(res <- autocorrSummary(sim), "no annualSeries.csv found")
-  expect_s4_class(res, "simList")
+  sim <- multiSim(events = "autocorr")
+  ## an earlier run's csv, whose replicates are gone
+  stale <- file.path(dirname(SpaDES.core::outputPath(sim)), "postprocess", "csv", "autocorrelation",
+                     "autocorrelation.csv")
+  dir.create(dirname(stale), recursive = TRUE)
+  file.create(stale)
+  expect_message(
+    done <- suppressWarnings(
+      SpaDES.core::spades(sim, events = list(NRV_summary = c("init", "postprocess_autocorr")), debug = FALSE)
+    ),
+    "no annualSeries.csv found"
+  )
+  expect_s4_class(done, "simList")
+  expect_false(file.exists(stale))
+  expect_false(any(grepl("autocorrelation", SpaDES.core::outputs(done)$file)))
+})
+
+test_that("no series with a defined autocorrelation time: a message, no thinning, no -Inf", {
+  const <- lapply(1:3, function(i) data.frame(time = 1:100, x = 1))
+  expect_no_warning(res <- moduleFn(".autocorrSummary", new.env())(const, c(1, 100), 50, 10))
+  expect_true(is.na(res$thin))
+  expect_length(res$limiting, 1L)
+  expect_true(is.na(res$limiting))
+
+  ## the event, on a constant series
+  withr::local_package("SpaDES.core")
+  root <- withr::local_tempdir()
+  d <- file.path(root, "mainSim", "rep01")
+  dir.create(d, recursive = TRUE)
+  utils::write.csv(data.frame(time = 0:600, propYoung = 0.5), file.path(d, "annualSeries.csv"), row.names = FALSE)
+  yrs <- c(0L, 300L, 600L)
+  file.create(file.path(d, c(sprintf("cohortData_year%04d.qs2", yrs), sprintf("pixelGroupMap_year%04d.tif", yrs),
+                             sprintf("standAgeMap_year%04d.tif", yrs), sprintf("vegTypeMap_year%04d.tif", yrs),
+                             "flammableMap_year0600.tif")))
+  sim <- SpaDES.core::simInit(
+    times = list(start = 0, end = 600),
+    params = list(NRV_summary = list(mode = "multi", reps = 1L, summaryPeriod = c(0L, 600L), summaryInterval = 300L,
+                                     postprocessEvents = "autocorr", simTimes = c(0, 600), timeSeriesTimes = 1:2)),
+    modules = moduleName,
+    objects = list(reportingPolygons = list(A = "placeholder")),
+    paths = list(modulePath = modulePath, outputPath = file.path(root, "mainSim"),
+                 cachePath = file.path(root, "cache"), inputPath = file.path(root, "in"))
+  )
+  expect_message(
+    expect_no_warning(suppressWarnings(
+      SpaDES.core::spades(sim, events = list(NRV_summary = c("init", "postprocess_autocorr")), debug = FALSE)
+    )),
+    "no series has a defined autocorrelation time"
+  )
+  expect_length(list.files(root, "autocorrelation", recursive = TRUE), 0L)
+})
+
+test_that("the snapshots counted are the summary times of the NRV years, not an approximation", {
+  ## a 100-year period from 1 with a 30-year interval: the summary times 30, 60, 90 are three snapshots per rep
+  ## (the approximation floor(99 / 30) + 1 gives 4)
+  tables <- lapply(1:2, function(i) data.frame(time = 1:100, x = as.numeric(stats::arima.sim(list(ar = 0.5), 100))))
+  res <- moduleFn(".autocorrSummary", new.env())(tables, c(1, 100), 50, 30, nSnapshotsPerRep = 3L)
+  expect_equal(res$nSnapshots, 6L)
 })
 
 test_that("multi mode reads the reps' annual series and writes the autocorrelation csv and figure", {
@@ -156,7 +228,7 @@ test_that("multi mode reads the reps' annual series and writes the autocorrelati
   file.create(stale)
 
   msgs <- testthat::capture_messages(suppressWarnings(
-    done <- SpaDES.core::spades(sim, events = list(NRV_summary = c("init", "postprocess_autocorr")), debug = FALSE)
+    done <- SpaDES.core::spades(sim, events = list(NRV_summary = c("init", "postprocess_autocorr", "plot")), debug = FALSE)
   ))
   expect_match(paste(msgs, collapse = ""),
                "correlation r = .*fitted autocorrelation time tau = .*recommended thinning [0-9]+ years")
@@ -186,12 +258,4 @@ test_that("the autocorrelation figures folder is cleared only when the autocorr 
   expect_true(file.exists(f))
   clear(sim, "autocorr")
   expect_false(file.exists(f))
-})
-
-test_that("the plot event's clearing leaves the autocorrelation figures, which the earlier event drew", {
-  ## plotFun() clears before the plot event draws, after the autocorr event wrote its figure
-  src <- file.path(moduleRoot, paste0(moduleName, ".R"))
-  skip_if_not(file.exists(src), "module source not found")
-  code <- paste(deparse(moduleFn("plotFun", new.env())), collapse = "\n")
-  expect_match(code, 'setdiff\\(events, "autocorr"\\)')
 })
