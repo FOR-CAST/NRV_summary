@@ -15,3 +15,24 @@ test_that("vegLeadingProportion follows the LandR.leadingSpeciesProp option", {
   withr::local_options(LandR.leadingSpeciesProp = 0.6)
   expect_equal(paramDefault("vegLeadingProportion"), 0.6)
 })
+
+## timeSeriesTimes defaults to start + 601:650, which lies past the end of a run shorter than
+## 650 years. A short run gets the last 50 years of the run instead.
+timeSeriesDefault <- function(end) {
+  sim <- SpaDES.core::simInit(
+    times = list(start = 0, end = end),
+    modules = moduleName,
+    paths = testPaths
+  )
+  SpaDES.core::params(sim)[[moduleName]]$timeSeriesTimes
+}
+
+test_that("timeSeriesTimes defaults to years inside a short run", {
+  tst <- timeSeriesDefault(300)
+  expect_true(all(tst >= 0 & tst <= 300))
+  expect_equal(tst, 251:300)
+})
+
+test_that("timeSeriesTimes defaults to 601:650 for a 1000-year run", {
+  expect_equal(timeSeriesDefault(1000), 601:650)
+})
