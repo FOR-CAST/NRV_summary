@@ -154,6 +154,10 @@ defineModule(sim, list(
                               "water/barren/snow are already NA on both sides.")),
     expectsInput("flammableMap", "SpatRaster",
                  desc = "binary flammability map (required with `type = 'single'`)"),
+    expectsInput("outputsDF", "data.frame",
+                 desc = paste("(mode = 'multi', optional) the files the replicate simulations saved, with at least a",
+                              "`file` column (e.g. their `outputs(sim)` row-bound). When absent, the replicate",
+                              "folders under `outputPath(sim)` are listed.")),
     expectsInput("pixelGroupMap", "SpatRaster",
                  desc = "Required in single mode."),
     expectsInput("reportingPolygons", "list",
@@ -414,22 +418,22 @@ InitMulti <- function(sim) {
   mod$ppFiles <- character(0) ## files the postprocess events write; see .registerPostprocessOutputs()
   ## check for necessary output files -----------------------------------------------
   ## NOTE: don't load simLists -- slow and unreliable
-  ## the saved files: those registered in `outputs(sim)` (runs that register them, e.g. FireSense, in
+  ## the saved files: those listed in `sim$outputsDF` (runs that register them, e.g. FireSense, in
   ## folders `rep1`, `rep2`, ...), else those found under `outputPath(sim)` (`rep01`, `rep02`, ...)
-  useOutputs <- NROW(outputs(sim)) > 0
+  useOutputs <- NROW(sim$outputsDF) > 0
   files <- .discoverOutputFiles(sim)
   ## dirnamesFromSet() answers `rep<reps>` for no files at all; with none, no replicate was found
   mod$allReps <- if (length(files) > 0L) dirnamesFromSet(files, P(sim)$reps) else character(0)
   if (length(mod$allReps) < length(P(sim)$reps)) {
     stop(
       "found the files of ", length(mod$allReps), " replicate(s) ",
-      if (useOutputs) "in `outputs(sim)`" else paste0("under ", outputPath(sim)),
+      if (useOutputs) "in `outputsDF`" else paste0("under ", outputPath(sim)),
       " but reps asks for ", length(P(sim)$reps), ": ", paste(P(sim)$reps, collapse = ", "),
       call. = FALSE
     )
   }
   allReps <- mod$allReps
-  ## where the replicates' folders are: wherever they were saved when registered in `outputs(sim)`
+  ## where the replicates' folders are: wherever they were saved when listed in `outputsDF`
   ## (in multi mode `outputPath(sim)` is the summary folder, not a replicate's), else under `outputPath(sim)`
   repDirs <- if (useOutputs) {
     dirnamesFromSet(files, P(sim)$reps, leafOnly = FALSE)
@@ -815,12 +819,12 @@ InitMulti <- function(sim) {
   reproducible::checkPath(file.path(.ppRoot(sim), "csv", kind, layer, ...), create = TRUE)
 }
 
-## The saved files of the replicates: those registered in `outputs(sim)` (each once, in a fixed order, as
-## a file saved twice is registered twice), or, when nothing is registered, those one folder down under
+## The saved files of the replicates: those in `sim$outputsDF$file` (each once, in a fixed order, as
+## a file saved twice is listed twice), or, when there is none, those one folder down under
 ## `outputPath(sim)`.
 .discoverOutputFiles <- function(sim) {
-  out <- outputs(sim)
-  if (NROW(out) > 0) {
+  out <- sim$outputsDF
+  if (is.data.frame(out) && NROW(out) > 0) {
     sort(unique(as.character(out$file)))
   } else {
     as.character(fs::dir_ls(outputPath(sim), recurse = 1, type = "file"))
