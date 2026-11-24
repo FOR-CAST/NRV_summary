@@ -2,6 +2,8 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+* **`timeSeriesTimes = NA` takes the default (`2.0.0.9042`).** The default is `start + 601:650` when the run is that long, otherwise the last 50 years of the run. An explicit `NA` used to stop `init` with a missing-value error.
+
 * **`mode = "multi"` can take the replicate files from an `outputsDF` input (`2.0.0.9041`).** `outputsDF` is a new optional input: a data.frame with a `file` column, such as the replicate simulations' `outputs(sim)` tables row-bound together. When it is supplied, `InitMulti()` reads those files, and the replicate folders (`rep1`, `rep2`, ..., which may lie outside `outputPath`) are found with `SpaDES.core::dirnamesFromSet()`. Without it, the replicates are the folders under `outputPath` as before (`rep01`, `rep02`, ...), and `rep01`-style folders now also work when an outputs table is given.
 
 * **`InitMulti()` checks the replicate files and the replicate count (`2.0.0.9041`).** Missing files are reported in both cases (with or without `outputsDF`; a file listed in `outputsDF` must also exist on disk), and the run stops if fewer replicates are found than the `reps` parameter asks for. The cohort, pixelGroup and map file filters now match on the file name, not on the whole path.

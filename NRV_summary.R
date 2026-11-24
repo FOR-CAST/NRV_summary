@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9041"),
+  version = list(NRV_summary = "2.0.0.9042"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -194,6 +194,15 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
   switch(
     eventType,
     init = {
+      ## timeSeriesTimes = NA: the parameter's default (see defineParameter above)
+      if (all(is.na(P(sim)$timeSeriesTimes))) {
+        P(sim)$timeSeriesTimes <- if (end(sim) >= start(sim) + 650) {
+          start(sim) + 601:650
+        } else {
+          seq(max(start(sim), end(sim) - 49), end(sim))
+        }
+      }
+
       ## No tree species in this study area (sppEquiv has no rows, e.g. a non-forested study area):
       ## there is no vegetation to summarise, so schedule nothing.
       if (.noTreeSpecies(sim)) {

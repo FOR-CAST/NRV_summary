@@ -44,3 +44,22 @@ test_that("the timeSeriesTimes default clamps to a start other than 0", {
 test_that("a run shorter than 50 years gets every year from start to end", {
   expect_equal(timeSeriesDefault(20), 0:20)
 })
+
+test_that("timeSeriesTimes = NA resolves to the default", {
+  resolved <- function(end) {
+    sim <- SpaDES.core::simInit(
+      times = list(start = 0, end = end),
+      params = list(NRV_summary = list(mode = "single", summaryPeriod = c(0, end),
+                                       timeSeriesTimes = NA, .plots = NA)),
+      modules = moduleName,
+      objects = list(sppEquiv = data.table::data.table(LandR = "Pice_mar")),
+      paths = testPaths
+    )
+    sim <- suppressWarnings(
+      SpaDES.core::spades(sim, events = list(NRV_summary = "init"), debug = FALSE)
+    )
+    SpaDES.core::params(sim)[[moduleName]]$timeSeriesTimes
+  }
+  expect_equal(resolved(1000), 601:650)
+  expect_equal(resolved(300), 251:300)
+})
