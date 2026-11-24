@@ -326,7 +326,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       nextTime <- time(sim) + P(sim)$summaryInterval
       ## times scheduled by init are not scheduled a second time here; only the summaryInterval grid
       ## reschedules, so a timeSeriesTimes year off the grid is a one-off, not a second chain
-      if (.onSummaryGrid(sim) && !nextTime %in% mod$initTimes) {
+      if (time(sim) < P(sim)$summaryPeriod[2] && time(sim) %in% mod$analysesOutputsTimes && !nextTime %in% mod$initTimes) {
         sim <- scheduleEvent(sim, nextTime, "NRV_summary", "map_generators", .last())
       }
     },
@@ -391,13 +391,9 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         sim <- registerOutputs(f_standAgeMap, sim)
 
         f_vegTypeMap <- file.path(outputPath(sim), paste0("vegTypeMap_year", padYear, ".tif"))
-        ## INT1U keeps the colour table (other types drop it, with a warning); the codes are few
-        vtmMax <- terra::global(mod$vegTypeMap, "max", na.rm = TRUE)[[1L]]
-        if (isTRUE(vtmMax > 255)) {
-          stop("NRV_summary: vegTypeMap holds a value of ", vtmMax,
-               ", above 255, which the INT1U file that keeps its colour table cannot store.",
-               call. = FALSE)
-        }
+        ## a byte raster: the colour table belongs with it (terra warns when it is written to a
+        ## wider type), and the few leading-type classes fit
+        .checkByteCodes(mod$vegTypeMap)
         terra::writeRaster(mod$vegTypeMap, f_vegTypeMap, datatype = "INT1U", overwrite = TRUE)
         sim <- registerOutputs(f_vegTypeMap, sim)
       }
@@ -413,7 +409,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
 
         nextTime <- time(sim) + P(sim)$summaryInterval
         ## times scheduled by init are not scheduled a second time here
-        if (.onSummaryGrid(sim) && !nextTime %in% mod$initTimes) {
+        if (time(sim) < P(sim)$summaryPeriod[2] && time(sim) %in% mod$analysesOutputsTimes && !nextTime %in% mod$initTimes) {
           sim <- scheduleEvent(sim, nextTime, "NRV_summary", "save_single", .last())
         }
       }
@@ -868,11 +864,14 @@ InitMulti <- function(sim) {
   as.integer(ifelse(grepl(pat, b), sub(pat, "\\1", b), NA))
 }
 
-## TRUE when the current time is on the summaryInterval grid inside summaryPeriod, before its end.
-.onSummaryGrid <- function(sim) {
-  period <- P(sim)$summaryPeriod
-  time(sim) >= period[1] && time(sim) < period[2] &&
-    (time(sim) - period[1]) %% P(sim)$summaryInterval == 0
+## Stops when a map holds a code of 255 or more: it could not be saved as INT1U, whose NA value is 255.
+.checkByteCodes <- function(r) {
+  top <- max(terra::minmax(r, compute = TRUE)["max", ], na.rm = TRUE)
+  if (is.finite(top) && top >= 255) {
+    stop("NRV_summary: vegTypeMap codes must be below 255 to be saved as INT1U; 255 is its NA value",
+         " (the largest code is ", top, ").", call. = FALSE)
+  }
+  invisible(r)
 }
 
 ## TRUE for each file whose year (see .fileYear()) is one of `years`; FALSE for a file with no year.

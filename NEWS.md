@@ -2,7 +2,7 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
-* **`vegTypeMap` is saved as INT1U, and a `timeSeriesTimes` year off the `summaryInterval` grid no longer starts a second chain (`2.0.0.9042`).** Every replicate's saved `vegTypeMap_year*.tif` is now 8-bit (it keeps its colour table; values are unchanged), and the run stops if a value above 255 would not fit. A `timeSeriesTimes` year inside `summaryPeriod` but off the grid (e.g. 725 for `summaryPeriod = c(700, 1000)`, `summaryInterval = 50`) runs once and no longer schedules extra years (775, 825, ...).
+* **`vegTypeMap` is saved as INT1U, and a `timeSeriesTimes` year off the `summaryInterval` grid no longer starts a second chain (`2.0.0.9042`).** Every replicate's saved `vegTypeMap_year*.tif` is now 8-bit (it keeps its colour table; values are unchanged), and the run stops if a code of 255 or more would not fit (255 is the NA value of an 8-bit raster). A `timeSeriesTimes` year inside `summaryPeriod` but off the grid (e.g. 725 for `summaryPeriod = c(700, 1000)`, `summaryInterval = 50`) runs once and no longer schedules extra years (775, 825, ...).
 
 * **`timeSeriesTimes = NA` takes the default (`2.0.0.9042`).** The default is `start + 601:650` when the run is that long, otherwise the last 50 years of the run. An explicit `NA` used to stop `init` with a missing-value error.
 

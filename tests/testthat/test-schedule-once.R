@@ -4,7 +4,7 @@
 ## keeps its place after every module's init and before time-0 growth (.first() + 1).
 
 ## The completed events of a mode = "single" run from 0 to 1000 with the shared fixture.
-runSchedule <- function(timeSeriesTimes) {
+runSchedule <- function(timeSeriesTimes, out = file.path(testPaths$outputPath, "scheduleOnce")) {
   fx <- singleRunFixture()
   sim <- SpaDES.core::simInitAndSpades(
     times = list(start = 0, end = 1000),
@@ -14,7 +14,7 @@ runSchedule <- function(timeSeriesTimes) {
     )),
     modules = "NRV_summary",
     objects = fx$objects,
-    paths = utils::modifyList(testPaths, list(outputPath = file.path(testPaths$outputPath, "scheduleOnce")))
+    paths = utils::modifyList(testPaths, list(outputPath = out))
   )
   cmp <- as.data.frame(SpaDES.core::completed(sim))
   cmp$eventTime <- as.numeric(cmp$eventTime)
@@ -53,14 +53,31 @@ test_that("a timeSeriesTimes year off the summaryInterval grid is a one-off, not
   expectOncePerTime(cmp, c(0, 601:650, seq(700, 1000, 50), 725))
 })
 
-test_that("a saved year's vegTypeMap is INT1U and keeps its colour table", {
-  runSchedule(timeSeriesTimes = 601:602)
-  f <- list.files(file.path(testPaths$outputPath, "scheduleOnce"), "^vegTypeMap_year[0-9]+\\.tif$",
-                  full.names = TRUE)
+test_that("a saved year's vegTypeMap is INT1U, and saving raises no colour-table warning", {
+  out <- withr::local_tempdir()
+  warned <- character()
+  withCallingHandlers(
+    runSchedule(timeSeriesTimes = 601:602, out = out),
+    warning = function(w) {
+      warned <<- c(warned, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    }
+  )
+  expect_false(any(grepl("color-table", warned)))
+  f <- list.files(out, "^vegTypeMap_year[0-9]+\\.tif$", full.names = TRUE)
   expect_gt(length(f), 0L)
   for (x in f) {
     r <- terra::rast(x)
     expect_identical(terra::datatype(r), "INT1U", info = x)
     expect_true(terra::has.colors(r), info = x)
   }
+})
+
+test_that("a vegTypeMap code of 255 or more is refused: 255 is INT1U's NA value", {
+  check <- moduleFn(".checkByteCodes", new.env())
+  rtm <- terra::rast(nrows = 1, ncols = 3, xmin = 0, xmax = 3, ymin = 0, ymax = 1)
+  expect_no_error(check(terra::rast(rtm, vals = c(1L, 5L, 254L))))
+  expect_no_error(check(terra::rast(rtm, vals = c(1L, NA, 7L))))
+  expect_error(check(terra::rast(rtm, vals = c(1L, 255L, 7L))), "below 255")
+  expect_error(check(terra::rast(rtm, vals = c(1L, 300L, 7L))), "below 255")
 })
