@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9042"),
+  version = list(NRV_summary = "2.0.0.9043"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -74,6 +74,12 @@ defineModule(sim, list(
     defineParameter("mode", "character", "single", NA, NA,
                     paste("use 'single' to run part of a simulation;",
                           "use 'multi' to run as part of postprocessing multiple runs.")),
+    defineParameter("nrvWindow", "numeric", 1, 0, 1,
+                    paste("the NRV is the last fraction of `summaryPeriod` (1, the default, is all of it;",
+                          "0.3 is the last 30%: with the default `summaryPeriod`, years 910-1000). Must be above 0 and",
+                          "at most 1. The LandWeb summaries (lw) and the per-class patch metric pages (pm)",
+                          "pool only the summary times in it, and the envelope figures shade it; their",
+                          "time series still show all of `summaryPeriod`.")),
     defineParameter("reuseAggregates", "logical", FALSE, NA, NA,
                     paste("(mode = 'multi') if TRUE, reuse a complete per-replicate `_aggregates`",
                           "parquet dataset instead of recomputing it, re-summarizing the surviving",
@@ -95,9 +101,26 @@ defineModule(sim, list(
                           "'lm' for default landscape metrics;",
                           "'lw' for default LandWeb summaries",
                           "'pm' for default patch metrics;",
-                          "'on' for ON patch metrics.",
+                          "'on' for ON patch metrics;",
+                          "'stability' for the check that the run is long enough (is each metric still",
+                          "trending over the end of the NRV period?), `stability.csv` and its figures, and,",
+                          "with 'lm' in the same run, the current-condition overview of each lm layer.",
+                          "Not in the default: it runs only when asked for.",
                           "Any other value is an error ('fd', forest degradation indicators, is not",
                           "implemented).")),
+    defineParameter("stabilityAlpha", "numeric", 0.05, 0, 1,
+                    paste("(mode = 'multi') significance level of the Mann-Kendall trend test in the",
+                          "stability check (the `stability` event).")),
+    defineParameter("stabilityMinChange", "numeric", 0.10, 0, 1,
+                    paste("(mode = 'multi') a series is flagged 'still changing' only if its fitted change",
+                          "across the stability window exceeds this fraction of the series' range",
+                          "(its largest minus smallest value over all reps within the window), as well as",
+                          "being a significant trend.")),
+    defineParameter("stabilityWindow", "numeric", 0.5, 0, 1,
+                    paste("(mode = 'multi') the last fraction of the NRV period (`summaryPeriod` when",
+                          "`nrvWindow` is 1) over which the stability check looks for a directional",
+                          "trend (0.5 = the last half). A run whose metrics are still trending there needs",
+                          "to be longer. It does not define the NRV (see `nrvWindow`).")),
     defineParameter("reps", "integer", 1L:10L, 1L, NA_integer_,
                     paste("number of replicates/runs per study area.")),
     defineParameter("sieveThresh", "integer", 1L, NA_integer_, NA_integer_,
@@ -217,6 +240,18 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       if (min(P(sim)$timeSeriesTimes) < start(sim) || max(P(sim)$timeSeriesTimes) > end(sim)) {
         stop("timeSeriesTimes values are outside the range of simulation times")
       }
+      .checkNrvWindow(P(sim)$nrvWindow)
+      if (!length(.nrvYears(P(sim)$summaryPeriod, P(sim)$summaryInterval, P(sim)$nrvWindow))) {
+        stop("no summary time falls in the NRV years: with summaryPeriod ",
+             paste(P(sim)$summaryPeriod, collapse = "-"), " and summaryInterval ", P(sim)$summaryInterval,
+             ", nrvWindow ", P(sim)$nrvWindow, " is too small; raise nrvWindow or lower summaryInterval",
+             call. = FALSE)
+      }
+
+      if ("stability" %in% tolower(P(sim)$postprocessEvents)) {
+        .warnStabilityWindow(P(sim)$summaryPeriod, P(sim)$summaryInterval, P(sim)$nrvWindow,
+                             P(sim)$stabilityWindow)
+      }
 
       mod$analysesOutputsTimes <- analysesOutputsTimes(P(sim)$summaryPeriod, P(sim)$summaryInterval)
 
@@ -278,6 +313,12 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
 
         if ("on" %in% tolower(P(sim)$postprocessEvents)) {
           sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_on", .last())
+        }
+
+        ## opt-in; after the plot event (which clears the figure folders), and after the metric events
+        ## whose parquet datasets it reads
+        if ("stability" %in% tolower(P(sim)$postprocessEvents)) {
+          sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_stability", .last() + 1)
         }
 
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess", .last())
@@ -352,6 +393,9 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
     postprocess_on = {
       ## TODO finalize implementation
       message("Ontario NRV metrics are not yet fully implemented.")
+    },
+    postprocess_stability = {
+      sim <- stabilityCheck(sim)
     },
     animation = {
       sim <- makeAnimation(sim)
@@ -781,7 +825,7 @@ InitMulti <- function(sim) {
 ## an unknown value would otherwise be skipped without a word, and 'fd' (forest degradation) was
 ## scheduled as a stub that stopped in browser() after the other summaries had run.
 .checkPostprocessEvents <- function(events) {
-  known <- c("am", "bc", "lm", "lw", "on", "pm")
+  known <- c("am", "bc", "lm", "lw", "on", "pm", "stability")
   bad <- setdiff(tolower(events), known)
   if (length(bad)) {
     stop(
@@ -824,7 +868,8 @@ InitMulti <- function(sim) {
 ## left 5,749 of them). The folders of events not run this time keep their figures.
 .clearFigDirs <- function(sim, events) {
   ## the figures/<kind> folders each postprocess event draws into
-  kindsByEvent <- list(lm = "lm", pm = "pm", lw = c("boxplots", "histograms"), bc = "sspm")
+  kindsByEvent <- list(lm = "lm", pm = "pm", lw = c("boxplots", "histograms"), bc = "sspm",
+                       stability = "stability")
   kinds <- unlist(kindsByEvent[intersect(events, names(kindsByEvent))], use.names = FALSE)
   for (d in file.path(.ppRoot(sim), "figures", kinds)) {
     unlink(list.files(d, full.names = TRUE, all.files = TRUE, no.. = TRUE), recursive = TRUE)
@@ -909,13 +954,73 @@ InitMulti <- function(sim) {
   split(files, basename(dirname(files)))
 }
 
+## The files of `files` (named `..._year<YYYY>.<ext>`) whose year is within `period`. Used for the pooled
+## (over time) NRV distributions, which cover the NRV years only.
+.filesInPeriod <- function(files, period) {
+  yr <- .fileYear(files)
+  files[!is.na(yr) & yr >= min(period) & yr <= max(period)]
+}
+
+## Stops unless `nrvWindow` is a single number above 0 and at most 1 (NA and a vector get the same message)
+.checkNrvWindow <- function(nrvWindow) {
+  if (!isTRUE(length(nrvWindow) == 1L && nrvWindow > 0 && nrvWindow <= 1)) {
+    stop("nrvWindow must be above 0 and at most 1", call. = FALSE)
+  }
+  invisible(nrvWindow)
+}
+
+## The last `fraction` of `period` (the summary period), as c(from, to)
+.lastFraction <- function(period, fraction) {
+  sp <- range(period)
+  c(sp[2L] - fraction * diff(sp), sp[2L])
+}
+
+## The NRV years: the last `nrvWindow` of the summary period (a subset of it by construction), as c(from, to)
+.nrvPeriod <- function(sim) .lastFraction(P(sim)$summaryPeriod, P(sim)$nrvWindow)
+
+## The summary times (every `interval` from the start of `summaryPeriod`) that are NRV years
+.nrvYears <- function(summaryPeriod, interval, nrvWindow) {
+  sp <- range(summaryPeriod)
+  times <- seq(sp[1L], sp[2L], by = interval)
+  win <- .lastFraction(sp, nrvWindow)
+  as.integer(round(times[times >= win[1L] - 1e-8 & times <= win[2L] + 1e-8]))
+}
+
+## The summary times in the stability window (the last `stabilityWindow` of the NRV period)
+.stabilityTimes <- function(summaryPeriod, interval, nrvWindow, stabilityWindow) {
+  win <- .lastFraction(.lastFraction(summaryPeriod, nrvWindow), stabilityWindow)
+  nrv <- .nrvYears(summaryPeriod, interval, nrvWindow)
+  nrv[nrv >= win[1L] - 1e-8 & nrv <= win[2L] + 1e-8]
+}
+
+## Warns when the stability window holds fewer than the 3 summary times the check needs: it would then test
+## no series. A warning, not an error: the other events still run.
+.warnStabilityWindow <- function(summaryPeriod, interval, nrvWindow, stabilityWindow) {
+  if (length(.stabilityTimes(summaryPeriod, interval, nrvWindow, stabilityWindow)) < 3L) {
+    win <- .lastFraction(.lastFraction(summaryPeriod, nrvWindow), stabilityWindow)
+    warning("the stability window ", win[1L], "-", win[2L], " holds fewer than 3 summary times, so the stability ",
+            "event will test no series; lower summaryInterval or raise stabilityWindow", call. = FALSE)
+  }
+  invisible(NULL)
+}
+
+## What a dataset pooled over the NRV years records, in `<root>/nrvYears.txt`, of the years it holds
+.nrvStamp <- function(root) file.path(root, "nrvYears.txt")
+
 ## TRUE iff `root` already holds a `replicate=<id>/*.parquet` partition for EVERY requested repID,
-## i.e. the parquet dataset is complete and can be reused instead of recomputed.
-.aggComplete <- function(root, repIDs) {
-  dir.exists(root) &&
+## i.e. the parquet dataset is complete and can be reused instead of recomputed. A dataset pooled
+## over the NRV years (`nrvYears` given) must also have been built for these years: the years it
+## was built for are in its `nrvYears.txt`, and a dataset without one (an earlier run's) is rebuilt.
+.aggComplete <- function(root, repIDs, nrvYears = NULL) {
+  complete <- dir.exists(root) &&
     all(vapply(repIDs, function(r) {
       length(list.files(file.path(root, paste0("replicate=", r)), pattern = "\\.parquet$")) > 0L
     }, logical(1L)))
+  if (!complete || is.null(nrvYears)) {
+    return(complete)
+  }
+  file.exists(.nrvStamp(root)) &&
+    identical(readLines(.nrvStamp(root), warn = FALSE), paste(nrvYears, collapse = ","))
 }
 
 ## Build the parquet dataset for one refCode: one partition per replicate. `compute_fn(repID)`
@@ -923,13 +1028,19 @@ InitMulti <- function(sim) {
 ## the (expensive) recompute + rewrite when the dataset is already complete for `repIDs` (see
 ## `.aggComplete()`) -- useful for iterating on the plots/CSVs without re-running the
 ## landscape-metric aggregation.
+## A dataset pooled over the NRV years passes them as `nrvYears`, stamped beside it, so that changing
+## `nrvWindow` rebuilds it rather than reusing the years of the earlier run.
 .writeRepDataset <- function(root, repIDs, compute_fn, studyArea = NULL, scenario = NULL,
-                             reuse = getOption("NRV_summary.reuseAggregates", FALSE)) {
-  if (!(reuse && .aggComplete(root, repIDs))) {
+                             reuse = getOption("NRV_summary.reuseAggregates", FALSE),
+                             nrvYears = NULL) {
+  if (!(reuse && .aggComplete(root, repIDs, nrvYears))) {
     unlink(root, recursive = TRUE)
     for (repID in repIDs) {
       tidied <- tidy_nrv_metrics(compute_fn(repID), studyArea = studyArea, scenario = scenario)
       write_nrv_parquet(tidied, root, replicate = repID)
+    }
+    if (!is.null(nrvYears)) {
+      writeLines(paste(nrvYears, collapse = ","), .nrvStamp(root))
     }
   }
   invisible(root)
@@ -937,7 +1048,7 @@ InitMulti <- function(sim) {
 
 ## The across-replicate envelope of one refCode's dataset, registering its parquet files.
 ## id_cols = NULL -> summarize_nrv() default (per-time envelopes); the LandWeb summaries pass an
-## explicit set excluding `time` so the NRV distribution pools across replicates AND summary years.
+## explicit set excluding `time` so the NRV distribution pools across replicates AND NRV years.
 ## `perReplicate = TRUE` first reduces each replicate's patches to their mean
 ## (nrvtools::nrv_replicate_values()), so that a patch-level metric's envelope is, like a class- or
 ## landscape-level one's, the range of the replicates rather than of every patch of every
@@ -1266,7 +1377,7 @@ patchMetrics <- function(sim) {
 
 ## LandWeb summaries (ported v2 LandWeb_summary): leading-veg-by-age-class + large-patch counts.
 ## Age basis = time-since-fire (mod$tsf, from burnSummaries), matching v2. No flammable masking.
-## The NRV distribution pools across replicates AND summary years, so summarize with `time` excluded
+## The NRV distribution pools across replicates AND NRV years, so summarize with `time` excluded
 ## from the id columns (idCols below); the plots (plotFun) are distributions, not time envelopes.
 landWebMetrics <- function(sim) {
   ftsf0 <- mod$ftsf0
@@ -1276,13 +1387,16 @@ landWebMetrics <- function(sim) {
 
   studyAreaReporting <- sf::st_as_sf(sim$studyAreaReporting)
   funList <- default_landweb_metrics() ## TODO: pass this further up via parameter funList_lw
-  idCols <- c("poly", "level", "class", "metric", "metric.1") ## pool across rep x summary year (no time)
+  idCols <- c("poly", "level", "class", "metric", "metric.1") ## pool across rep x NRV year (no time)
 
   oldPlan <- .planWithWorkers(pemisc::optimalClusterNum(5000, length(fvtm)))
   on.exit(future::plan(oldPlan), add = TRUE)
 
-  vtmByRep <- .filesByRep(fvtm)
-  tsfByRep <- .filesByRep(ftsf)
+  ## pooled over summary years, so these are NRV distributions: only the NRV years
+  nrvPeriod <- .nrvPeriod(sim)
+  nrvYears <- .nrvYears(P(sim)$summaryPeriod, P(sim)$summaryInterval, P(sim)$nrvWindow)
+  vtmByRep <- .filesByRep(.filesInPeriod(fvtm, nrvPeriod))
+  tsfByRep <- .filesByRep(.filesInPeriod(ftsf, nrvPeriod))
 
   lapply(
     mod$rptPolyNames,
@@ -1332,7 +1446,8 @@ landWebMetrics <- function(sim) {
       .writeRepDataset(
         simRoot,
         repIDs = names(vtmByRep),
-        compute_fn = function(repID) lwRaw(vtmByRep[[repID]], tsfByRep[[repID]])
+        compute_fn = function(repID) lwRaw(vtmByRep[[repID]], tsfByRep[[repID]]),
+        nrvYears = nrvYears
       )
       .fillLeadingZeros(c(simRoot, ccRoot))
       mod[[refCodeCC]] <- .summarizeRepDataset(ccRoot, id_cols = idCols)
@@ -1862,7 +1977,7 @@ makeAnimation <- function(sim) {
 ## envelopes. The output dirs are created here (main worker).
 .envelopeFigTasks <- function(sim, kind, p, ylab = NULL, layout = c("subregion", "metric"),
                               subdir = NULL, titlePrefix = "", minSubregions = 1L,
-                              classLabels = NULL, captions = TRUE) {
+                              classLabels = NULL, captions = TRUE, nrvPeriod = NULL) {
   layout <- match.arg(layout)
   refCode <- LandWebUtils::refCodeFor(kind, p)
   env <- mod[[refCode]]
@@ -1881,7 +1996,7 @@ makeAnimation <- function(sim) {
   task <- function(sub, ccSub, type, facet, title, page, lay, file) {
     lev <- .levelOf(sub)
     list(
-      plotter = "envelope", df = sub, cc = ccSub, type = type, facet = facet,
+      plotter = "envelope", df = sub, cc = ccSub, type = type, facet = facet, nrvPeriod = nrvPeriod,
       ylab = if (is.null(ylab)) .metricTitle(unique(sub$metric), lev) else ylab,
       xlab = "Simulation year", title = title,
       caption = if (captions) {
@@ -1939,19 +2054,23 @@ makeAnimation <- function(sim) {
 ## Per-class distribution figure TASKS for one analysis `kind` (pm) x reporting `layer`: for each
 ## metric, box and violin plots of its values for each class, one panel per subregion, paginated
 ## (`<metric>_<box|violin>_p<pg>.png` in `subdir`), with the current-condition values as red
-## points. The values are those of each replicate and summary year, read from the raw parquet
+## points. The values are those of each replicate and NRV year, read from the raw parquet
 ## aggregates (nrvtools::nrv_replicate_values(), which averages a patch-level metric over each
 ## replicate's patches), so a box spans the variation across replicates and time. A layer this run
 ## did not summarise gets none: what is on disk may be another run's. Patch area has no pages of
 ## its own: a replicate's mean patch area is the class's mean patch area, area_mn. Only subregions
 ## with a value get a panel, so the pages counted here are those drawn.
 .byClassFigTasks <- function(sim, kind, p, xlab = "class", subdir = "per-metric", titlePrefix = "",
-                             classLabels = NULL) {
+                             classLabels = NULL, nrvPeriod = NULL) {
   refCode <- LandWebUtils::refCodeFor(kind, p)
   if (is.null(mod[[refCode]]) || !nrow(mod[[refCode]])) {
     return(list())
   }
   reps <- nrvtools::nrv_replicate_values(.nrvAggRoot(sim, refCode))
+  ## the NRV years only; the current condition is the one snapshot of year 0
+  if (!is.null(nrvPeriod)) {
+    reps <- reps[reps$time >= min(nrvPeriod) & reps$time <= max(nrvPeriod), , drop = FALSE]
+  }
   if (!nrow(reps)) {
     return(list())
   }
@@ -2048,11 +2167,14 @@ makeAnimation <- function(sim) {
       {
         gg <- switch(
           task[["plotter"]],
-          envelope = nrvtools::plot_nrv_envelope(
-            task[["df"]], type = task[["type"]], facet = task[["facet"]],
-            ylab = task[["ylab"]], title = task[["title"]], ncol = task[["ncol"]],
-            nrow = task[["nrow"]], page = task[["page"]], cc = task[["cc"]],
-            xlab = task[["xlab"]], caption = task[["caption"]]
+          envelope = .addNrvShading(
+            nrvtools::plot_nrv_envelope(
+              task[["df"]], type = task[["type"]], facet = task[["facet"]],
+              ylab = task[["ylab"]], title = task[["title"]], ncol = task[["ncol"]],
+              nrow = task[["nrow"]], page = task[["page"]], cc = task[["cc"]],
+              xlab = task[["xlab"]], caption = task[["caption"]]
+            ),
+            task[["nrvPeriod"]]
           ),
           byclass = nrvtools::plot_by_class(
             task[["df"]], type = task[["type"]], page = task[["page"]], cc = task[["cc"]],
@@ -2105,6 +2227,10 @@ makeAnimation <- function(sim) {
   ## resolves everything; each task's data is shipped on its own as the mapped argument. (globalenv,
   ## not baseenv -- the latter trips future's "cycles in parent chains" during serialization.)
   environment(render_one) <- new.env(parent = globalenv())
+  ## the module helper render_one uses, detached the same way
+  addNrv <- .addNrvShading
+  environment(addNrv) <- new.env(parent = globalenv())
+  assign(".addNrvShading", addNrv, envir = environment(render_one))
 
   nWorkers <- .plotWorkers(sim, length(tasks))
   message("NRV_summary: rendering ", length(tasks), " figure(s) across ", nWorkers, " worker(s)")
@@ -2128,6 +2254,416 @@ makeAnimation <- function(sim) {
   files[!is.na(files) & nzchar(files)]
 }
 
+## Shade the NRV years `period` on an envelope figure from `plot_nrv_envelope()`, behind the data. The
+## boxplot figure has a discrete time axis (one box per time), the ribbon figure a continuous one. The
+## shading is added to the figure's caption.
+.addNrvShading <- function(gg, period) {
+  if (is.null(gg) || is.null(period) || !"time" %in% names(gg$data)) {
+    return(gg)
+  }
+  times <- sort(unique(gg$data$time))
+  inNrv <- times >= min(period) & times <= max(period)
+  if (!any(inNrv)) {
+    return(gg)
+  }
+  box <- any(vapply(gg$layers, function(l) inherits(l$geom, "GeomBoxplot"), logical(1L)))
+  x <- if (box) range(which(inNrv)) + c(-0.5, 0.5) else range(times[inNrv])
+  gg$layers <- c(
+    ggplot2::annotate("rect", xmin = x[1L], xmax = x[2L], ymin = -Inf, ymax = Inf,
+                      alpha = 0.15, fill = "orange"),
+    gg$layers
+  )
+  ## added to the figure's caption, which says what its lines and marks show
+  caption <- gg$labels$caption
+  gg + ggplot2::labs(caption = if (is.null(caption)) "shaded: NRV years" else
+    paste0(sub("\\.$", "", caption), "; shaded: NRV years."))
+}
+
+## ---- the stability check (the opt-in `stability` event) ----------------------------------------------
+## Is the run long enough? The summaries describe a landscape that is meant to be in equilibrium. A
+## metric still trending at the end of the run means the envelope mixes the transient with the
+## equilibrium, and the run needs to be longer. Each series (a landscape metric, a patch metric by
+## class, the area burned per block) is tested over the last `stabilityWindow` of the NRV period
+## (`summaryPeriod` when `nrvWindow` is 1), on the values of all reps pooled. The event is not in the
+## default of `postprocessEvents`: it runs only when asked for.
+## Test: Mann-Kendall (Kendall's tau of value against time) for the p-value and the Theil-Sen slope
+## (median of the pairwise slopes) for the size of the trend. Both use ranks and medians, so one odd
+## rep or a skewed metric does not decide the verdict, as it can with an OLS slope; and pooling the reps
+## keeps the spread among reps in the test, so a noisy series needs a larger trend to be significant.
+## A series is "still changing" when the trend is significant AND the fitted change over the window is
+## more than `minChange` of the series' range (largest minus smallest value over all reps in the
+## window, not the approach to it); a significant but tiny trend is not worth a longer run. Fewer than 3
+## distinct times in the window cannot be tested ("insufficient"). The window is not the NRV.
+
+## one series: Mann-Kendall p-value and Theil-Sen slope of `value` against `time`
+.senKendall <- function(time, value) {
+  if (length(unique(value)) < 2L) {
+    return(c(slope = 0, p = 1)) ## constant: no trend
+  }
+  pairs <- utils::combn(length(time), 2L)
+  dt <- time[pairs[2L, ]] - time[pairs[1L, ]]
+  dv <- value[pairs[2L, ]] - value[pairs[1L, ]]
+  p <- suppressWarnings(stats::cor.test(time, value, method = "kendall", exact = FALSE)$p.value)
+  c(slope = stats::median(dv[dt != 0] / dt[dt != 0]), p = p)
+}
+
+## `series`: one row per rep x time x series, with the `keys` columns identifying the series, plus
+## `rep`, `time` and `value`. `window` = c(from, to) in simulation time. Returns one row per series:
+## the keys, nTimes (distinct times in the window), slope (per time unit), p, changePctRange (the fitted
+## change over the window as % of the window's range), flag ("still changing", "stable" or "insufficient").
+.trendStability <- function(series, keys, window, alpha = 0.05, minChange = 0.10) {
+  id <- do.call(paste, c(lapply(series[keys], as.character), sep = "\r"))
+  rows <- lapply(split(seq_len(nrow(series)), factor(id, levels = unique(id))), function(i) {
+    s <- series[i, , drop = FALSE]
+    s <- s[is.finite(s$value), , drop = FALSE]
+    w <- s[s$time >= window[1L] & s$time <= window[2L], , drop = FALSE]
+    out <- cbind(series[i[1L], keys, drop = FALSE], nTimes = length(unique(w$time)), slope = NA_real_,
+                 p = NA_real_, changePctRange = NA_real_, flag = "insufficient")
+    if (out$nTimes >= 3L) {
+      tr <- .senKendall(w$time, w$value)
+      windowRange <- diff(range(w$value)) ## the window's values, not the transient before it
+      out$slope <- tr[["slope"]]
+      out$p <- tr[["p"]]
+      out$changePctRange <- if (windowRange > 0) 100 * out$slope * diff(range(w$time)) / windowRange else 0
+      out$flag <- if (out$p < alpha && abs(out$changePctRange) > 100 * minChange) "still changing" else "stable"
+    }
+    out
+  })
+  res <- do.call(rbind, rows)
+  rownames(res) <- NULL
+  res
+}
+
+
+## The per-block fire table burnSummaries writes (burnSummaries_fireBlocks.csv: rep, block, nFires,
+## areaBurnedHa; blocks with no fire are 0): the registered output `files` first, else `dir` (the output
+## path); NULL when neither has it. It is built from the fire sizes every fire model writes, so the area
+## burned is there for LandMine and scfm as well as fireSense (their fire-size table has no area column).
+.burnBlocksFile <- function(files, dir) {
+  name <- "burnSummaries_fireBlocks.csv"
+  files <- as.character(files)
+  f <- files[which(basename(files) == name)] ## which(): a registered NA is not a match
+  if (length(f)) {
+    return(f[length(f)])
+  }
+  f <- file.path(dir, name)
+  if (file.exists(f)) f
+}
+
+## The area burned per block, from that table: rep, time, value. burnSummaries stamps a block with the
+## year before its first year: block `b` covers (b, b + width]. With a `window`, only the blocks wholly
+## inside it are kept (b >= window[1] and b + width <= window[2]), the width being the spacing of the
+## blocks (0 for a single block).
+.burnSeries <- function(file, window = NULL) {
+  b <- data.table::fread(file)
+  if (!is.null(window)) {
+    width <- if (length(unique(b$block)) > 1L) min(diff(sort(unique(b$block)))) else 0
+    b <- b[b$block >= window[1L] & b$block + width <= window[2L], ]
+  }
+  data.frame(rep = b$rep, time = b$block, value = b$areaBurnedHa)
+}
+
+## The burn series in the form of the other stability series (see .stabilitySeries); NULL, with a message
+## naming the file, when burnSummaries has not written it.
+.stabilityBurn <- function(sim) {
+  f <- .burnBlocksFile(outputs(sim)$file, outputPath(sim))
+  if (is.null(f)) {
+    message(
+      "NRV_summary stability: burnSummaries_fireBlocks.csv is neither among the registered outputs nor in ",
+      outputPath(sim), "; no burn series"
+    )
+    return(NULL)
+  }
+  b <- .burnSeries(f, .stabilityWindow(sim))
+  if (!nrow(b)) {
+    message("NRV_summary stability: no burn block lies inside the stability window; no burn series")
+    return(NULL)
+  }
+  data.frame(
+    kind = "burn", layer = P(sim)$.studyAreaName, poly = P(sim)$.studyAreaName, level = "landscape",
+    class = NA_character_, metric = "areaBurnedHa per block", rep = b$rep, time = b$time, value = b$value
+  )
+}
+
+## The series the stability check looks at: landscape and patch metrics per rep (from the _aggregates
+## parquet), and the area burned per block when burnSummaries wrote it. Columns:
+## kind, layer, poly, level, class, metric, rep, time, value. One value per rep x time per series, so
+## only the landscape and class levels (patch-level rows are one per patch); filtered in arrow, before
+## the rows are read into memory.
+.stabilitySeries <- function(sim) {
+  events <- tolower(P(sim)$postprocessEvents)
+  if (!any(c("lm", "pm") %in% events)) {
+    message("NRV_summary stability: no lm or pm event in this run, so no lm/pm series are tested")
+  }
+  vtmRAT <- if ("pm" %in% events) terra::rast(mod$fvtm0)
+  one <- lapply(intersect(c("lm", "pm"), events), function(kind) {
+    lapply(mod$rptPolyNames, function(p) {
+      raw <- open_nrv_dataset(.nrvAggRoot(sim, LandWebUtils::refCodeFor(kind, p)))
+      if (is.null(raw)) {
+        return(NULL)
+      }
+      raw <- dplyr::filter(raw, level %in% c("landscape", "class"))
+      raw <- as.data.frame(dplyr::collect(raw))
+      if (!nrow(raw)) {
+        return(NULL)
+      }
+      if (kind == "pm") {
+        raw <- nrvtools::label_vegtype_classes(raw, vtmRAT)
+      }
+      raw$class <- as.character(raw$class)
+      data.frame(kind = kind, layer = p, raw[, c("poly", "level", "class", "metric", "rep", "time", "value")])
+    })
+  })
+  do.call(rbind, c(unlist(one, recursive = FALSE), list(.stabilityBurn(sim))))
+}
+
+.stabilityKeys <- function() c("kind", "layer", "poly", "level", "class", "metric")
+
+## one id per series: its key columns
+.stabilityId <- function(d) do.call(paste, c(unname(as.list(d[.stabilityKeys()])), sep = "\r"))
+
+## The window the check looks at: the last `stabilityWindow` of the NRV period
+.stabilityWindow <- function(sim) .lastFraction(.nrvPeriod(sim), P(sim)$stabilityWindow)
+
+## `ids` in pages of at most `perPage`: a list of id vectors.
+.pages <- function(ids, perPage = 12L) {
+  unname(split(ids, ceiling(seq_along(ids) / perPage)))
+}
+
+## The title of each series: nrvtools' name and unit of the metric (the burn series is named already).
+## Looked up once per distinct metric.
+.stabilityTitle <- function(kind, metric, level) {
+  key <- paste(kind, metric, level, sep = "\r")
+  u <- !duplicated(key)
+  title <- vapply(which(u), function(i) {
+    if (identical(kind[i], "burn")) metric[i] else .metricTitle(metric[i], level[i])
+  }, character(1L))
+  title[match(key, key[u])]
+}
+
+## Panels of the series in `d` over time (reps as thin lines, median in bold), the window shaded, and
+## the verdict (`flags`, named by series id) in each panel title. `d` holds only the series of one page.
+.stabilityPanels <- function(d, flags, window, ncol = 4L) {
+  id <- .stabilityId(d)
+  ## layer/poly, leaving out a name that is missing (the burn series' study area name may be NA)
+  where <- vapply(seq_len(nrow(d)), function(i) {
+    paste(c(d$layer[i], d$poly[i])[!is.na(c(d$layer[i], d$poly[i]))], collapse = "/")
+  }, character(1L))
+  ## pm classes are vegetation types, named as in the other pm figures
+  cls <- d$class
+  isPm <- d$kind == "pm" & !is.na(cls)
+  cls[isPm] <- .vegTypeLabels(cls[isPm])
+  d$panel <- paste0(
+    ifelse(is.na(cls), "", paste0(cls, " ")), .stabilityTitle(d$kind, d$metric, d$level),
+    "\n", ifelse(nzchar(where), paste0(where, ": "), ""), flags[id]
+  )
+  ggplot2::ggplot(d, ggplot2::aes(time, value)) +
+    ggplot2::annotate("rect", xmin = window[1L], xmax = window[2L], ymin = -Inf, ymax = Inf,
+                      alpha = 0.15, fill = "orange") +
+    ggplot2::geom_line(ggplot2::aes(group = rep), colour = "grey60", linewidth = 0.3) +
+    ggplot2::stat_summary(fun = stats::median, geom = "line", linewidth = 0.8) +
+    ggplot2::facet_wrap(~panel, ncol = ncol, scales = "free_y") +
+    ggplot2::labs(x = "time", y = NULL, caption = "shaded: stability window; thin lines: reps; bold: median") +
+    ggplot2::theme_bw(base_size = 9)
+}
+
+## One summary of the verdicts: fitted change over the window as % of the window's range, one point per
+## series, by metric, coloured by verdict, with the `minChange` thresholds.
+.stabilitySummary <- function(res, minChange) {
+  res$label <- paste(res$kind, .stabilityTitle(res$kind, res$metric, res$level))
+  ggplot2::ggplot(res, ggplot2::aes(changePctRange, label, colour = flag)) +
+    ggplot2::geom_vline(xintercept = c(-1, 1) * 100 * minChange, linetype = "dashed") +
+    ggplot2::geom_point(alpha = 0.7) +
+    ggplot2::scale_colour_manual(
+      values = c(stable = "steelblue", `still changing` = "firebrick", insufficient = "grey60"),
+      drop = FALSE
+    ) +
+    ggplot2::labs(x = "fitted change over the window (% of the window's range)", y = NULL, colour = NULL) +
+    ggplot2::theme_bw(base_size = 9)
+}
+
+## "N of M series still changing; consider a longer run", or, when no series could be tested, why not
+.stabilityVerdict <- function(res, window) {
+  tested <- res$flag != "insufficient"
+  if (!any(tested)) {
+    return(paste0("no series could be tested: the stability window ", window[1L], "-", window[2L],
+                  " holds fewer than 3 summary times; lower summaryInterval or raise stabilityWindow"))
+  }
+  n <- sum(res$flag == "still changing")
+  paste0(
+    n, " of ", sum(tested), " series still changing",
+    if (n > 0L) "; consider a longer run" else "; the run is long enough for the series tested",
+    if (any(!tested)) paste0(" (", sum(!tested), " with too few summary times to test)")
+  )
+}
+
+## ---- the current-condition overview (drawn by the opt-in `stability` event) -------------------------
+## Where each metric's current condition (year 0) sits against its NRV range, on the metric's real scale.
+## One panel per subregion x metric of an lm reporting layer, at most 24 to a page.
+## Ported from the PE fork (PE#12); the range is that of the NRV years (`.nrvPeriod()`), as for the envelopes.
+
+## The NRV range of each poly x metric: smallest min, largest max and median of the mean, over the times of
+## `period` (the NRV years); NAs are ignored, so one all-NA year does not blank a range, and a poly x metric with
+## no value in the period has none. `env` has poly, metric, time, mean, min and max.
+.nrvRange <- function(env, period) {
+  env <- env[env$time >= min(period) & env$time <= max(period), , drop = FALSE]
+  env <- env[!(is.na(env$min) & is.na(env$max) & is.na(env$mean)), , drop = FALSE]
+  if (!nrow(env)) {
+    return(data.frame(poly = character(0), metric = character(0), lo = numeric(0), hi = numeric(0),
+                      mid = numeric(0)))
+  }
+  byMetric <- split(env, paste(env$poly, env$metric, sep = "\r"))
+  out <- do.call(rbind, lapply(byMetric, function(e) {
+    data.frame(poly = e$poly[1L], metric = e$metric[1L], lo = min(e$min, na.rm = TRUE),
+               hi = max(e$max, na.rm = TRUE), mid = stats::median(e$mean, na.rm = TRUE))
+  }))
+  rownames(out) <- NULL
+  out
+}
+
+## The current condition against the NRV, one row per poly x metric: the NRV range (lo, hi) and middle (mid) of
+## `.nrvRange()`, the current condition (`current`, the mean of `cc`: poly, metric, mean) and where it falls:
+## "inside", "above" or "below" the range.
+.nrvComparison <- function(env, cc, period) {
+  nrv <- .nrvRange(env, period)
+  cc <- cc[is.finite(cc$mean), c("poly", "metric", "mean"), drop = FALSE]
+  nrv <- merge(nrv, stats::setNames(cc, c("poly", "metric", "current")), by = c("poly", "metric"))
+  tol <- 1e-9 * pmax(1, abs(nrv$lo), abs(nrv$hi)) ## a value equal to an end is inside
+  nrv$position <- ifelse(nrv$current < nrv$lo - tol, "below", ifelse(nrv$current > nrv$hi + tol, "above", "inside"))
+  nrv
+}
+
+## The rows of the overview, one per panel: `.nrvComparison()` plus the panel's label, the subregion (when
+## there is more than one) and nrvtools' title of the metric, in subregion then metric order.
+.ccOverviewData <- function(env, cc, period, level = "landscape") {
+  d <- .nrvComparison(env, cc, period)
+  d <- d[order(d$poly, d$metric), , drop = FALSE]
+  if (!nrow(d)) {
+    d$panel <- character(0)
+    return(d)
+  }
+  mets <- unique(d$metric)
+  title <- stats::setNames(vapply(mets, .metricTitle, character(1), level = level), mets)
+  d$panel <- paste0(if (length(unique(d$poly)) > 1L) paste0(d$poly, ": ") else "", title[d$metric])
+  rownames(d) <- NULL
+  d
+}
+
+## `.ccOverviewData()` in pages of at most `perPage` panels: a list of data frames, each with only its own panels.
+.ccOverviewPages <- function(d, perPage = 24L) {
+  lapply(.pages(unique(d$panel), perPage), function(ids) d[d$panel %in% ids, , drop = FALSE])
+}
+
+## Panel grid and canvas (inches) of a page of `nPanels` panels, four to a row. Unlike `.figLayout()`, rows are
+## not capped at three: a page holds up to 24 panels, and the height follows its rows.
+.ccOverviewLayout <- function(nPanels) {
+  ncol <- max(1L, min(4L, as.integer(nPanels)))
+  nrow <- max(1L, as.integer(ceiling(nPanels / ncol)))
+  list(ncol = ncol, nrow = nrow, width = max(8, 4 * ncol), height = 2 + 1.1 * nrow)
+}
+
+## One page of the overview (`d`: rows of `.ccOverviewData()`), one facet per subregion x metric on its own x
+## scale. The grey bar is the NRV range (smallest min to largest max over the NRV years), the tick the median
+## of the NRV-year means, the dot the current condition, coloured by its position against the range.
+.currentConditionOverview <- function(d, title = "Current condition relative to the NRV") {
+  positionColour <- c(inside = "#1b9e77", below = "#2166ac", above = "#7b3294")
+  positionLabels <- c(inside = "inside the NRV range", below = "below the NRV range", above = "above the NRV range")
+  midLabel <- "median of NRV-year means"
+  d$panel <- factor(d$panel, levels = unique(d$panel))
+  lay <- .ccOverviewLayout(nlevels(d$panel))
+  ggplot2::ggplot(d) +
+    ggplot2::geom_segment(ggplot2::aes(x = lo, xend = hi, y = 0, yend = 0), colour = "grey75", linewidth = 4) +
+    ggplot2::geom_point(ggplot2::aes(x = mid, y = 0, shape = midLabel), size = 3) +
+    ggplot2::geom_point(ggplot2::aes(x = current, y = 0, colour = position), size = 3) +
+    ggplot2::scale_colour_manual(values = positionColour, breaks = names(positionColour),
+                                 labels = unname(positionLabels), drop = FALSE, name = "current condition") +
+    ggplot2::scale_shape_manual(values = stats::setNames(124, midLabel), name = NULL) +
+    ggplot2::facet_wrap(~panel, scales = "free_x", ncol = lay$ncol, labeller = ggplot2::label_wrap_gen(30)) +
+    ggplot2::labs(x = "metric value (grey bar: NRV range over the NRV years)", y = NULL, title = title) +
+    ggplot2::theme_bw(base_size = 9) +
+    ggplot2::theme(legend.position = "bottom", axis.text.y = ggplot2::element_blank(),
+                   axis.ticks.y = ggplot2::element_blank(), panel.grid.major.y = ggplot2::element_blank(),
+                   panel.grid.minor.y = ggplot2::element_blank())
+}
+
+## The overview figures of the `stability` event, for each lm reporting layer: pages of at most 24 panels in
+## figures/stability/all/current_condition/. The envelope and current condition are those the lm event kept in
+## `mod`. Returns the files; none when the lm event did not run or a layer has no envelope or current condition.
+.ccOverviewFigs <- function(sim) {
+  if (!"lm" %in% tolower(P(sim)$postprocessEvents)) {
+    message("NRV_summary stability: no current-condition overview; it needs the lm event in the same run")
+    return(character(0))
+  }
+  period <- .nrvPeriod(sim)
+  safe <- function(s) gsub("[/\\\\]", "-", s)
+  files <- character(0)
+  for (p in mod$rptPolyNames) {
+    refCode <- LandWebUtils::refCodeFor("lm", p)
+    env <- mod[[refCode]]
+    cc <- mod[[paste0(refCode, "_CC")]]
+    if (is.null(env) || !nrow(env) || is.null(cc) || !nrow(cc)) {
+      next
+    }
+    d <- .ccOverviewData(env, cc, period)
+    if (!nrow(d)) {
+      next
+    }
+    pages <- .ccOverviewPages(d)
+    dir <- .ppFigDir(sim, "stability", "all", "current_condition")
+    for (pg in seq_along(pages)) {
+      lay <- .ccOverviewLayout(length(unique(pages[[pg]]$panel)))
+      g <- .currentConditionOverview(
+        pages[[pg]], title = .pageTitle(paste0("Current condition relative to the NRV: ", p), pg, length(pages))
+      )
+      f <- file.path(dir, paste0("current_condition_", safe(p), "_p", pg, ".png"))
+      ggplot2::ggsave(f, g, width = lay$width, height = lay$height)
+      files <- c(files, f)
+    }
+  }
+  files
+}
+
+## The `postprocess_stability` event: stability.csv (csv/stability/all/) and the figures
+## (figures/stability/all/): one set of pages per kind of series, each page drawn from its own
+## series only, and a summary of the verdicts. Runs after the plot event, which clears the figures
+## folder of the events it draws (see .clearFigDirs).
+stabilityCheck <- function(sim) {
+  ccFiles <- .ccOverviewFigs(sim) ## the current-condition overview, figures/stability/all/current_condition/
+  series <- .stabilitySeries(sim)
+  if (is.null(series) || !nrow(series)) {
+    message("NRV_summary stability: no series to test")
+    unlink(file.path(.ppCsvDir(sim, "stability", "all"), "stability.csv")) ## an earlier run's
+    return(invisible(if (length(ccFiles)) registerOutputs(ccFiles, sim) else sim))
+  }
+  window <- .stabilityWindow(sim)
+  res <- .trendStability(series, .stabilityKeys(), window, P(sim)$stabilityAlpha, P(sim)$stabilityMinChange)
+
+  f_csv <- file.path(.ppCsvDir(sim, "stability", "all"), "stability.csv")
+  utils::write.csv(res, f_csv, row.names = FALSE)
+  files <- c(f_csv, ccFiles)
+
+  message("NRV_summary stability (", window[1L], "-", window[2L], "): ", .stabilityVerdict(res, window))
+
+  figDir <- .ppFigDir(sim, "stability", "all")
+  res$id <- .stabilityId(res)
+  series$id <- .stabilityId(series)
+  flags <- stats::setNames(res$flag, res$id)
+  for (k in unique(series$kind)) {
+    pages <- .pages(res$id[res$kind == k])
+    for (pg in seq_along(pages)) {
+      lay <- .figLayout(length(pages[[pg]]), paginate = TRUE)
+      g <- .stabilityPanels(series[series$id %in% pages[[pg]], , drop = FALSE], flags, window, ncol = lay$ncol)
+      f <- file.path(figDir, paste0("stability_", k, "_p", pg, ".png"))
+      ggplot2::ggsave(f, g, width = lay$width, height = lay$height)
+      files <- c(files, f)
+    }
+  }
+  f <- file.path(figDir, "stability_summary.png")
+  ggplot2::ggsave(f, .stabilitySummary(res, P(sim)$stabilityMinChange), width = 10,
+                  height = max(4, 0.25 * length(unique(res$metric))))
+  invisible(registerOutputs(c(files, f), sim))
+}
+
 ### plotting
 plotFun <- function(sim) {
   ## Build a flat list of self-contained render tasks across all enabled kinds, then render them in
@@ -2143,15 +2679,18 @@ plotFun <- function(sim) {
   events <- tolower(P(sim)$postprocessEvents)
   .clearFigDirs(sim, events)
   tasks <- list()
+  ## the NRV years; shaded on the envelopes only when they are fewer than the summary years
+  nrvPeriod <- .nrvPeriod(sim)
+  shadePeriod <- if (P(sim)$nrvWindow < 1) nrvPeriod
 
   ## y titles name each metric and its unit; vegetation types are shown by their display names
   if ("lm" %in% events) {
     for (p in mod$rptPolyNames) {
       tasks <- c(
         tasks,
-        .envelopeFigTasks(sim, "lm", p),
+        .envelopeFigTasks(sim, "lm", p, nrvPeriod = shadePeriod),
         .envelopeFigTasks(sim, "lm", p, layout = "metric", subdir = "per-metric",
-                          titlePrefix = paste0(p, " — "), minSubregions = 2L)
+                          titlePrefix = paste0(p, " — "), minSubregions = 2L, nrvPeriod = shadePeriod)
       )
     }
   }
@@ -2159,9 +2698,10 @@ plotFun <- function(sim) {
     for (p in mod$rptPolyNames) {
       tasks <- c(
         tasks,
-        .envelopeFigTasks(sim, "pm", p, classLabels = .vegTypeLabels),
+        .envelopeFigTasks(sim, "pm", p, classLabels = .vegTypeLabels, nrvPeriod = shadePeriod),
         .byClassFigTasks(sim, "pm", p, xlab = "Vegetation type",
-                         titlePrefix = paste0(p, " — "), classLabels = .vegTypeLabels)
+                         titlePrefix = paste0(p, " — "), classLabels = .vegTypeLabels,
+                         nrvPeriod = nrvPeriod)
       )
     }
   }
@@ -2176,7 +2716,7 @@ plotFun <- function(sim) {
     for (p in mod$rptPolyNames) {
       tasks <- c(tasks, .envelopeFigTasks(sim, "sspm", p, ylab = "seral patch area (ha)",
                                           layout = "metric", titlePrefix = saPrefix,
-                                          captions = FALSE))
+                                          captions = FALSE, nrvPeriod = shadePeriod))
     }
   }
 
