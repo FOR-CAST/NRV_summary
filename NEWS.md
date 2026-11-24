@@ -8,7 +8,7 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 * **Current-condition overview (`2.0.0.9043`).** When `"stability"` and `"lm"` are both in `postprocessEvents`, the stability event also draws where each lm metric's current condition sits against its NRV range, on each metric's own scale, up to 24 panels per page.
 
-* **LandWeb summaries are unchanged (`2.0.0.9043`).** LandWeb leaves `nrvWindow` at 1 and does not run `stability`, so none of the new code runs: <pending>.
+* **LandWeb summaries are unchanged (`2.0.0.9043`).** LandWeb leaves `nrvWindow` at 1 and does not run `stability`. On WesternBoreal (15 replicates), all 192 lw CSVs are byte-identical to those of `2.0.0.9042`; the only new files are the `nrvYears.txt` stamps beside each layer's lw aggregates.
 
 * **`vegTypeMap` is saved as INT1U, and a `timeSeriesTimes` year off the `summaryInterval` grid no longer starts a second chain (`2.0.0.9042`).** Every replicate's saved `vegTypeMap_year*.tif` is now 8-bit (it keeps its colour table; values are unchanged), and the run stops if a code of 255 or more would not fit (255 is the NA value of an 8-bit raster). A `timeSeriesTimes` year inside `summaryPeriod` but off the grid (e.g. 725 for `summaryPeriod = c(700, 1000)`, `summaryInterval = 50`) runs once and no longer schedules extra years (775, 825, ...).
 
