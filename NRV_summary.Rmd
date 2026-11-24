@@ -126,6 +126,8 @@ and highest replicate), the effective number of independent snapshots and a reco
 thinning interval, the largest autocorrelation time. `autocorrMaxLag` (200 years) is the longest
 lag shown; when the NRV years are fewer, it is cut to the number of years less one. Without
 `annualSeries.csv` files the event says so and does nothing.
+The event reads the `annualSeries.csv` files found in the replicate folders, so a file left by an earlier
+run with `recordAnnualSeries = TRUE` is analysed if the folder was not cleared.
 
 ```{r eventFlowCheck-NRV-summary, include = FALSE, eval = TRUE, cache = FALSE}
 ## the generated figures need SpaDES.core 3.2.1.9068 or later; older versions skip them
