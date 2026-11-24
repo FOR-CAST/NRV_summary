@@ -113,6 +113,20 @@ raising ImageMagick's `policy.xml` memory/disk limits (see
 [LandWeb #153](https://github.com/PredictiveEcology/LandWeb/issues/153)). With `gifski`
 **no such system configuration is required**.
 
+The autocorrelation check is opt-in in two parts. In `mode = "single"`,
+`recordAnnualSeries = TRUE` adds an `annual_series` event for every simulated year (about a
+thousand events per replicate) that writes `annualSeries.csv` beside the replicate's other
+outputs: the proportion of the forest that is young and old, the mean stand age, the total
+biomass and the proportion led by each species, one row per year, with no rasters made. It is
+`FALSE` by default. In `mode = "multi"`, `"autocorr"` in `postprocessEvents` (not in the
+default) runs the `postprocess_autocorr` event, which reads those files and, over the NRV years,
+fits an exponential decay to the autocorrelation of each series. It reports the autocorrelation
+time, the correlation between snapshots `summaryInterval` years apart (pooled, and the lowest
+and highest replicate), the effective number of independent snapshots and a recommended
+thinning interval, the largest autocorrelation time. `autocorrMaxLag` (200 years) is the longest
+lag shown; when the NRV years are fewer, it is cut to the number of years less one. Without
+`annualSeries.csv` files the event says so and does nothing.
+
 ```{r eventFlowCheck-NRV-summary, include = FALSE, eval = TRUE, cache = FALSE}
 ## the generated figures need SpaDES.core 3.2.1.9068 or later; older versions skip them
 .efOK <- utils::packageVersion("SpaDES.core") >= "3.2.1.9068"
@@ -165,6 +179,10 @@ In `mode = "multi"`, `plotFun` writes these figures for each reporting-polygon l
   The verdicts are also in `csv/stability/all/stability.csv`. The check needs at least 3 summary times
   in the stability window (the last `stabilityWindow` of the NRV years); `init` warns when there are
   fewer, and the verdict then says that no series could be tested.
+- `autocorrelation/all/` (only with `"autocorr"` in `postprocessEvents`): the autocorrelation of each
+  annual series by lag (replicates thin, their mean in bold, the fitted decay dashed, and a line at
+  `summaryInterval`). The numbers are in `csv/autocorrelation/autocorrelation.csv`. The folder is
+  emptied when the event runs.
 
 When `nrvWindow` is below 1, the envelope figures still show every summary year, and shade the NRV
 years.
