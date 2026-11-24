@@ -41,7 +41,9 @@ defineModule(sim, list(
     ## axes; the plot functions take captions.
     "FOR-CAST/nrvtools (>= 0.3.4.9003)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9016)",
-    ## 3.2.1.9057: InitMulti uses dirnamesFromSet() and its bare-number folder fallback (rep1, rep2, ...).
+    ## 3.2.1.9057: InitMulti calls dirnamesFromSet(..., leafOnly = FALSE) and resolveSimYears();
+    ## it relies on dirnamesFromSet() keeping zero-padded folders (rep01) as found (from 3.2.1.9037)
+    ## and on its bare-number folder fallback (1/, 2/; PredictiveEcology/NRV_summary#20).
     "PredictiveEcology/SpaDES.core@development (>= 3.2.1.9057)"
   ),
   parameters = bindrows(
@@ -442,6 +444,8 @@ InitMulti <- function(sim) {
     file.path(outputPath(sim), allReps)
   }
   mod$rep1Dir <- if (useOutputs) repDirs[1] else file.path(outputPath(sim), mod$allReps[1])
+  ## simTimes unset (NA): take the run's start and end. A given simTimes is kept as is.
+  P(sim)$simTimes <- SpaDES.core::resolveSimYears(P(sim)$simTimes, sim)
   padL <- ceiling(log10(P(sim)$simTimes[2] + 1))
   padYearStart <- paddedFloatToChar(P(sim)$simTimes[1], padL = padL)
   padYearEnd <- paddedFloatToChar(P(sim)$simTimes[2], padL = padL)
@@ -505,7 +509,7 @@ InitMulti <- function(sim) {
     )
   }))
 
-  filesNeeded <- data.frame(file = filesExpected, exists = filesExpected %in% filesUserHas)
+  filesNeeded <- data.frame(file = filesExpected, exists = filesExpected %in% filesUserHas & file.exists(filesExpected))
 
   if (!all(filesNeeded$exists)) {
     missing <- filesNeeded[filesNeeded$exists == FALSE, ]$file

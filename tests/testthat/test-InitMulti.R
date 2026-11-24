@@ -22,11 +22,15 @@ touchFiles <- function(files) {
   invisible(files)
 }
 
-initMultiSim <- function(root, reps, outputsFiles = NULL) {
+initMultiSim <- function(root, reps, outputsFiles = NULL, times = c(0, 1000), simTimes = c(0, 1000),
+                         summaryPeriod = c(700L, 1000L), timeSeriesTimes = 701:702) {
   sim <- SpaDES.core::simInit(
-    times = list(start = 0, end = 1000),
-    params = list(NRV_summary = list(mode = "multi", reps = reps, simTimes = c(0, 1000), summaryPeriod = c(700L, 1000L),
-                                     summaryInterval = 300L, timeSeriesTimes = 701:702)),
+    times = list(start = times[1], end = times[2]),
+    params = list(NRV_summary = c(
+      list(mode = "multi", reps = reps, summaryPeriod = summaryPeriod, summaryInterval = 300L,
+           timeSeriesTimes = timeSeriesTimes),
+      if (!is.null(simTimes)) list(simTimes = simTimes)
+    )),
     modules = moduleName,
     objects = c(list(reportingPolygons = list(ELF = "placeholder")),
                 if (!is.null(outputsFiles)) list(outputsDF = data.frame(file = outputsFiles))),
@@ -91,6 +95,33 @@ test_that("a missing file stops InitMulti with or without outputsDF", {
     runInit(initMultiSim(root2, reps = 1:3, outputsFiles = setdiff(files2, gone2))),
     "1 simulation files appear to be missing"
   )
+})
+
+test_that("a file listed in outputsDF but absent on disk is reported missing", {
+  root <- withr::local_tempdir()
+  files <- unlist(lapply(file.path(root, c("rep1", "rep2")), repFiles))
+  gone <- file.path(root, "rep2", "vegTypeMap_year1000.tif")
+  touchFiles(setdiff(files, gone)) ## `gone` is listed in outputsDF, but never created
+  expect_error(
+    runInit(initMultiSim(root, reps = 1:2, outputsFiles = files)),
+    "1 simulation files appear to be missing"
+  )
+})
+
+test_that("simTimes unset: year-0 and flammable rasters follow the run's start and end", {
+  root <- withr::local_tempdir()
+  yrs2 <- c(2720, 3020)
+  files <- unlist(lapply(file.path(root, c("rep1", "rep2")), repFiles, years = yrs2))
+  touchFiles(files)
+
+  m <- modOf(runInit(initMultiSim(root, reps = 1:2, outputsFiles = files, times = c(2020, 3020),
+                                  simTimes = NULL, summaryPeriod = c(2720L, 3020L),
+                                  timeSeriesTimes = 2721:2722)))
+  rep1 <- file.path(root, "rep1")
+  expect_identical(m$fvtm0, file.path(rep1, "vegTypeMap_year2020.tif"))
+  expect_identical(m$fsam0, file.path(rep1, "standAgeMap_year2020.tif"))
+  expect_identical(m$ftsf0, file.path(rep1, "rstTimeSinceFire_year2020.tif"))
+  expect_identical(m$flm, file.path(rep1, "flammableMap_year3020.tif"))
 })
 
 test_that("reps = 1:2 ignores rep10-rep12 on disk", {

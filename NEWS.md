@@ -4,11 +4,13 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 * **`mode = "multi"` can take the replicate files from an `outputsDF` input (`2.0.0.9041`).** `outputsDF` is a new optional input: a data.frame with a `file` column, such as the replicate simulations' `outputs(sim)` tables row-bound together. When it is supplied, `InitMulti()` reads those files, and the replicate folders (`rep1`, `rep2`, ..., which may lie outside `outputPath`) are found with `SpaDES.core::dirnamesFromSet()`. Without it, the replicates are the folders under `outputPath` as before (`rep01`, `rep02`, ...), and `rep01`-style folders now also work when an outputs table is given.
 
-* **`InitMulti()` checks the replicate files and the replicate count (`2.0.0.9041`).** Missing files are reported in both cases (with or without `outputsDF`), and the run stops if fewer replicates are found than the `reps` parameter asks for. The cohort, pixelGroup and map file filters now match on the file name, not on the whole path.
+* **`InitMulti()` checks the replicate files and the replicate count (`2.0.0.9041`).** Missing files are reported in both cases (with or without `outputsDF`; a file listed in `outputsDF` must also exist on disk), and the run stops if fewer replicates are found than the `reps` parameter asks for. The cohort, pixelGroup and map file filters now match on the file name, not on the whole path.
+
+* **`simTimes` defaults to the run's start and end (`2.0.0.9041`).** When `simTimes` is not set, `InitMulti()` takes it from the simulation's times (`SpaDES.core::resolveSimYears()`), so runs that start after year 0 find their year-0 rasters. A `simTimes` that is set is used as given.
 
 * **BC seral stages and the stand-age animation read the first replicate found (`2.0.0.9041`).** They no longer assume a folder called `rep01`.
 
-* **SpaDES.core 3.2.1.9057 or later is required (`2.0.0.9041`).** It supplies `dirnamesFromSet()`.
+* **SpaDES.core 3.2.1.9057 or later is required (`2.0.0.9041`).** `InitMulti()` uses `dirnamesFromSet(leafOnly = FALSE)` and `resolveSimYears()`, relies on `dirnamesFromSet()` keeping zero-padded folders such as `rep01` (from 3.2.1.9037), and on its bare-number folder fallback (`1/`, `2/`; from 3.2.1.9057).
 
 * **LandWeb multi-mode summaries are unchanged (`2.0.0.9041`).** For LandWeb (`rep01` folders, no `outputsDF`), `InitMulti()` selects the same files as before (checked on one study area's outputs).
 
