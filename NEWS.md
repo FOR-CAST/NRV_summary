@@ -10,7 +10,7 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 * **SpaDES.core 3.2.1.9057 or later is required (`2.0.0.9041`).** It supplies `dirnamesFromSet()`.
 
-* **LandWeb results (`2.0.0.9041`).** <pending>
+* **LandWeb multi-mode summaries are unchanged (`2.0.0.9041`).** For LandWeb (`rep01` folders, no `outputsDF`), `InitMulti()` selects the same files as before (checked on one study area's outputs).
 
 * **A run shorter than 650 years gets a time series (`2.0.0.9040`).** The default `timeSeriesTimes` is the last 50 years of the run when the run ends before year 650, and years 601 to 650 otherwise.
 
