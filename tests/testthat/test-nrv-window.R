@@ -129,3 +129,29 @@ test_that(".addNrvShading shades the NRV years on both time axes and keeps the c
   gg <- nrvtools::plot_nrv_envelope(df, type = "ribbon", facet = "class")
   expect_identical(addNrvShading(gg, NULL), gg)
 })
+
+test_that("init stops when no summary time falls in the NRV years", {
+  pgm <- terra::rast(nrows = 10, ncols = 10, xmin = 0, xmax = 1000, ymin = 0, ymax = 1000, vals = 1)
+  names(pgm) <- "pixelGroup"
+  sa <- terra::as.polygons(terra::ext(pgm))
+  terra::crs(sa) <- terra::crs(pgm)
+  objs <- list(
+    cohortData = data.table::data.table(pixelGroup = 1L, speciesCode = "Pice_mar", age = 30L, B = 1000L),
+    pixelGroupMap = pgm, studyAreaReporting = sa, speciesLayers = terra::rast(pgm, vals = 1),
+    sppColorVect = c(Pice_mar = "black", Mixed = "grey"),
+    sppEquiv = data.table::data.table(LandR = "Pice_mar", Type = "Conifer", EN_generic_full = "Black spruce")
+  )
+  root <- withr::local_tempdir()
+  sim <- SpaDES.core::simInit(
+    times = list(start = 0, end = 1000),
+    params = list(NRV_summary = list(mode = "single", summaryPeriod = c(700, 1000), summaryInterval = 200L,
+                                     nrvWindow = 0.1, timeSeriesTimes = c(0, 1000), .plots = NA)),
+    modules = moduleName, objects = objs,
+    paths = list(modulePath = modulePath, outputPath = file.path(root, "out"),
+                 cachePath = file.path(root, "cache"), inputPath = file.path(root, "in"))
+  )
+  expect_error(
+    suppressWarnings(SpaDES.core::spades(sim, events = list(NRV_summary = "init"), debug = FALSE)),
+    "no summary time falls in the NRV years.*nrvWindow 0.1"
+  )
+})

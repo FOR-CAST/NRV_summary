@@ -76,7 +76,7 @@ defineModule(sim, list(
                           "use 'multi' to run as part of postprocessing multiple runs.")),
     defineParameter("nrvWindow", "numeric", 1, 0, 1,
                     paste("the NRV is the last fraction of `summaryPeriod` (1, the default, is all of it;",
-                          "0.3 is the last 30%, so years 700-1000 of a 1000-year run). Must be above 0 and",
+                          "0.3 is the last 30%: with the default `summaryPeriod`, years 910-1000). Must be above 0 and",
                           "at most 1. The LandWeb summaries (lw) and the per-class patch metric pages (pm)",
                           "pool only the summary times in it, and the envelope figures shade it; their",
                           "time series still show all of `summaryPeriod`.")),
@@ -225,6 +225,12 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       }
       if (!(P(sim)$nrvWindow > 0 && P(sim)$nrvWindow <= 1)) {
         stop("nrvWindow must be above 0 and at most 1")
+      }
+      if (!length(.nrvYears(P(sim)$summaryPeriod, P(sim)$summaryInterval, P(sim)$nrvWindow))) {
+        stop("no summary time falls in the NRV years: with summaryPeriod ",
+             paste(P(sim)$summaryPeriod, collapse = "-"), " and summaryInterval ", P(sim)$summaryInterval,
+             ", nrvWindow ", P(sim)$nrvWindow, " is too small; raise nrvWindow or lower summaryInterval",
+             call. = FALSE)
       }
 
       mod$analysesOutputsTimes <- analysesOutputsTimes(P(sim)$summaryPeriod, P(sim)$summaryInterval)
@@ -921,7 +927,7 @@ InitMulti <- function(sim) {
 ## The files of `files` (named `..._year<YYYY>.<ext>`) whose year is within `period`. Used for the pooled
 ## (over time) NRV distributions, which cover the NRV years only.
 .filesInPeriod <- function(files, period) {
-  yr <- as.integer(sub("^.*_year([0-9]+)\\.[^.]*$", "\\1", basename(files)))
+  yr <- .fileYear(files)
   files[!is.na(yr) & yr >= min(period) & yr <= max(period)]
 }
 
@@ -986,7 +992,7 @@ InitMulti <- function(sim) {
 
 ## The across-replicate envelope of one refCode's dataset, registering its parquet files.
 ## id_cols = NULL -> summarize_nrv() default (per-time envelopes); the LandWeb summaries pass an
-## explicit set excluding `time` so the NRV distribution pools across replicates AND summary years.
+## explicit set excluding `time` so the NRV distribution pools across replicates AND NRV years.
 ## `perReplicate = TRUE` first reduces each replicate's patches to their mean
 ## (nrvtools::nrv_replicate_values()), so that a patch-level metric's envelope is, like a class- or
 ## landscape-level one's, the range of the replicates rather than of every patch of every
@@ -1315,7 +1321,7 @@ patchMetrics <- function(sim) {
 
 ## LandWeb summaries (ported v2 LandWeb_summary): leading-veg-by-age-class + large-patch counts.
 ## Age basis = time-since-fire (mod$tsf, from burnSummaries), matching v2. No flammable masking.
-## The NRV distribution pools across replicates AND summary years, so summarize with `time` excluded
+## The NRV distribution pools across replicates AND NRV years, so summarize with `time` excluded
 ## from the id columns (idCols below); the plots (plotFun) are distributions, not time envelopes.
 landWebMetrics <- function(sim) {
   ftsf0 <- mod$ftsf0
