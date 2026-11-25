@@ -657,6 +657,17 @@ InitMulti <- function(sim) {
             "read and the .qs2 left as it is:\n", paste(utils::head(mod$cohortFiles[both], 3L), collapse = "\n"),
             if (sum(both) > 3L) "\n...", call. = FALSE)
   }
+  ## several .qs2 files of one folder and year (padded differently): .cohortFile() takes the one named
+  ## `cohortData_year<YYYY>.qs2` if there is one, else the first by name
+  qsFiles <- mod$cohortFiles[!isPart]
+  dupQs <- qsFiles[repYear(qsFiles) %in% repYear(qsFiles)[duplicated(repYear(qsFiles))]]
+  if (length(dupQs)) {
+    yr <- .fileYear(dupQs)
+    used <- unique(.cohortFile(.repFolder(dupQs), yr, sprintf("cohortData_year%04d.qs2", yr), files = mod$cohortFiles))
+    warning("NRV_summary: ", length(used), " replicate-year(s) with several .qs2 cohortData files:\n",
+            paste(utils::head(dupQs, 6L), collapse = "\n"), if (length(dupQs) > 6L) "\n...",
+            "\nused:\n", paste(utils::head(used, 3L), collapse = "\n"), if (length(used) > 3L) "\n...", call. = FALSE)
+  }
   allouts <- files[grepl("vegType|standAge", basename(files))]
   allouts <- allouts[.inReps(allouts, allReps)]
   mod$allouts <- allouts[!grepl("gri|png|txt|xml", basename(allouts))]
@@ -1089,9 +1100,11 @@ InitMulti <- function(sim) {
 ## The cohortData file of replicate folder `repDir` and year `year`, in either format: the part file (see
 ## .cohortPartPath()) when there is one, else the .qs2 file of that year. With both, the part file. Without `files`,
 ## the .qs2 is `<repDir>/<qs2>`, named as the caller names it. With `files` (mod$cohortFiles, the cohort files
-## InitMulti() found), the file is the one of `files` in the same replicate folder and of the same year, however the
-## year is padded (`cohortData_year700.qs2` goes with `pixelGroupMap_year0700.tif`); a part file counts only if it is
-## one of them: given an outputsDF, only a part file it lists. Where `files` has no .qs2 of that folder and year,
+## InitMulti() found), the .qs2 is the one of `files` in the same replicate folder and of the same year, however the
+## year is padded (`cohortData_year700.qs2` goes with `pixelGroupMap_year0700.tif`): the one named as the caller
+## names it if it is among them, else the first by name (InitMulti() warns when there are several). Only .qs2 files
+## are matched this way; a part file is always the exact `year=<YYYY>` path, and counts only if it is one of `files`:
+## given an outputsDF, only a part file it lists. Where `files` has no .qs2 of that folder and year,
 ## the answer is `<repDir>/<qs2>`. Every caller in mode 'multi' passes `files`, so all choose the same file of a
 ## replicate-year.
 .cohortFile <- function(repDir, year, qs2, files = NULL) {
@@ -3729,6 +3742,7 @@ saveAnnualSeries <- function(sim) {
 ## correlation to measure past that): with `nrvWindow` below 1 the NRV can be fewer years than `maxLag`. A lag
 ## that is cut away is NA (`r` when `interval` is cut), and the other columns use the lags that remain.
 .autocorrSummary <- function(tables, period, maxLag, interval, nSnapshotsPerRep) {
+  force(nSnapshotsPerRep) ## no default: fail before the work
   series <- setdiff(Reduce(intersect, lapply(tables, names)), "time")
   absent <- setdiff(Reduce(union, lapply(tables, names)), c(series, "time"))
   inPeriod <- lapply(tables, function(d) d[d$time >= period[1L] & d$time <= period[2L], , drop = FALSE])

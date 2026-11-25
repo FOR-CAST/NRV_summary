@@ -250,6 +250,7 @@ test_that("tau is finite when the series is shorter than the maximum lag", {
 
 test_that(".autocorrSummary needs the number of snapshots per rep, which no default can give", {
   ## the summary grid starts at summaryPeriod[1], not at the first NRV year, so `period` and `interval` do not say
+  set.seed(1)
   tables <- lapply(1:3, function(i) data.frame(time = 1:100, x = stats::rnorm(100)))
   fn <- moduleFn(".autocorrSummary", new.env())
   expect_error(fn(tables, c(1, 100), 20, 10), "nSnapshotsPerRep")

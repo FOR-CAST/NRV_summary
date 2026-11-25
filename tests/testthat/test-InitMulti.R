@@ -500,13 +500,19 @@ test_that(".cohortFile pairs the files of a folder and year, whatever the year's
   ## its replicate folder counts: another folder's file of that year is not taken
   other <- file.path(rep2, "cohortData_year700.qs2")
   expect_identical(cohortFile(rep1, 700L, built, files = other), file.path(rep1, built))
-  expect_identical(cohortFile(c(rep1, rep2), c(700L, 700L), c(built, built), files = c(padded, other)), c(padded, other))
+  expect_identical(cohortFile(c(rep1, rep2), c(700L, 700L), c(built, built), files = c(padded, other)),
+                   c(padded, other))
   ## another year's is not either
   expect_identical(cohortFile(rep1, 1000L, "cohortData_year1000.qs2", files = padded),
                    file.path(rep1, "cohortData_year1000.qs2"))
   ## the file named as the caller names it is kept when it is among them
+  ## (the other candidate sorts before it, so taking the first by name would give that one)
   exact <- file.path(rep1, built)
-  expect_identical(cohortFile(rep1, 700L, built, files = c(padded, exact)), exact)
+  early <- file.path(rep1, "cohortData_year00700.qs2")
+  expect_true(early < exact)
+  expect_identical(cohortFile(rep1, 700L, built, files = c(early, exact)), exact)
+  ## none named so: the first by name
+  expect_identical(cohortFile(rep1, 700L, built, files = c(padded, early)), early)
   ## without candidates, the path is built as before
   expect_identical(cohortFile(rep1, 700L, built), file.path(rep1, built))
   ## the part file wins over a .qs2 of any padding, when it exists and is a candidate
@@ -529,4 +535,21 @@ test_that("InitMulti pairs a cohort file padded differently from its pixelGroupM
   expect_identical(m$cd, file.path(rep(reps, each = 2L), c("cohortData_year700.qs2", "cohortData_year1000.qs2")))
   fileYear <- moduleFn(".fileYear", new.env())
   expect_identical(fileYear(m$cd), fileYear(m$pgm))
+})
+
+test_that("InitMulti warns of several .qs2 cohort files of one replicate-year, and names the one used", {
+  root <- withr::local_tempdir()
+  out <- file.path(root, "mainSim")
+  rep1 <- file.path(out, "rep01")
+  touchFiles(c(repFiles(rep1), file.path(rep1, "cohortData_year700.qs2")))
+  r <- initWithWarnings(initMultiSim(root, reps = 1L))
+  w <- grep("several .qs2", r$warnings, value = TRUE)
+  expect_length(w, 1L)
+  expect_match(w, "cohortData_year700.qs2", fixed = TRUE)
+  expect_match(w, paste0("used:\n", file.path(rep1, "cohortData_year0700.qs2")), fixed = TRUE)
+  expect_identical(cdOf(r$m)[1], "rep01 0700 qs2")
+  ## one file per replicate-year: no warning
+  root2 <- withr::local_tempdir()
+  touchFiles(repFiles(file.path(root2, "mainSim", "rep01")))
+  expect_false(any(grepl("several .qs2", initWithWarnings(initMultiSim(root2, reps = 1L))$warnings)))
 })

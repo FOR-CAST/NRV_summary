@@ -142,3 +142,21 @@ test_that("reporting-group maps are identical from .qs2 and parquet cohorts", {
                     cohortFiles = file.path(reps[2], "cohortData_year0700.qs2"))
   expect_identical(cellLabels(terra::rast(out3)), rep("Decid", 4L))
 })
+
+test_that("reporting-group maps read a .qs2 cohort file padded differently from the vegTypeMap's year", {
+  withr::local_package("data.table")
+  grp <- LandWebUtils::sppEquiv_groups(reportingEquiv(), "LandWeb", "LandWebReport")
+  colors <- moduleFn(".reportingColors", new.env())(NULL, grp)
+  buildMaps <- moduleFn(".buildReportingVegTypeMaps", new.env())
+  root <- file.path(testPaths$outputPath, "reportingMapsPadded")
+  cd <- reportingCohorts()
+  cd$speciesCode <- factor(cd$speciesCode)
+  d <- file.path(root, "mainSim", "rep01")
+  dir.create(d, recursive = TRUE, showWarnings = FALSE)
+  terra::writeRaster(reportingPGM(), file.path(d, "pixelGroupMap_year0700.tif"), datatype = "INT4U", overwrite = TRUE)
+  padded <- file.path(d, "cohortData_year700.qs2")
+  qs2::qs_save(cd, padded)
+  out <- buildMaps(file.path(d, "vegTypeMap_year0700.tif"), file.path(root, "postprocess", "_reportingMaps"), grp,
+                   colors, 0.75, 2L, cohortFiles = padded)
+  expect_identical(cellLabels(terra::rast(out)), c("Bl_Spruce", "Decid", "Pine", "Mixed"))
+})

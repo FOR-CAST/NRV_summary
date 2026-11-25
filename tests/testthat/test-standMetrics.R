@@ -303,6 +303,7 @@ test_that("the st figures folder is cleared only when the st event runs", {
 ## with ten times the biomass and the species swapped, so the results show which were read) or "stale" (the .qs2
 ## files hold the cohorts and the parquet ones the others). `outputsDF`: the files are given as an outputsDF, which
 ## with "stale" does not list the parquet ones. `reporting`: the species are reported by group (Spruce, Aspen).
+## `summaryPeriod`: the module's parameter (the default makes year 0 a summary year, which InitMulti() then checks).
 stDiskSim <- function(events, subregion = "all", studyArea = "SA", cohorts = "qs2", outputsDF = FALSE,
                       reporting = FALSE, summaryPeriod = c(0L, 1000L), .env = parent.frame()) {
   root <- withr::local_tempdir(.local_envir = .env)
@@ -655,7 +656,8 @@ test_that("st stops, naming both formats' paths, when the year-0 cohort file is 
   rep1 <- file.path(fx$root, "mainSim", "rep01")
   expect_true(file.remove(file.path(rep1, "cohortData_year0000.qs2")))
   expect_error(
-    suppressWarnings(SpaDES.core::spades(fx$sim, debug = FALSE, events = list(NRV_summary = c("init", "postprocess_st")))),
+    suppressWarnings(SpaDES.core::spades(fx$sim, debug = FALSE,
+                                         events = list(NRV_summary = c("init", "postprocess_st")))),
     paste0("cannot take the stand-level measures of the current condition; missing:\n",
            file.path(rep1, "cohortData_year0000.qs2"), " or ",
            file.path(rep1, "cohortData", "year=0000", "part-0.parquet")),
