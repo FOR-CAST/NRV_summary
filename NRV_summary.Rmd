@@ -259,13 +259,27 @@ In `mode = "single"`, each replicate writes to its output folder what `mode = "m
 `flammableMap` at the end. The simulation year is in each file name (`_year<YYYY>`), except for the
 parquet `cohortData`, where it is in the folder name.
 
-With `cohortDataFormat = "parquet"` (the default), `cohortData` is an arrow dataset grouped by
-simulation year: `cohortData/year=<YYYY>/part-0.parquet`, one part file per year, written by
-`nrvtools::write_cohort_parquet()` (the file has no year column). With `cohortDataFormat = "qs2"`,
-it is `cohortData_year<YYYY>.qs2`, one file per year, as every run before version 2.0.0.9046 saved
-it. `mode = "multi"` reads both formats (`nrvtools::read_cohort_data()`), so the runs saved before
-this version are summarised as before; for a replicate and year with both files, it reads the
-parquet one and warns. With an `outputsDF`, only the files it lists, and that exist, are read.
+By default (`cohortDataFormat = "qs2"`), `cohortData` is saved as `cohortData_year<YYYY>.qs2`, one
+file per year, as every run before version 2.0.0.9046 saved it. With `cohortDataFormat = "parquet"`,
+it is an arrow dataset grouped by simulation year: `cohortData/year=<YYYY>/part-0.parquet`, one part
+file per year, written by `nrvtools::write_cohort_parquet()` (the file has no year column).
+`mode = "multi"` reads both formats (`nrvtools::read_cohort_data()`); for a replicate and year with
+both files, it reads the parquet one and warns. With an `outputsDF`, only the files it lists, and
+that exist, are read.
+
+Choosing a format: keep `.qs2` unless the cohorts are to be read by other software or queried
+across years. Parquet is an open columnar format that other software reads directly (e.g. Python's
+pyarrow, pandas or polars, and DuckDB); there `speciesCode` and `ecoregionGroup` are
+dictionary-encoded strings, and R gets its factors back. Measured on InterlakePlain's cohortData
+(4 files of 330,000-496,000 rows by 7 columns; medians of 5 runs; nrvtools 0.5.0, arrow's defaults):
+
+|                                                         | `.qs2`                          | parquet                            |
+|---------------------------------------------------------|---------------------------------|------------------------------------|
+| size of a file                                          | 1.4-2.0 MB                      | 2.6-8.1 MB (about 4 times; 1.4 times for the year-0 file, which is sorted by species) |
+| all of InterlakePlain's cohortData                      | 231 MB                          | 856 MB                             |
+| write a file                                            | 0.04-0.08 s                     | 0.15-0.46 s                        |
+| read a file, all columns                                | 0.02-0.03 s                     | 0.04-0.37 s (4 of 7 columns: no faster) |
+| query the 4 files (age >= 100; sum of B by year and species) | 0.35 s (read each, then filter) | 0.15 s (`arrow::open_dataset()`) |
 
 ### Module outputs
 

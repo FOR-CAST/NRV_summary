@@ -1,6 +1,6 @@
-## Mode = "single" saves cohortData at each summary year as a parquet dataset grouped by simulation time,
-## `cohortData/year=<YYYY>/part-0.parquet` (FOR-CAST/NRV_summary#1), or with `cohortDataFormat = "qs2"` as one
-## `cohortData_year<YYYY>.qs2` file per year, as every run before 2.0.0.9046 did. Mode = "multi" reads both (see
+## Mode = "single" saves cohortData at each summary year as one `cohortData_year<YYYY>.qs2` file per year, by default
+## and as every run before 2.0.0.9046 did, or with `cohortDataFormat = "parquet"` as a parquet dataset grouped by
+## simulation time, `cohortData/year=<YYYY>/part-0.parquet` (FOR-CAST/NRV_summary#1). Mode = "multi" reads both (see
 ## test-InitMulti.R, test-reporting-groups.R and test-standMetrics.R).
 
 ## a mode = "single" run of the shared fixture from 0 to 1000, saving at 0, 700 and 1000 (and 701 for the time
@@ -24,7 +24,7 @@ runSave <- function(format = NULL, .env = parent.frame()) {
 }
 
 test_that("save_single writes cohortData/year=0700/part-0.parquet and registers it", {
-  r <- runSave()
+  r <- runSave("parquet")
   f <- file.path(r$out, "cohortData", "year=0700", "part-0.parquet")
   expect_true(file.exists(f))
   expect_true(normalizePath(f, winslash = "/") %in% r$registered)
@@ -35,21 +35,22 @@ test_that("save_single writes cohortData/year=0700/part-0.parquet and registers 
   expect_length(list.files(r$out, "^cohortData_year"), 0L)
 })
 
-test_that("cohortDataFormat = 'qs2' writes and registers cohortData_year0700.qs2 as before", {
-  qs <- runSave("qs2")
+test_that("by default save_single writes and registers cohortData_year0700.qs2 as before", {
+  qs <- runSave() ## cohortDataFormat = "qs2", the default
   f <- file.path(qs$out, "cohortData_year0700.qs2")
   expect_true(file.exists(f))
   expect_true(normalizePath(f, winslash = "/") %in% qs$registered)
   expect_identical(qs2::qs_read(f)$B, qs$cohortData$B)
   expect_false(dir.exists(file.path(qs$out, "cohortData")))
-  ## the files of 2.0.0.9045: the parquet default changes the cohort files only
+  ## the files of 2.0.0.9045, which "qs2" given explicitly writes too; "parquet" changes the cohort files only
   expect_setequal(basename(qs$registered), c(
     "sppColorVect_year0000.qs2", "sppEquiv_year0000.qs2", "speciesLayers_year0000.tif", "flammableMap_year1000.tif",
     sprintf("cohortData_year%04d.qs2", c(0, 700, 1000)), sprintf("pixelGroupMap_year%04d.tif", c(0, 700, 1000)),
     sprintf("standAgeMap_year%04d.tif", c(0, 700, 701, 1000)), sprintf("vegTypeMap_year%04d.tif", c(0, 700, 701, 1000))
   ))
-  pq <- runSave("parquet")
   rel <- function(r) substring(r$registered, nchar(normalizePath(r$out, winslash = "/")) + 2L)
+  expect_identical(rel(runSave("qs2")), rel(qs))
+  pq <- runSave("parquet")
   expect_identical(setdiff(rel(qs), rel(pq)), sprintf("cohortData_year%04d.qs2", c(0, 700, 1000)))
   expect_identical(setdiff(rel(pq), rel(qs)), sprintf("cohortData/year=%04d/part-0.parquet", c(0, 700, 1000)))
 })
