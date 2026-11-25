@@ -15,7 +15,7 @@ defineModule(sim, list(
   documentation = list("README.md", "NRV_summary.Rmd"), ## .md produced from .Rmd
   reqdPkgs = list(
     "arrow", "crayon", "data.table", "dplyr", "fs", "future", "future.apply", "future.callr",
-    "ggforce", "ggplot2", "gifski", "googledrive", "grid", "landscapemetrics", "qs2",
+    "ggforce", "ggplot2", "gifski", "googledrive", "landscapemetrics", "qs2",
     "RColorBrewer", "reproducible", "rlang", "sf", "terra", "tidyterra",
     ## 1.2.0.9054: leadingByPixelGroup() (the annual series, `recordAnnualSeries`); 1.2.0.9024: leadingSpeciesProp()
     "PredictiveEcology/LandR@development (>= 1.2.0.9054)",
@@ -122,9 +122,11 @@ defineModule(sim, list(
                           "against the NRV range.",
                           "Not in the default: it runs only when asked for.",
                           "'cc' for one figure per reporting layer and unit with every metric against the NRV",
-                          "(`figures/all/<layer>/<unit>.png`), from the comparisons the lm and st events record;",
-                          "it also writes the NRV comparison tables. Not in the default: it runs only when asked",
-                          "for.",
+                          "(`figures/all/<layer>/<unit>.png`), with 'lm' or 'st' in the same run: it draws the",
+                          "comparisons those events record. The stand-level rows go on the figure of every unit",
+                          "named like the study area (`.studyAreaName`); with no such unit they have a figure of",
+                          "their own, `figures/all/<studyArea>/<studyArea>.png`. It also writes the NRV",
+                          "comparison tables. Not in the default: it runs only when asked for.",
                           "'autocorr' for the autocorrelation time of the annual landscape series",
                           "(`annualSeries.csv`, from `recordAnnualSeries = TRUE`), the correlation between",
                           "snapshots `summaryInterval` years apart and a recommended thinning interval;",
@@ -2722,13 +2724,16 @@ makeAnimation <- function(sim) {
   (x - lo) / width
 }
 
-## The age classes from young to old; any other class comes after them, by name.
-.ccAllAgeOrder <- function() c("Young", "Immature", "Mature", "Old")
+## The age classes from young to old: the run's (`ageClasses`), else the default ones; any other class comes after
+## them, by name.
+.ccAllAgeOrder <- function(ageClasses = NULL) {
+  if (length(ageClasses)) as.character(ageClasses) else c("Young", "Immature", "Mature", "Old")
+}
 
 ## Order of the stand-level rows: biomass, the age classes young to old (`.ccAllAgeOrder()`; others after, by
-## name), the forested share, then the leading types. Landscape rows have one rank, so they keep their order.
-.standRank <- function(metric, group) {
-  ord <- .ccAllAgeOrder()
+## name; `ageClasses` as for `.ccAllAgeOrder()`), the forested share, then the leading types. Landscape rows have one rank, so they keep their order.
+.standRank <- function(metric, group, ageClasses = NULL) {
+  ord <- .ccAllAgeOrder(ageClasses)
   age <- match(sub("^age_", "", metric), ord, nomatch = length(ord) + 1L)
   ifelse(group != "stand", 0, ifelse(metric == "biomassTg", 1, ifelse(grepl("^age_", metric), 2 + age / 10,
          ifelse(metric == "forested", 3, 4))))
@@ -2738,6 +2743,9 @@ makeAnimation <- function(sim) {
 ## every group (`currentConditionAll()`) with its layer, its group and the metric's label (a `label` column, else
 ## nrvtools' name of the metric).
 .recordComparison <- function(kind, cmp, layer = "") {
+  if (!nrow(cmp)) {
+    return(invisible(cmp)) ## nothing to draw; a zero-row data frame cannot take the columns below
+  }
   cmp$layer <- layer
   cmp$group <- unname(.ccAllGroups()[kind])
   if (is.null(cmp$label)) {
@@ -2753,12 +2761,12 @@ makeAnimation <- function(sim) {
 ## `current`, `position`): a leading type that is 0 in the current condition and in the NRV is dropped; the NRV
 ## mid and the current condition are rescaled (xMid, xCurrent); the current condition is drawn at xPlot, clipped
 ## to `.ccAllLimits()` (clipped = TRUE); y is the row, from the top, with a row above each group for its title.
-.currentConditionAllData <- function(cmp) {
+.currentConditionAllData <- function(cmp, ageClasses = NULL) {
   titles <- .ccAllTitles()
   lim <- .ccAllLimits()
   cmp <- cmp[!(grepl("^lead_", cmp$metric) & cmp$current == 0 & cmp$hi == 0), , drop = FALSE]
   cmp$group <- factor(cmp$group, names(titles))
-  cmp <- cmp[order(cmp$group, .standRank(cmp$metric, cmp$group), ifelse(cmp$group == "stand", cmp$label, "")), , drop = FALSE]
+  cmp <- cmp[order(cmp$group, .standRank(cmp$metric, cmp$group, ageClasses), ifelse(cmp$group == "stand", cmp$label, "")), , drop = FALSE]
   cmp$xMid <- .nrvScale(cmp$mid, cmp$lo, cmp$hi)
   cmp$xCurrent <- .nrvScale(cmp$current, cmp$lo, cmp$hi)
   cmp$xPlot <- pmin(pmax(cmp$xCurrent, lim[1]), lim[2])
@@ -2774,7 +2782,7 @@ makeAnimation <- function(sim) {
 ## One panel, a row per metric: the grey bar is the NRV range (0 to 1), the black tick the NRV median, the dot the
 ## current condition, coloured by its position. A current condition clipped at the limit has an arrow and its
 ## value written beside it.
-.currentConditionAll <- function(data) {
+.currentConditionAll <- function(data, title = "Current condition relative to the NRV") {
   titles <- attr(data, "titles")
   lim <- .ccAllLimits()
   positionColour <- .positionColour()
@@ -2786,7 +2794,7 @@ makeAnimation <- function(sim) {
     ggplot2::geom_point(ggplot2::aes(x = xMid, y = y, shape = midLabel), size = 3) +
     ggplot2::geom_point(ggplot2::aes(x = xPlot, y = y, colour = position), size = 2.5) +
     ggplot2::geom_segment(data = clip, ggplot2::aes(x = xPlot - dir * 0.12, xend = xPlot, y = y, yend = y, colour = position),
-                          arrow = grid::arrow(length = grid::unit(0.08, "in")), show.legend = FALSE) +
+                          arrow = ggplot2::arrow(length = ggplot2::unit(0.08, "in")), show.legend = FALSE) +
     ggplot2::geom_text(data = clip, ggplot2::aes(x = xPlot - dir * 0.16, y = y, label = signif(current, 3), colour = position),
                        hjust = ifelse(dir > 0, 1, 0), size = 2.6, show.legend = FALSE) +
     ggplot2::geom_text(data = titles, ggplot2::aes(x = lim[1], y = y, label = title), hjust = 0,
@@ -2797,23 +2805,22 @@ makeAnimation <- function(sim) {
     ggplot2::scale_colour_manual(values = positionColour, breaks = names(positionColour),
                                  labels = unname(.positionLabels()), drop = FALSE, name = "current condition") +
     ggplot2::scale_shape_manual(values = stats::setNames(124, midLabel), name = NULL) +
-    ggplot2::labs(x = .ccAllXlab(), y = NULL, title = "Current condition relative to the NRV") +
+    ggplot2::labs(x = .ccAllXlab(), y = NULL, title = title) +
     ggplot2::theme_bw(base_size = 9) +
     ggplot2::theme(legend.position = "bottom", panel.grid.major.y = ggplot2::element_blank(),
                    panel.grid.minor = ggplot2::element_blank())
 }
 
-## File names (without extension) for `x`, a vector of unit or layer names, that cannot collide: characters that
-## are not letters, digits, . or - become _, which alone would give 'A B' and 'A_B' one name. When names collide
-## (also by case, for a case-insensitive disk), the units in sorted order get the name, then the name with -2, -3,
-## ... so the same set of units always gets the same names. Returns them in the order of `x`, named by it.
-.ccAllNames <- function(x) {
-  x <- as.character(x)
-  stem <- gsub("[^A-Za-z0-9.-]+", "_", x)
-  stem[!nzchar(stem)] <- "unit"
+## `stem`, the file name proposed for each of the (distinct) names `x`, made distinct also by case (for a case-insensitive
+## disk). A name that is its own stem keeps it; each other name, in sorted order, gets its stem, or the stem with -2,
+## -3, ... when that is taken. So 'A_B' keeps A_B, 'A B' becomes A_B-2, and a name 'A_B-2' keeps its own. The same set
+## of names always gets the same file names. Returns them in the order of `x`, named by it.
+.distinctFileNames <- function(x, stem) {
   out <- character(length(x))
   used <- character(0)
-  for (i in order(x, method = "radix")) {
+  own <- !is.na(x) & x == stem
+  ord <- order(x, method = "radix")
+  for (i in c(ord[own[ord]], ord[!own[ord]])) {
     cand <- stem[i]
     k <- 1L
     while (tolower(cand) %in% used) {
@@ -2826,9 +2833,53 @@ makeAnimation <- function(sim) {
   stats::setNames(out, x)
 }
 
+## File names (without extension) of the units `x` of one layer: characters that are not letters, digits, . or - become
+## _, which alone would give 'A B' and 'A_B' one name; an NA or empty name is "unit". See `.distinctFileNames()`.
+.ccAllNames <- function(x) {
+  x <- as.character(x)
+  stem <- gsub("[^A-Za-z0-9.-]+", "_", x)
+  stem[is.na(x) | !nzchar(stem)] <- "unit"
+  .distinctFileNames(x, stem)
+}
+
+## Folder names of the layers `x` under figures/all/: the layer name as the other output folders (figures/lm/<layer>)
+## have it, with only the characters a path cannot hold replaced, and "." and ".." (which would leave the folder)
+## prefixed with _. An NA or empty name is "unit". See `.distinctFileNames()`.
+.ccAllDirs <- function(x) {
+  x <- as.character(x)
+  stem <- gsub("[/\\\\[:cntrl:]]", "_", x)
+  stem[stem %in% c(".", "..")] <- paste0("_", stem[stem %in% c(".", "..")])
+  stem[is.na(x) | !nzchar(stem)] <- "unit"
+  .distinctFileNames(x, stem)
+}
+
+## The figures from the recorded comparisons (`.recordComparison()` rows): a list of figures, each list(layer, unit,
+## data, standOnly), one per lm layer and unit. The stand-level rows (st) are added to the figure of every unit named
+## like them (the study area), in any layer; stand rows no unit is named like have a figure of their own
+## (standOnly = TRUE), in their own layer.
+.ccAllFigures <- function(cmp) {
+  stand <- cmp$group %in% "stand"
+  rest <- cmp[!stand, , drop = FALSE]
+  st <- cmp[stand, , drop = FALSE]
+  figs <- list()
+  key <- paste(rest$layer, rest$poly, sep = "\r")
+  for (k in unique(key)) {
+    r <- rest[key == k, , drop = FALSE]
+    own <- st[!is.na(st$poly) & st$poly %in% r$poly[1L], , drop = FALSE]
+    figs[[length(figs) + 1L]] <- list(layer = r$layer[1L], unit = r$poly[1L], data = rbind(r, own), standOnly = FALSE)
+  }
+  alone <- st[is.na(st$poly) | !st$poly %in% rest$poly, , drop = FALSE]
+  key <- paste(alone$layer, alone$poly, sep = "\r")
+  for (k in unique(key)) {
+    r <- alone[key == k, , drop = FALSE]
+    figs[[length(figs) + 1L]] <- list(layer = r$layer[1L], unit = r$poly[1L], data = r, standOnly = TRUE)
+  }
+  figs
+}
+
 ## The `postprocess_cc` event: one figure per reporting layer and unit with every group's NRV comparison recorded by
-## the lm and st events (`.recordComparison()`), figures/all/<layer>/<unit>.png, registered as outputs. It runs
-## before the plot event, which leaves this folder alone, so it clears it here.
+## the lm and st events (`.recordComparison()`), figures/all/<layer>/<unit>.png (`.ccAllFigures()`), registered as
+## outputs. It runs before the plot event, which leaves this folder alone, so it clears it here.
 currentConditionAll <- function(sim) {
   .clearFigDirs(sim, "cc")
   cmp <- do.call(rbind, mod$nrvComparisons)
@@ -2836,16 +2887,24 @@ currentConditionAll <- function(sim) {
     message("NRV_summary: no NRV comparisons for the combined current-condition figure")
     return(invisible(sim))
   }
+  figs <- .ccAllFigures(cmp)
+  layers <- vapply(figs, function(f) as.character(f$layer), "")
+  layerNames <- unique(layers) ## by index below: a name may be NA or empty
+  dirs <- .ccAllDirs(layerNames)
   files <- character(0) ## drawn with ggsave() as the st figures are, whatever `.plots` says
-  layers <- .ccAllNames(unique(cmp$layer))
-  for (l in names(layers)) {
-    inLayer <- cmp[cmp$layer == l, , drop = FALSE]
-    units <- .ccAllNames(unique(inLayer$poly))
-    dir <- reproducible::checkPath(file.path(.ppRoot(sim), "figures", "all", layers[[l]]), create = TRUE)
-    for (p in names(units)) {
-      d <- .currentConditionAllData(inLayer[inLayer$poly == p, , drop = FALSE])
-      f <- file.path(dir, paste0(units[[p]], ".png"))
-      ggplot2::ggsave(f, .currentConditionAll(d), width = 11, height = 2 + 0.25 * nrow(d), units = "in")
+  for (i in seq_along(layerNames)) {
+    inLayer <- figs[layers %in% layerNames[i]]
+    dir <- reproducible::checkPath(file.path(.ppRoot(sim), "figures", "all", dirs[[i]]), create = TRUE)
+    stems <- .ccAllNames(vapply(inLayer, function(f) as.character(f$unit), ""))
+    for (j in seq_along(inLayer)) {
+      f <- file.path(dir, paste0(stems[[j]], ".png"))
+      d <- .currentConditionAllData(inLayer[[j]]$data, P(sim)$ageClasses)
+      title <- if (inLayer[[j]]$standOnly) {
+        paste0(inLayer[[j]]$unit, " (stand-level measures) - current condition relative to the NRV")
+      } else {
+        paste0(layerNames[i], ": ", inLayer[[j]]$unit, " - current condition relative to the NRV")
+      }
+      ggplot2::ggsave(f, .currentConditionAll(d, title), width = 11, height = 2 + 0.25 * nrow(d), units = "in")
       files <- c(files, f)
     }
   }
@@ -3061,9 +3120,9 @@ stabilityCheck <- function(sim) {
 ## The rows of `.nrvComparison()` of the stand-level metrics in pages of at most `perPage` panels (a list of data
 ## frames, each with only its own panels), each panel named by `.standLabel()` and in the order of `.standRank()`;
 ## for `.currentConditionOverview()`.
-.standOverviewPages <- function(cmp, sppEquiv = NULL, sppEquivCol = "LandR", perPage = 24L) {
+.standOverviewPages <- function(cmp, sppEquiv = NULL, sppEquivCol = "LandR", perPage = 24L, ageClasses = NULL) {
   cmp$panel <- .standLabel(cmp$metric, sppEquiv, sppEquivCol)
-  cmp <- cmp[order(.standRank(cmp$metric, rep("stand", nrow(cmp))), cmp$panel), , drop = FALSE] ## biomass, young to old, ...
+  cmp <- cmp[order(.standRank(cmp$metric, rep("stand", nrow(cmp)), ageClasses), cmp$panel), , drop = FALSE] ## biomass, young to old, ...
   .ccOverviewPages(cmp, perPage)
 }
 
@@ -3150,7 +3209,7 @@ standMetrics <- function(sim) {
   }
 
   ## where the current condition falls against the NRV, one panel per stand-level metric, in pages
-  pages <- .standOverviewPages(cmp, sim$sppEquiv, P(sim)$sppEquivCol)
+  pages <- .standOverviewPages(cmp, sim$sppEquiv, P(sim)$sppEquivCol, ageClasses = P(sim)$ageClasses)
   for (pg in seq_along(pages)) {
     lay <- .ccOverviewLayout(length(unique(pages[[pg]]$panel)))
     f <- file.path(figDir, paste0("current_condition_overview_p", pg, ".png"))
