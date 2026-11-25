@@ -1,6 +1,6 @@
 ---
 title: "NRV_summary Manual"
-subtitle: "v.2.0.0.9044"
+subtitle: "v.2.0.0.9045"
 date: "Last updated: 2026-11-25"
 output:
   bookdown::html_document2:
@@ -248,6 +248,15 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
+   <td style="text-align:left;"> envelopeStyle </td>
+   <td style="text-align:left;"> character </td>
+   <td style="text-align:left;"> ribbon </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> (mode = 'multi') how the lm and pm envelope figures show the replicates: `"ribbon"` (default) draws the range of the replicates as a band around their mean; `"lines"` draws one thin grey line per replicate under a bold line for their median (`nrvtools::plot_nrv_envelope(type = "lines")`). The files keep their names (`&lt;subregion&gt; &lt;metric&gt;_ribbon.png`, `&lt;metric&gt;_ribbon_p&lt;N&gt;.png`). The replicate values are read once per reporting layer; a layer whose aggregates hold none gets ribbons, and a message says so. The boxplot figures and the per-class pages are the same in both styles. </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
    <td style="text-align:left;"> plotWorkers </td>
    <td style="text-align:left;"> integer </td>
    <td style="text-align:left;"> 8 </td>
@@ -262,7 +271,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> lm, pm </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
-   <td style="text-align:left;"> Specify which subset of postprocessing events to run. At least one of: 'am' for the stand-age time-series animation (GIF); 'bc' for BC seral stage patch metrics; 'lm' for default landscape metrics; 'lw' for default LandWeb summaries 'pm' for default patch metrics; 'on' for ON patch metrics; 'autocorr' for the autocorrelation time of the annual landscape series (`annualSeries.csv`, from `recordAnnualSeries = TRUE`), the correlation between snapshots `summaryInterval` years apart and a recommended thinning interval; `autocorrelation.csv` and its figure. Not in the default: it runs only when asked for. 'stability' for the check that the run is long enough (is each metric still trending over the end of the NRV period?), `stability.csv` and its figures, and, with 'lm' in the same run, the current-condition overview of each lm layer. Not in the default: it runs only when asked for. Any other value is an error ('fd', forest degradation indicators, is not implemented). </td>
+   <td style="text-align:left;"> Specify which subset of postprocessing events to run. At least one of: 'am' for the stand-age time-series animation (GIF); 'bc' for BC seral stage patch metrics; 'lm' for default landscape metrics; 'lw' for default LandWeb summaries 'pm' for default patch metrics; 'on' for ON patch metrics; 'st' for stand-level measures (age-class, leading-type and forested shares, total biomass) at each summary time, from the saved snapshots (`st.csv`, `st_CC.csv`, `st_nrvComparison.csv`) and their figures; with 'stability' in the same run they are tested too. With 'lm' in the same run, also the NRV comparison tables, `csv/lm/&lt;layer&gt;/lm_nrvComparison.csv`, which say where the current condition falls against the NRV range. Not in the default: it runs only when asked for. 'cc' for one figure per reporting layer and unit with the lm and st metrics against the NRV (`figures/all/&lt;layer&gt;/&lt;unit&gt;.png`), with 'lm' or 'st' in the same run: it draws the comparisons those events record. The stand-level rows go on the figure of every unit named like the study area (`.studyAreaName`); with no such unit they have a figure of their own, `figures/all/&lt;studyArea&gt;/&lt;studyArea&gt;.png`. With 'cc' in the run, the 'lm' event also writes the NRV comparison tables. Not in the default: it runs only when asked for. 'autocorr' for the autocorrelation time of the annual landscape series (`annualSeries.csv`, from `recordAnnualSeries = TRUE`), the correlation between snapshots `summaryInterval` years apart and a recommended thinning interval; `autocorrelation.csv` and its figure. Not in the default: it runs only when asked for. 'stability' for the check that the run is long enough (is each metric still trending over the end of the NRV period?), `stability.csv` and its figures, and, with 'lm' in the same run, the current-condition overview of each lm layer. Not in the default: it runs only when asked for. Any other value is an error ('fd', forest degradation indicators, is not implemented). </td>
    <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
@@ -463,6 +472,21 @@ raising ImageMagick's `policy.xml` memory/disk limits (see
 [LandWeb #153](https://github.com/PredictiveEcology/LandWeb/issues/153)). With `gifski`
 **no such system configuration is required**.
 
+Two more events are opt-in (not in the default `postprocessEvents`), and both read the
+current condition and the NRV range of each metric.
+`"st"` takes the stand-level measures from the replicates' saved snapshots at each summary time:
+the share of the forest in each age class, the forested share of the area, the share of the area
+led by each type (the mixed class included) and the total biomass (forested cells only).
+It writes `csv/st/<studyArea>/st.csv`, `st_CC.csv` (the current condition) and
+`st_nrvComparison.csv` (whether the current condition is inside, above or below the NRV range),
+and its figures (see *Plotting*).
+With `"lm"` in the same run, `csv/lm/<layer>/lm_nrvComparison.csv` is written as well, from the
+landscape-level rows, and with `"stability"` the stand series are tested too.
+`"cc"` draws, for each reporting layer and unit, one figure with the current condition of the lm
+metrics and the stand-level (st) measures against their NRV ranges (the pm, lw and bc metrics are
+not on it), from the comparisons the `lm` and `st` events record (it needs one of them in the run).
+It runs after them and before the `plot` event.
+
 The autocorrelation check is opt-in in two parts. In `mode = "single"`,
 `recordAnnualSeries = TRUE` adds an `annual_series` event for every simulated year (about a
 thousand events per replicate) that writes `annualSeries.csv` beside the replicate's other
@@ -551,13 +575,13 @@ Table \@ref(tab:eventObjects-NRV-summary) lists, for each object, the code that 
   </tr>
 </tbody>
 <tfoot><tr><td style="padding: 0; " colspan="100%">
-<sup></sup> Not shown, off with the default parameters: postprocess_lw, postprocess_bc, postprocess_on, postprocess_stability, postprocess_autocorr, annual_series, animation. Not shown, touching no object in the metadata: .inputObjects, init: .checkNrvWindow(), init: .nrvYears(), init: .warnStabilityWindow(), init: .checkPostprocessEvents(), save_single, postprocess. Not traced to any code (e.g. reached indirectly): cohortData, flammableMap, pixelGroupMap, speciesLayers, sppColorVect, standAgeMap.</td></tr></tfoot>
+<sup></sup> Not shown, off with the default parameters: postprocess_lw, postprocess_bc, postprocess_on, postprocess_st, postprocess_cc, postprocess_stability, postprocess_autocorr, annual_series, animation. Not shown, touching no object in the metadata: .inputObjects, init: .checkNrvWindow(), init: .checkEnvelopeStyle(), init: .nrvYears(), init: .warnStabilityWindow(), init: .checkPostprocessEvents(), save_single, postprocess. Not traced to any code (e.g. reached indirectly): cohortData, flammableMap, pixelGroupMap, speciesLayers, sppColorVect, standAgeMap.</td></tr></tfoot>
 </table>
 
 
 #### .noTreeSpecies() {-}
 
-init event, step 1 of 6
+init event, step 1 of 7
 
 ![](figures/NRV_summary_io_init_.noTreeSpecies.png){width=100%}
 
@@ -565,7 +589,7 @@ init event, step 1 of 6
 
 #### InitMulti() {-}
 
-init event, step 6 of 6
+init event, step 7 of 7
 
 ![](figures/NRV_summary_io_init_InitMulti.png){width=100%}
 
@@ -613,6 +637,11 @@ In `mode = "multi"`, `plotFun` writes these figures for each reporting-polygon l
   Patch metrics have a panel per vegetation type. A patch-level metric (patch area, median stand
   age of a patch) enters as each replicate's mean over its patches, so the envelope spans the
   replicates, as for the class-level metrics.
+  With `envelopeStyle = "lines"` (default `"ribbon"`), the ribbon figures show instead one thin grey
+  line per replicate under a bold line for their median (the files keep their names,
+  `<subregion> <metric>_ribbon.png` and `<metric>_ribbon_p<N>.png`).
+  The replicate values are read once per layer; a layer without any gets ribbons, and a message says so.
+  The boxplot figures are the same in both styles.
 - `lm/<layer>/per-metric/`: the envelopes of each landscape metric with a panel per subregion,
   up to 12 panels to a page.
 - `pm/<layer>/per-metric/`: box and violin plots of each patch metric for each vegetation type,
@@ -626,6 +655,17 @@ In `mode = "multi"`, `plotFun` writes these figures for each reporting-polygon l
   `boxplots/<layer>/<subregion> share of forest.png` has a panel per age class and a box per
   leading type of its share of the subregion's forested area.
 - `sspm/<layer>/`: the BC seral patch metrics (`bc`), one paginated envelope figure-set per metric.
+- `st/<studyArea>/` (only with `"st"` in `postprocessEvents`): `stand_age.png`,
+  `stand_leading.png` (only when some type leads at least 0.5% of the area, in the replicates or
+  today) and `stand_biomass.png` (the replicates over time, their median and the current
+  condition), `species/lead_<code>.png` for each leading type (in the replicates or today), and
+  `current_condition_overview_p<N>.png` (where each stand-level measure's current condition lies
+  against its NRV range, paged). The folder is emptied when the event runs.
+- `all/<layer>/<unit>.png` (only with `"cc"` in `postprocessEvents`, and `"lm"` or `"st"`): every
+  metric of the unit with its current condition against the NRV range, rescaled to 0-1 and clipped at
+  the axis limits (the true value is kept). The stand-level rows are on the figure of each unit named
+  like the study area, else on `all/<studyArea>/<studyArea>.png`. The folder is emptied when the event
+  runs.
 - `stability/all/` (only with `"stability"` in `postprocessEvents`): the check that the run is
   long enough, with pages of series over time (reps as thin lines, the median in bold, the stability
   window shaded, the verdict in each panel's title) and a summary of the verdicts. With `lm` in the
