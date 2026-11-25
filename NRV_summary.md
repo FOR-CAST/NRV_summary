@@ -1,6 +1,6 @@
 ---
 title: "NRV_summary Manual"
-subtitle: "v.2.0.0.9045"
+subtitle: "v.2.0.0.9046"
 date: "Last updated: 2026-11-25"
 output:
   bookdown::html_document2:
@@ -191,6 +191,15 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> (mode = 'single') where the current condition's (year 0's) stand-age map comes from: 'standAgeMap', the age layer `sim$standAgeMap` (e.g. Biomass_borealDataPrep's) on the pixels with cohorts, rounded and then floored to the decade, as `LandR::standAgeMapGenerator()` floors the simulated years' ages; or 'cohortData', that generator's biomass-weighted age of the year-0 cohorts, which keeps the binning of the cohort ages. 'standAgeMap' warns and uses the cohorts when `sim$standAgeMap` is absent or not on a grid aligned with `pixelGroupMap`. The simulated years always come from the cohorts. </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> cohortDataFormat </td>
+   <td style="text-align:left;"> character </td>
+   <td style="text-align:left;"> qs2 </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> (mode = 'single') how `cohortData` is saved at the start, at each summary year and at the end: 'qs2' (the default), as `cohortData_year&lt;YYYY&gt;.qs2`, one file per year, as every run before 2.0.0.9046 saved it; or 'parquet', as an arrow dataset grouped by simulation time, `cohortData/year=&lt;YYYY&gt;/part-0.parquet` (`nrvtools::write_cohort_parquet()`). The .qs2 files are about a quarter of the size and faster to write and read; choose 'parquet' when other software (e.g. Python or DuckDB) is to read the cohorts, or to query them across years with `arrow::open_dataset()`. Mode = 'multi' reads both formats, and takes the parquet file of a replicate and year that has both. </td>
    <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
@@ -605,13 +614,13 @@ Table \@ref(tab:eventObjects-NRV-summary) lists, for each object, the code that 
   </tr>
 </tbody>
 <tfoot><tr><td style="padding: 0; " colspan="100%">
-<sup></sup> Not shown, off with the default parameters: postprocess_lw, postprocess_bc, postprocess_on, postprocess_st, postprocess_cc, postprocess_stability, postprocess_autocorr, annual_series, animation. Not shown, touching no object in the metadata: .inputObjects, init: .checkNrvWindow(), init: .checkEnvelopeStyle(), init: .nrvYears(), init: .warnStabilityWindow(), init: .checkPostprocessEvents(), postprocess.</td></tr></tfoot>
+<sup></sup> Not shown, off with the default parameters: postprocess_lw, postprocess_bc, postprocess_on, postprocess_st, postprocess_cc, postprocess_stability, postprocess_autocorr, annual_series, animation. Not shown, touching no object in the metadata: .inputObjects, init: .checkNrvWindow(), init: .checkEnvelopeStyle(), init: .checkCohortDataFormat(), init: .nrvYears(), init: .warnStabilityWindow(), init: .checkPostprocessEvents(), postprocess.</td></tr></tfoot>
 </table>
 
 
 #### .noTreeSpecies() {-}
 
-init event, step 1 of 7
+init event, step 1 of 8
 
 ![](figures/NRV_summary_io_init_.noTreeSpecies.png){width=100%}
 
@@ -619,7 +628,7 @@ init event, step 1 of 7
 
 #### InitMulti() {-}
 
-init event, step 7 of 7
+init event, step 8 of 8
 
 ![](figures/NRV_summary_io_init_InitMulti.png){width=100%}
 
@@ -740,7 +749,34 @@ The `"am"` event additionally writes the stand-age animation GIF (see *Events*).
 
 ### Saving
 
-Write what is saved.
+In `mode = "single"`, each replicate writes to its output folder what `mode = "multi"` summarises:
+`sppColorVect` and `sppEquiv` (`.qs2`) and `speciesLayers` at the start; `standAgeMap` and
+`vegTypeMap` at the start, at each summary year, at the end and at each `timeSeriesTimes` year;
+`pixelGroupMap` and `cohortData` at the start, at each summary year and at the end; and
+`flammableMap` at the end. The simulation year is in each file name (`_year<YYYY>`), except for the
+parquet `cohortData`, where it is in the folder name.
+
+By default (`cohortDataFormat = "qs2"`), `cohortData` is saved as `cohortData_year<YYYY>.qs2`, one
+file per year, as every run before version 2.0.0.9046 saved it. With `cohortDataFormat = "parquet"`,
+it is an arrow dataset grouped by simulation year: `cohortData/year=<YYYY>/part-0.parquet`, one part
+file per year, written by `nrvtools::write_cohort_parquet()` (the file has no year column).
+`mode = "multi"` reads both formats (`nrvtools::read_cohort_data()`); for a replicate and year with
+both files, it reads the parquet one and warns. With an `outputsDF`, only the files it lists, and
+that exist, are read.
+
+Choosing a format: keep `.qs2` unless the cohorts are to be read by other software or queried
+across years. Parquet is an open columnar format that other software reads directly (e.g. Python's
+pyarrow, pandas or polars, and DuckDB); there `speciesCode` and `ecoregionGroup` are
+dictionary-encoded strings, and R gets its factors back. Measured on InterlakePlain's cohortData
+(4 files of 330,000-496,000 rows by 7 columns; medians of 5 runs; nrvtools 0.5.0, arrow's defaults):
+
+|                                                         | `.qs2`                          | parquet                            |
+|---------------------------------------------------------|---------------------------------|------------------------------------|
+| size of a file                                          | 1.4-2.0 MB                      | 2.6-8.1 MB (about 4 times; 1.4 times for the year-0 file, which is sorted by species) |
+| all of InterlakePlain's cohortData                      | 231 MB                          | 856 MB                             |
+| write a file                                            | 0.04-0.08 s                     | 0.15-0.46 s                        |
+| read a file, all columns                                | 0.02-0.03 s                     | 0.04-0.37 s (4 of 7 columns: no faster) |
+| query the 4 files (age >= 100; sum of B by year and species) | 0.35 s (read each, then filter) | 0.15 s (`arrow::open_dataset()`) |
 
 ### Module outputs
 
