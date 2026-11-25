@@ -210,7 +210,8 @@ test_that("the comparison tables are wanted through one helper", {
 
 ## a mode = "multi" sim of the module with its init scheduled but not run; the replicates' files are
 ## empty stand-ins for each year in `yrs`; `events` is postprocessEvents (NULL: the parameter's default)
-multiSimSt <- function(events = NULL, yrs = c(700L, 1000L), interval = 300L, .env = parent.frame()) {
+multiSimSt <- function(events = NULL, yrs = c(700L, 1000L), interval = 300L, params = list(),
+                       .env = parent.frame()) {
   root <- withr::local_tempdir(.local_envir = .env)
   rep1 <- file.path(root, "mainSim", "rep01")
   dir.create(rep1, recursive = TRUE)
@@ -224,7 +225,8 @@ multiSimSt <- function(events = NULL, yrs = c(700L, 1000L), interval = 300L, .en
   pars <- c(
     list(mode = "multi", reps = 1L, summaryPeriod = c(700L, 1000L), summaryInterval = interval,
          timeSeriesTimes = 701:702, simTimes = c(0, 1000)),
-    if (!is.null(events)) list(postprocessEvents = events)
+    if (!is.null(events)) list(postprocessEvents = events),
+    params
   )
   SpaDES.core::simInit(
     times = list(start = 0, end = 1000),
@@ -286,7 +288,7 @@ test_that("the st figures folder is cleared only when the st event runs", {
 
 ## two reps of a 4 x 4 landscape (two species, two stand ages) at years 0 and 1000 on disk, and the sim of
 ## the module over them with `events` as postprocessEvents; the reporting polygon is the whole landscape
-stDiskSim <- function(events, subregion = "all", .env = parent.frame()) {
+stDiskSim <- function(events, subregion = "all", studyArea = "SA", .env = parent.frame()) {
   root <- withr::local_tempdir(.local_envir = .env)
   crs <- "EPSG:3400"
   rtm <- terra::rast(nrows = 4, ncols = 4, xmin = 0, xmax = 1000, ymin = 0, ymax = 1000, crs = crs)
@@ -314,7 +316,7 @@ stDiskSim <- function(events, subregion = "all", .env = parent.frame()) {
     times = list(start = 0, end = 1000),
     params = list(NRV_summary = list(
       mode = "multi", reps = 1:2, summaryPeriod = c(0L, 1000L), summaryInterval = 1000L, timeSeriesTimes = 1:2,
-      simTimes = c(0, 1000), postprocessEvents = events, .studyAreaName = "SA", ageClassCutOffs = c(0L, 100L),
+      simTimes = c(0, 1000), postprocessEvents = events, .studyAreaName = studyArea, ageClassCutOffs = c(0L, 100L),
       ageClasses = c("Young", "Old")
     )),
     modules = moduleName,
@@ -402,6 +404,7 @@ test_that("the stand series join the stability check only when both st and stabi
   series <- function(events) {
     fn <- stP(moduleFn(".stabilitySeries", m), postprocessEvents = events)
     environment(fn)$.stabilityBurn <- function(sim) NULL
+    environment(fn)$.studyAreaLabel <- function(sim) "SA"
     suppressMessages(fn(NULL))
   }
   r <- series(c("st", "stability"))
@@ -480,4 +483,103 @@ test_that("a run of lm, st and cc puts the stand rows on the figure of the unit 
   }
   expect_identical(run("SA"), file.path("A", "SA.png")) ## one figure, the layer's unit with the stand rows
   expect_identical(sort(run("all")), sort(c(file.path("A", "all.png"), file.path("SA", "SA.png")))) ## LandWeb's case
+})
+
+## ---- the P5 final-review fix wave ----
+
+test_that("a leading type found only in the current condition, or above the threshold only there, is drawn", {
+  rows <- function(metric, rep, value) data.frame(metric = metric, rep = rep, time = c(0, 100), value = value)
+  series <- rbind(rows("lead_A", 1, c(60, 60)), rows("lead_B", 1, c(0.3, 0.2)), rows("lead_C", 1, c(0, 0)),
+                  rows("lead_D", 1, c(0, 0)))
+  cc <- data.frame(metric = c("lead_A", "lead_B", "lead_C", "lead_D"), time = 0, value = c(50, 5, 4, 0.1))
+  lm <- moduleFn(".leadMax", new.env())(series, cc)
+  expect_equal(lm[["lead_B"]], 5)
+  expect_equal(lm[["lead_C"]], 4) ## present only in the current condition
+  m <- moduleFn(".standGroups", new.env())(lm, c("Young", "Old"))$leading$m
+  expect_setequal(m, c("lead_A", "lead_B", "lead_C")) ## lead_D leads 0.1% at most
+  ## the species figures too: a type that leads nowhere in the replicates but leads today
+  series$class <- standClass(series$metric)
+  cc$class <- standClass(cc$metric)
+  cmp <- data.frame(metric = cc$metric, position = "above")
+  f <- moduleFn(".speciesFigData", new.env())(series, cc, cmp, c(0, 100), "SA")
+  expect_setequal(names(f), c("lead_A", "lead_B", "lead_C", "lead_D"))
+})
+
+test_that("the age classes are ordered young to old in the stand figure legend", {
+  metric <- c("age_Old", "age_Young", "age_Mature", "lead_Pice_gla", "age_Immature", "forested", "biomassTg")
+  cls <- standClass(metric)
+  f <- moduleFn(".standClassFactor", new.env())(metric, cls, c("Young", "Immature", "Mature", "Old"))
+  expect_s3_class(f, "factor")
+  expect_identical(as.character(f), cls)
+  expect_identical(levels(f)[1:6], c("Total tree biomass", "Young", "Immature", "Mature", "Old", "Forested"))
+  s <- data.frame(rep = 1L, time = rep(c(0, 100), 4), class = f[rep(c(2, 5, 3, 1), each = 2)], value = 1)
+  g <- standSeriesPanels(list(series = s, cc = data.frame(time = 0, class = f[2], value = 1),
+                              period = c(0, 100), title = "t", ylab = "y"))
+  expect_identical(ggplot2::ggplot_build(g)$plot$scales$get_scales("colour")$get_limits(),
+                   c("Young", "Immature", "Mature", "Old"))
+})
+
+test_that("with ten or more age classes the forested share still follows them", {
+  ac <- paste0("C", sprintf("%02d", 1:12))
+  rank <- function(m) moduleFn(".standRank", new.env())(m, rep("stand", length(m)), ac)
+  r <- rank(c("biomassTg", paste0("age_", ac), "forested", "lead_X"))
+  expect_true(all(diff(r[1:13]) > 0)) ## biomass, then the 12 age classes in order
+  expect_true(rank("forested") > rank("age_C12"))
+  expect_true(rank("lead_X") > rank("forested"))
+})
+
+test_that("a missing study-area name is 'unit' everywhere the st event uses it", {
+  label <- function(name) stP(moduleFn(".studyAreaLabel", new.env()), .studyAreaName = name)(NULL)
+  expect_identical(label("SA"), "SA")
+  for (bad in list(NA_character_, "", NULL)) expect_identical(label(bad), "unit")
+})
+
+test_that("the st event with no study-area name writes under 'unit'", {
+  withr::local_package("SpaDES.core")
+  fx <- stDiskSim(c("st", "stability"), studyArea = NA_character_)
+  suppressWarnings(SpaDES.core::spades(
+    fx$sim, debug = FALSE,
+    events = list(NRV_summary = c("init", "postprocess_st", "postprocess_stability"))
+  ))
+  pp <- file.path(fx$root, "postprocess")
+  expect_true(file.exists(file.path(pp, "csv", "st", "unit", "st.csv")))
+  expect_true(file.exists(file.path(pp, "figures", "st", "unit", "stand_age.png")))
+  expect_false(dir.exists(file.path(pp, "csv", "st", "NA")))
+  stab <- utils::read.csv(file.path(pp, "csv", "stability", "all", "stability.csv"))
+  expect_setequal(stab$layer[stab$kind == "st"], "unit")
+})
+
+test_that("a stale comparison table goes when the table is wanted but there is nothing to write", {
+  withr::local_package("SpaDES.core")
+  sim <- stSim()
+  f <- file.path(dirname(SpaDES.core::outputPath(sim)), "postprocess", "csv", "lm", "L", "lm_nrvComparison.csv")
+  dir.create(dirname(f), recursive = TRUE)
+  fn <- stP(moduleFn(".writeNrvComparisonCSV", new.env()), postprocessEvents = c("lm", "st"))
+  environment(fn)$.wantNrvComparison <- function(sim) TRUE
+  for (empty in list(NULL, data.frame())) {
+    file.create(f)
+    fn(sim, empty, data.frame(poly = "E", metric = "a", mean = 1), "lm", "L")
+    expect_false(file.exists(f))
+  }
+  env <- data.frame(poly = "E", level = "class", metric = "a", time = 700, mean = 5, min = 2, max = 9)
+  file.create(f)
+  fn(sim, env, data.frame(poly = "E", level = "class", metric = "a", mean = 1), "lm", "L") ## no landscape rows
+  expect_false(file.exists(f))
+})
+
+test_that("recording a comparison returns nothing, for no rows as for some", {
+  m <- new.env()
+  m$nrvComparisons <- list()
+  rec <- moduleFn(".recordComparison", m)
+  cmp <- data.frame(poly = "E", metric = "ai", lo = 0, hi = 1, mid = 0.5, current = 0.5, position = "inside")
+  expect_null(rec("lm", cmp, "L"))
+  expect_null(rec("lm", cmp[0, ], "L"))
+  expect_named(m$nrvComparisons, "lm L")
+})
+
+test_that("init stops on an envelopeStyle that is neither ribbon nor lines", {
+  withr::local_package("SpaDES.core")
+  sim <- multiSimSt(params = list(envelopeStyle = "dots"))
+  expect_error(suppressWarnings(SpaDES.core::spades(sim, events = list(NRV_summary = "init"), debug = FALSE)),
+               "envelopeStyle must be")
 })

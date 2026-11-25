@@ -104,8 +104,8 @@ defineModule(sim, list(
                           "`\"ribbon\"` (default) draws the range of the replicates as a band around their mean;",
                           "`\"lines\"` draws one thin grey line per replicate under a bold line for their",
                           "median (`nrvtools::plot_nrv_envelope(type = \"lines\")`). The files keep their",
-                          "names (`<subregion> <metric>_ribbon.png`, `<metric>_ribbon_p<N>.png`). The replicate values are read once per",
-                          "reporting layer; a layer whose aggregates hold none gets ribbons, and a message",
+                          "names (`<subregion> <metric>_ribbon.png`, `<metric>_ribbon_p<N>.png`). The replicate",
+                          "values are read once per reporting layer; a layer whose aggregates hold none gets ribbons, and a message",
                           "says so. The boxplot figures and the per-class pages are the same in both styles.")),
     defineParameter("plotWorkers", "integer", 8L, 1L, NA,
                     paste("(mode = 'multi') hard cap on the number of local worker processes used to",
@@ -130,7 +130,7 @@ defineModule(sim, list(
                           "`csv/lm/<layer>/lm_nrvComparison.csv`, which say where the current condition falls",
                           "against the NRV range.",
                           "Not in the default: it runs only when asked for.",
-                          "'cc' for one figure per reporting layer and unit with every metric against the NRV",
+                          "'cc' for one figure per reporting layer and unit with the lm and st metrics against the NRV",
                           "(`figures/all/<layer>/<unit>.png`), with 'lm' or 'st' in the same run: it draws the",
                           "comparisons those events record. The stand-level rows go on the figure of every unit",
                           "named like the study area (`.studyAreaName`); with no such unit they have a figure of",
@@ -2549,7 +2549,7 @@ makeAnimation <- function(sim) {
   ## the stand-level series of the st event (kept in `mod`), when it ran in the same run
   st <- if ("st" %in% events && !is.null(mod$standSeries)) {
     d <- mod$standSeries
-    data.frame(kind = "st", layer = P(sim)$.studyAreaName, poly = P(sim)$.studyAreaName, level = "landscape",
+    data.frame(kind = "st", layer = .studyAreaLabel(sim), poly = .studyAreaLabel(sim), level = "landscape",
                class = NA_character_, metric = d$metric, rep = d$rep, time = d$time, value = d$value)
   }
   vtmRAT <- if ("pm" %in% events) terra::rast(mod$fvtm0)
@@ -2709,12 +2709,10 @@ makeAnimation <- function(sim) {
     unlink(f) ## a table of an earlier run with st is not left beside this run's csvs (no folder is made)
     return(invisible())
   }
+  if (!is.null(env) && "level" %in% names(env)) env <- env[env$level %in% "landscape", , drop = FALSE]
+  if (!is.null(cc) && "level" %in% names(cc)) cc <- cc[cc$level %in% "landscape", , drop = FALSE]
   if (is.null(env) || !nrow(env) || is.null(cc) || !nrow(cc)) {
-    return(invisible())
-  }
-  if ("level" %in% names(env)) env <- env[env$level %in% "landscape", , drop = FALSE]
-  if ("level" %in% names(cc)) cc <- cc[cc$level %in% "landscape", , drop = FALSE]
-  if (!nrow(env) || !nrow(cc)) {
+    unlink(f) ## nothing to write: an earlier run's table is not left either
     return(invisible())
   }
   .ppCsvDir(sim, kind, layer) ## creates the folder
@@ -2813,11 +2811,13 @@ makeAnimation <- function(sim) {
 }
 
 ## Order of the stand-level rows: biomass, the age classes young to old (`.ccAllAgeOrder()`; others after, by
-## name; `ageClasses` as for `.ccAllAgeOrder()`), the forested share, then the leading types. Landscape rows have one rank, so they keep their order.
+## name; `ageClasses` as for `.ccAllAgeOrder()`), the forested share, then the leading types. Landscape rows have
+## one rank, so they keep their order.
 .standRank <- function(metric, group, ageClasses = NULL) {
   ord <- .ccAllAgeOrder(ageClasses)
   age <- match(sub("^age_", "", metric), ord, nomatch = length(ord) + 1L)
-  ifelse(group != "stand", 0, ifelse(metric == "biomassTg", 1, ifelse(grepl("^age_", metric), 2 + age / 10,
+  ifelse(group != "stand", 0, ifelse(metric == "biomassTg", 1,
+         ifelse(grepl("^age_", metric), 2 + age / (length(ord) + 2),
          ifelse(metric == "forested", 3, 4))))
 }
 
@@ -2826,7 +2826,7 @@ makeAnimation <- function(sim) {
 ## nrvtools' name of the metric).
 .recordComparison <- function(kind, cmp, layer = "") {
   if (!nrow(cmp)) {
-    return(invisible(cmp)) ## nothing to draw; a zero-row data frame cannot take the columns below
+    return(invisible()) ## nothing to draw; a zero-row data frame cannot take the columns below
   }
   cmp$layer <- layer
   cmp$group <- unname(.ccAllGroups()[kind])
@@ -2848,7 +2848,8 @@ makeAnimation <- function(sim) {
   lim <- .ccAllLimits()
   cmp <- cmp[!(grepl("^lead_", cmp$metric) & cmp$current == 0 & cmp$hi == 0), , drop = FALSE]
   cmp$group <- factor(cmp$group, names(titles))
-  cmp <- cmp[order(cmp$group, .standRank(cmp$metric, cmp$group, ageClasses), ifelse(cmp$group == "stand", cmp$label, "")), , drop = FALSE]
+  cmp <- cmp[order(cmp$group, .standRank(cmp$metric, cmp$group, ageClasses),
+                   ifelse(cmp$group == "stand", cmp$label, "")), , drop = FALSE]
   cmp$xMid <- .nrvScale(cmp$mid, cmp$lo, cmp$hi)
   cmp$xCurrent <- .nrvScale(cmp$current, cmp$lo, cmp$hi)
   cmp$xPlot <- pmin(pmax(cmp$xCurrent, lim[1]), lim[2])
@@ -2875,9 +2876,11 @@ makeAnimation <- function(sim) {
     ggplot2::geom_segment(ggplot2::aes(x = 0, xend = 1, y = y, yend = y), colour = "grey75", linewidth = 3) +
     ggplot2::geom_point(ggplot2::aes(x = xMid, y = y, shape = midLabel), size = 3) +
     ggplot2::geom_point(ggplot2::aes(x = xPlot, y = y, colour = position), size = 2.5) +
-    ggplot2::geom_segment(data = clip, ggplot2::aes(x = xPlot - dir * 0.12, xend = xPlot, y = y, yend = y, colour = position),
+    ggplot2::geom_segment(data = clip,
+                          ggplot2::aes(x = xPlot - dir * 0.12, xend = xPlot, y = y, yend = y, colour = position),
                           arrow = ggplot2::arrow(length = ggplot2::unit(0.08, "in")), show.legend = FALSE) +
-    ggplot2::geom_text(data = clip, ggplot2::aes(x = xPlot - dir * 0.16, y = y, label = signif(current, 3), colour = position),
+    ggplot2::geom_text(data = clip,
+                       ggplot2::aes(x = xPlot - dir * 0.16, y = y, label = signif(current, 3), colour = position),
                        hjust = ifelse(dir > 0, 1, 0), size = 2.6, show.legend = FALSE) +
     ggplot2::geom_text(data = titles, ggplot2::aes(x = lim[1], y = y, label = title), hjust = 0,
                        fontface = "bold", size = 3.2) +
@@ -2893,10 +2896,10 @@ makeAnimation <- function(sim) {
                    panel.grid.minor = ggplot2::element_blank())
 }
 
-## `stem`, the file name proposed for each of the (distinct) names `x`, made distinct also by case (for a case-insensitive
-## disk). A name that is its own stem keeps it; each other name, in sorted order, gets its stem, or the stem with -2,
-## -3, ... when that is taken. So 'A_B' keeps A_B, 'A B' becomes A_B-2, and a name 'A_B-2' keeps its own. The same set
-## of names always gets the same file names. Returns them in the order of `x`, named by it.
+## `stem`, the file name proposed for each of the (distinct) names `x`, made distinct also by case (for a
+## case-insensitive disk). A name that is its own stem keeps it; each other name, in sorted order, gets its stem,
+## or the stem with -2, -3, ... when that is taken. So 'A_B' keeps A_B, 'A B' becomes A_B-2, and a name 'A_B-2'
+## keeps its own. The same set of names always gets the same file names. Returns them in the order of `x`, named by it.
 .distinctFileNames <- function(x, stem) {
   out <- character(length(x))
   used <- character(0)
@@ -3111,7 +3114,8 @@ stabilityCheck <- function(sim) {
 ## The snapshot files of each rep and time, one row each: rep (the rep folder), time, sam, vtm, pgm, cd.
 .snapshotTable <- function(sam, vtm, pgm, cd) {
   key <- function(f, col) {
-    d <- data.frame(rep = basename(dirname(f)), time = as.numeric(sub("^.*_year([0-9.]+)\\.[^.]*$", "\\1", basename(f))), f)
+    d <- data.frame(rep = basename(dirname(f)),
+                    time = as.numeric(sub("^.*_year([0-9.]+)\\.[^.]*$", "\\1", basename(f))), f)
     names(d)[3] <- col
     d
   }
@@ -3186,10 +3190,29 @@ stabilityCheck <- function(sim) {
     ggplot2::theme(legend.position = if (nClass > 1L || byPosition) "right" else "none")
 }
 
+## The largest value of each stand-level metric over the replicates' snapshots and the current condition: a type that
+## leads only today (0 in every replicate) still counts, and one above the threshold only today.
+.leadMax <- function(series, ccRows) tapply(c(series$value, ccRows$value), c(series$metric, ccRows$metric), max)
+
+## The class of each stand-level row as a factor in the order of `.standRank()` (biomass, the age classes young to
+## old, the forested share, the leading types by name), for the legend and colours of a figure.
+.standClassFactor <- function(metric, class, ageClasses = NULL) {
+  u <- !duplicated(class)
+  lev <- class[u][order(.standRank(metric[u], rep("stand", sum(u)), ageClasses), class[u])]
+  factor(class, levels = lev)
+}
+
+## The study-area name the st event files its output under and names its figures and series by: `.studyAreaName`, or
+## "unit" when there is none, as the cc event names a unit without one.
+.studyAreaLabel <- function(sim) {
+  sa <- P(sim)$.studyAreaName
+  if (length(sa) != 1L || is.na(sa) || !nzchar(sa)) "unit" else as.character(sa)
+}
+
 ## The data of one figure per leading type (`lead_*` metrics that lead somewhere), for `.standSeriesPanels()`: the
 ## replicates' series, the current condition with its `position` from `cmp` (.nrvComparison() rows), named by metric.
 .speciesFigData <- function(series, ccRows, cmp, period, sa, sppEquiv = NULL, sppEquivCol = "LandR") {
-  leadMax <- tapply(series$value, series$metric, max)
+  leadMax <- .leadMax(series, ccRows)
   m <- names(leadMax)[grepl("^lead_", names(leadMax)) & leadMax > 0]
   ccRows$position <- cmp$position[match(ccRows$metric, cmp$metric)]
   stats::setNames(lapply(m, function(x) {
@@ -3204,7 +3227,8 @@ stabilityCheck <- function(sim) {
 ## for `.currentConditionOverview()`.
 .standOverviewPages <- function(cmp, sppEquiv = NULL, sppEquivCol = "LandR", perPage = 24L, ageClasses = NULL) {
   cmp$panel <- .standLabel(cmp$metric, sppEquiv, sppEquivCol)
-  cmp <- cmp[order(.standRank(cmp$metric, rep("stand", nrow(cmp)), ageClasses), cmp$panel), , drop = FALSE] ## biomass, young to old, ...
+  ## biomass, the age classes young to old, the forested share, the leading types
+  cmp <- cmp[order(.standRank(cmp$metric, rep("stand", nrow(cmp)), ageClasses), cmp$panel), , drop = FALSE]
   .ccOverviewPages(cmp, perPage)
 }
 
@@ -3225,7 +3249,7 @@ stabilityCheck <- function(sim) {
 ## draws (but not this one's), so it clears its own folder here.
 standMetrics <- function(sim) {
   .clearFigDirs(sim, "st")
-  sa <- P(sim)$.studyAreaName
+  sa <- .studyAreaLabel(sim)
   padL <- ceiling(log10(P(sim)$simTimes[2] + 1))
   padStart <- paddedFloatToChar(P(sim)$simTimes[1], padL = padL)
   snaps <- .snapshotTable(mod$sam, mod$vtm, mod$pgm, mod$cd)
@@ -3250,6 +3274,10 @@ standMetrics <- function(sim) {
   ccRows$label <- .standLabel(ccRows$metric, sim$sppEquiv, P(sim)$sppEquivCol)
   series$class <- .standClass(series$metric, sim$sppEquiv, P(sim)$sppEquivCol)
   ccRows$class <- .standClass(ccRows$metric, sim$sppEquiv, P(sim)$sppEquivCol)
+  ## the legend lists the classes in the figure's order, not by name
+  lev <- .standClassFactor(c(series$metric, ccRows$metric), c(series$class, ccRows$class), P(sim)$ageClasses)
+  series$class <- factor(series$class, levels(lev))
+  ccRows$class <- factor(ccRows$class, levels(lev))
 
   mod$standSeries <- series ## for the stability check, when it runs in the same run
   env <- stats::aggregate(value ~ metric + time, series, function(v) c(mean = mean(v), min = min(v), max = max(v)))
@@ -3272,11 +3300,11 @@ standMetrics <- function(sim) {
     ggplot2::ggsave(f, .standSeriesPanels(data), width = 9, height = 5, units = "in")
     f
   }
-  groups <- .standGroups(tapply(series$value, series$metric, max), P(sim)$ageClasses)
+  groups <- .standGroups(.leadMax(series, ccRows), P(sim)$ageClasses)
   pngs <- character(0)
   for (g in names(groups)) {
     m <- groups[[g]]$m
-    if (!length(m)) next ## no leading type reaches 0.5% of the area: nothing to draw
+    if (!length(m)) next ## no leading type reaches 0.5% of the area: no stand_leading.png
     pngs <- c(pngs, save(
       list(series = series[series$metric %in% m, ], cc = ccRows[ccRows$metric %in% m, ],
            period = .nrvPeriod(sim), title = paste(sa, "-", groups[[g]]$what), ylab = groups[[g]]$ylab),
@@ -3295,11 +3323,8 @@ standMetrics <- function(sim) {
   for (pg in seq_along(pages)) {
     lay <- .ccOverviewLayout(length(unique(pages[[pg]]$panel)))
     f <- file.path(figDir, paste0("current_condition_overview_p", pg, ".png"))
-    ggplot2::ggsave(
-      f, .currentConditionOverview(pages[[pg]], title = .pageTitle(paste0("Current condition relative to the NRV: ", sa),
-                                                                   pg, length(pages))),
-      width = lay$width, height = lay$height
-    )
+    title <- .pageTitle(paste0("Current condition relative to the NRV: ", sa), pg, length(pages))
+    ggplot2::ggsave(f, .currentConditionOverview(pages[[pg]], title = title), width = lay$width, height = lay$height)
     pngs <- c(pngs, f)
   }
   invisible(registerOutputs(pngs, sim))

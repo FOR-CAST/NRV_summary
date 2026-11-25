@@ -115,11 +115,11 @@ test_that("layer folders keep the layer name, and none can leave figures/all/", 
   expect_length(unique(dirs), 5L)
 })
 
-test_that("a comparison with no rows is returned as it is", {
+test_that("a comparison with no rows is not recorded and nothing is returned", {
   m <- new.env()
   empty <- cmpRows()[0, c("poly", "metric", "lo", "hi", "mid", "current", "position")]
   expect_no_error(r <- moduleFn(".recordComparison", m)("lm", empty, "L1"))
-  expect_identical(r, empty)
+  expect_null(r)
   expect_length(m$nrvComparisons, 0L)
 })
 

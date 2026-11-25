@@ -562,3 +562,34 @@ test_that("lm envelopes draw as lines too: the subregion figures and the per-met
   expect_true(all(vapply(Filter(function(t) identical(t$type, "boxplot"), tasks),
                          function(t) is.null(t$reps), logical(1L)))) ## no slices built for the boxplots
 })
+
+test_that("an unfaceted lines figure and a second page of lines draw", {
+  withr::local_package("SpaDES.core")
+  mod <- new.env()
+  sim <- SpaDES.core::simInit(paths = testPaths)
+  polys <- LETTERS[1:13] ## 13 subregions: the per-metric figure takes two pages
+  refCode <- LandWebUtils::refCodeFor("lm", "FMA")
+  root <- moduleFn(".nrvAggRoot", mod)(sim, refCode)
+  unlink(root, recursive = TRUE)
+  one <- function(r) {
+    d <- expand.grid(time = c(700L, 800L), poly = polys, metric = "ai", stringsAsFactors = FALSE)
+    data.frame(level = "landscape", class = NA_character_, id = NA, metric = d$metric, value = r * d$time / 100,
+               rep = r, time = d$time, poly = d$poly)
+  }
+  for (r in 1:3) nrvtools::write_nrv_parquet(one(r), root, sprintf("rep%02d", r))
+  mod[[refCode]] <- moduleFn(".summarizeRepDataset", mod)(root, perReplicate = TRUE)
+
+  lines <- Filter(function(t) identical(t$type, "lines"), plotRun(sim, mod, "lines", events = "lm"))
+  files <- basename(taskFiles(lines))
+  one <- lines[[match("A ai_ribbon.png", files)]] ## one subregion, no facets
+  d <- ggplot2::layer_data(plotOfTask(one), 1)
+  expect_equal(nrow(d), 6L) ## 3 replicates x 2 years
+  expect_length(unique(d$group), 3L)
+  expect_true(all(c("ai_ribbon_p1.png", "ai_ribbon_p2.png") %in% files))
+  ## 13 subregions at 12 a page: two pages, each built and drawn from the replicates of all of them
+  expect_equal(lines[[match("ai_ribbon_p1.png", files)]]$page, 1L)
+  expect_equal(lines[[match("ai_ribbon_p2.png", files)]]$page, 2L)
+  for (f in c("ai_ribbon_p1.png", "ai_ribbon_p2.png")) {
+    expect_no_error(ggplot2::ggplot_build(plotOfTask(lines[[match(f, files)]])))
+  }
+})
