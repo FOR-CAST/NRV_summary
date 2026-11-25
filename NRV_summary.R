@@ -15,7 +15,7 @@ defineModule(sim, list(
   documentation = list("README.md", "NRV_summary.Rmd"), ## .md produced from .Rmd
   reqdPkgs = list(
     "arrow", "crayon", "data.table", "dplyr", "fs", "future", "future.apply", "future.callr",
-    "ggforce", "ggplot2", "gifski", "googledrive", "landscapemetrics", "qs2",
+    "ggforce", "ggplot2", "gifski", "googledrive", "grid", "landscapemetrics", "qs2",
     "RColorBrewer", "reproducible", "rlang", "sf", "terra", "tidyterra",
     ## 1.2.0.9054: leadingByPixelGroup() (the annual series, `recordAnnualSeries`); 1.2.0.9024: leadingSpeciesProp()
     "PredictiveEcology/LandR@development (>= 1.2.0.9054)",
@@ -121,6 +121,10 @@ defineModule(sim, list(
                           "`csv/lm/<layer>/lm_nrvComparison.csv`, which say where the current condition falls",
                           "against the NRV range.",
                           "Not in the default: it runs only when asked for.",
+                          "'cc' for one figure per reporting layer and unit with every metric against the NRV",
+                          "(`figures/all/<layer>/<unit>.png`), from the comparisons the lm and st events record;",
+                          "it also writes the NRV comparison tables. Not in the default: it runs only when asked",
+                          "for.",
                           "'autocorr' for the autocorrelation time of the annual landscape series",
                           "(`annualSeries.csv`, from `recordAnnualSeries = TRUE`), the correlation between",
                           "snapshots `summaryInterval` years apart and a recommended thinning interval;",
@@ -355,6 +359,12 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
           sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_autocorr", .last())
         }
 
+        ## opt-in; after the lm and st events, whose comparisons it draws, and before the plot event, so it
+        ## clears its own figure folder (see currentConditionAll())
+        if ("cc" %in% tolower(P(sim)$postprocessEvents)) {
+          sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_cc", .last())
+        }
+
         ## opt-in; after the plot event (which clears the figure folders), and after the metric events
         ## whose parquet datasets it reads
         if ("stability" %in% tolower(P(sim)$postprocessEvents)) {
@@ -436,6 +446,9 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
     },
     postprocess_st = {
       sim <- standMetrics(sim)
+    },
+    postprocess_cc = {
+      sim <- currentConditionAll(sim)
     },
     postprocess_stability = {
       sim <- stabilityCheck(sim)
@@ -524,6 +537,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
 
 InitMulti <- function(sim) {
   mod$ppFiles <- character(0) ## files the postprocess events write; see .registerPostprocessOutputs()
+  mod$nrvComparisons <- list() ## the NRV comparisons the lm and st events record; see .recordComparison()
   ## check for necessary output files -----------------------------------------------
   ## NOTE: don't load simLists -- slow and unreliable
   ## the saved files: those listed in `sim$outputsDF` (runs that register them, e.g. FireSense, in
@@ -877,7 +891,7 @@ InitMulti <- function(sim) {
 ## an unknown value would otherwise be skipped without a word, and 'fd' (forest degradation) was
 ## scheduled as a stub that stopped in browser() after the other summaries had run.
 .checkPostprocessEvents <- function(events) {
-  known <- c("am", "autocorr", "bc", "lm", "lw", "on", "pm", "st", "stability")
+  known <- c("am", "autocorr", "bc", "cc", "lm", "lw", "on", "pm", "st", "stability")
   bad <- setdiff(tolower(events), known)
   if (length(bad)) {
     stop(
@@ -921,7 +935,7 @@ InitMulti <- function(sim) {
 .clearFigDirs <- function(sim, events) {
   ## the figures/<kind> folders each postprocess event draws into
   kindsByEvent <- list(lm = "lm", pm = "pm", lw = c("boxplots", "histograms"), bc = "sspm",
-                       stability = "stability", autocorr = "autocorrelation", st = "st")
+                       stability = "stability", autocorr = "autocorrelation", st = "st", cc = "all")
   kinds <- unlist(kindsByEvent[intersect(events, names(kindsByEvent))], use.names = FALSE)
   for (d in file.path(.ppRoot(sim), "figures", kinds)) {
     unlink(list.files(d, full.names = TRUE, all.files = TRUE, no.. = TRUE), recursive = TRUE)
@@ -2598,9 +2612,9 @@ makeAnimation <- function(sim) {
   nrv
 }
 
-## TRUE when the NRV comparison tables are wanted: when the `st` event is. One place, so another event that asks
-## for them is added here. Without it the lm event writes the files it always did.
-.wantNrvComparison <- function(sim) "st" %in% tolower(P(sim)$postprocessEvents)
+## TRUE when the NRV comparison tables are wanted: when the `st` or the `cc` event is. One place, so another event
+## that asks for them is added here. Without them the lm event writes the files it always did.
+.wantNrvComparison <- function(sim) any(c("st", "cc") %in% tolower(P(sim)$postprocessEvents))
 
 ## Write `.nrvComparison()` of one analysis `kind` and reporting `layer` to csv/<kind>/<layer>/<kind>_nrvComparison.csv,
 ## when `.wantNrvComparison()`. `env` and `cc` are those the event kept in `mod`; of their rows, the landscape
@@ -2620,7 +2634,9 @@ makeAnimation <- function(sim) {
     return(invisible())
   }
   .ppCsvDir(sim, kind, layer) ## creates the folder
-  utils::write.csv(.nrvComparison(env, cc, .nrvPeriod(sim)), f, row.names = FALSE)
+  cmp <- .nrvComparison(env, cc, .nrvPeriod(sim))
+  utils::write.csv(cmp, f, row.names = FALSE)
+  .recordComparison(kind, cmp, layer)
   mod$ppFiles <- c(mod$ppFiles, f)
   invisible()
 }
@@ -2667,7 +2683,7 @@ makeAnimation <- function(sim) {
 .currentConditionOverview <- function(d, title = "Current condition relative to the NRV") {
   positionColour <- .positionColour()
   positionLabels <- .positionLabels()
-  midLabel <- "median of NRV-year means"
+  midLabel <- .nrvMidLabel()
   d$panel <- factor(d$panel, levels = unique(d$panel))
   lay <- .ccOverviewLayout(nlevels(d$panel))
   ggplot2::ggplot(d) +
@@ -2683,6 +2699,157 @@ makeAnimation <- function(sim) {
     ggplot2::theme(legend.position = "bottom", axis.text.y = ggplot2::element_blank(),
                    axis.ticks.y = ggplot2::element_blank(), panel.grid.major.y = ggplot2::element_blank(),
                    panel.grid.minor.y = ggplot2::element_blank())
+}
+
+## ---- every metric of every group on one figure (the opt-in `cc` event) --------------------------------------
+## The groups that write an nrvComparison table, by analysis kind: lm (landscape metrics) and st (stand-level
+## measures). pm and the other kinds have none, so they are not on the figure.
+.ccAllGroups <- function() c(lm = "landscape", st = "stand")
+.ccAllTitles <- function() c(landscape = "Landscape metrics", stand = "Stand-level measures")
+.ccAllXlab <- function() "position relative to the natural range (0 = lowest, 1 = highest simulated value)"
+.ccAllLimits <- function() c(-1, 2) ## a point further out than one range width beyond an end is drawn at the limit
+
+## The legend name of the tick at the NRV middle, on the overview and on the combined figure
+.nrvMidLabel <- function() "median of NRV-year means"
+
+## `x` on the scale where the NRV range [lo, hi] is 0 to 1. A range of one value (hi == lo) is given a width of
+## 1% of the value (at least 0.01) centred on it.
+.nrvScale <- function(x, lo, hi) {
+  width <- hi - lo
+  point <- width == 0
+  width <- ifelse(point, 0.01 * pmax(abs(hi), 1), width)
+  lo <- ifelse(point, lo - width / 2, lo)
+  (x - lo) / width
+}
+
+## The age classes from young to old; any other class comes after them, by name.
+.ccAllAgeOrder <- function() c("Young", "Immature", "Mature", "Old")
+
+## Order of the stand-level rows: biomass, the age classes young to old (`.ccAllAgeOrder()`; others after, by
+## name), the forested share, then the leading types. Landscape rows have one rank, so they keep their order.
+.standRank <- function(metric, group) {
+  ord <- .ccAllAgeOrder()
+  age <- match(sub("^age_", "", metric), ord, nomatch = length(ord) + 1L)
+  ifelse(group != "stand", 0, ifelse(metric == "biomassTg", 1, ifelse(grepl("^age_", metric), 2 + age / 10,
+         ifelse(metric == "forested", 3, 4))))
+}
+
+## The comparison of one analysis `kind` and reporting `layer` (`.nrvComparison()` rows), kept for the figure of
+## every group (`currentConditionAll()`) with its layer, its group and the metric's label (a `label` column, else
+## nrvtools' name of the metric).
+.recordComparison <- function(kind, cmp, layer = "") {
+  cmp$layer <- layer
+  cmp$group <- unname(.ccAllGroups()[kind])
+  if (is.null(cmp$label)) {
+    mets <- unique(cmp$metric)
+    lab <- stats::setNames(vapply(mets, .metricTitle, character(1), level = "landscape"), mets)
+    cmp$label <- unname(lab[cmp$metric])
+  }
+  mod$nrvComparisons[[paste(kind, layer)]] <- cmp
+  invisible()
+}
+
+## The rows of the figure from the recorded comparisons (`poly`, `metric`, `group`, `label`, `lo`, `hi`, `mid`,
+## `current`, `position`): a leading type that is 0 in the current condition and in the NRV is dropped; the NRV
+## mid and the current condition are rescaled (xMid, xCurrent); the current condition is drawn at xPlot, clipped
+## to `.ccAllLimits()` (clipped = TRUE); y is the row, from the top, with a row above each group for its title.
+.currentConditionAllData <- function(cmp) {
+  titles <- .ccAllTitles()
+  lim <- .ccAllLimits()
+  cmp <- cmp[!(grepl("^lead_", cmp$metric) & cmp$current == 0 & cmp$hi == 0), , drop = FALSE]
+  cmp$group <- factor(cmp$group, names(titles))
+  cmp <- cmp[order(cmp$group, .standRank(cmp$metric, cmp$group), ifelse(cmp$group == "stand", cmp$label, "")), , drop = FALSE]
+  cmp$xMid <- .nrvScale(cmp$mid, cmp$lo, cmp$hi)
+  cmp$xCurrent <- .nrvScale(cmp$current, cmp$lo, cmp$hi)
+  cmp$xPlot <- pmin(pmax(cmp$xCurrent, lim[1]), lim[2])
+  cmp$clipped <- cmp$xPlot != cmp$xCurrent
+  cmp$group <- as.character(cmp$group)
+  newGroup <- !duplicated(cmp$group)
+  cmp$y <- -(seq_len(nrow(cmp)) + cumsum(newGroup))
+  attr(cmp, "titles") <- data.frame(group = cmp$group[newGroup], y = cmp$y[newGroup] + 1,
+                                    title = unname(titles[cmp$group[newGroup]]))
+  cmp
+}
+
+## One panel, a row per metric: the grey bar is the NRV range (0 to 1), the black tick the NRV median, the dot the
+## current condition, coloured by its position. A current condition clipped at the limit has an arrow and its
+## value written beside it.
+.currentConditionAll <- function(data) {
+  titles <- attr(data, "titles")
+  lim <- .ccAllLimits()
+  positionColour <- .positionColour()
+  midLabel <- .nrvMidLabel()
+  clip <- data[data$clipped, , drop = FALSE]
+  dir <- sign(clip$xCurrent)
+  ggplot2::ggplot(data) +
+    ggplot2::geom_segment(ggplot2::aes(x = 0, xend = 1, y = y, yend = y), colour = "grey75", linewidth = 3) +
+    ggplot2::geom_point(ggplot2::aes(x = xMid, y = y, shape = midLabel), size = 3) +
+    ggplot2::geom_point(ggplot2::aes(x = xPlot, y = y, colour = position), size = 2.5) +
+    ggplot2::geom_segment(data = clip, ggplot2::aes(x = xPlot - dir * 0.12, xend = xPlot, y = y, yend = y, colour = position),
+                          arrow = grid::arrow(length = grid::unit(0.08, "in")), show.legend = FALSE) +
+    ggplot2::geom_text(data = clip, ggplot2::aes(x = xPlot - dir * 0.16, y = y, label = signif(current, 3), colour = position),
+                       hjust = ifelse(dir > 0, 1, 0), size = 2.6, show.legend = FALSE) +
+    ggplot2::geom_text(data = titles, ggplot2::aes(x = lim[1], y = y, label = title), hjust = 0,
+                       fontface = "bold", size = 3.2) +
+    ggplot2::geom_vline(xintercept = c(0, 1), linetype = "dotted", colour = "grey60") +
+    ggplot2::scale_y_continuous(breaks = data$y, labels = data$label, expand = ggplot2::expansion(add = 0.8)) +
+    ggplot2::scale_x_continuous(breaks = seq(lim[1], lim[2], 0.5), limits = lim + c(-0.1, 0.1)) +
+    ggplot2::scale_colour_manual(values = positionColour, breaks = names(positionColour),
+                                 labels = unname(.positionLabels()), drop = FALSE, name = "current condition") +
+    ggplot2::scale_shape_manual(values = stats::setNames(124, midLabel), name = NULL) +
+    ggplot2::labs(x = .ccAllXlab(), y = NULL, title = "Current condition relative to the NRV") +
+    ggplot2::theme_bw(base_size = 9) +
+    ggplot2::theme(legend.position = "bottom", panel.grid.major.y = ggplot2::element_blank(),
+                   panel.grid.minor = ggplot2::element_blank())
+}
+
+## File names (without extension) for `x`, a vector of unit or layer names, that cannot collide: characters that
+## are not letters, digits, . or - become _, which alone would give 'A B' and 'A_B' one name. When names collide
+## (also by case, for a case-insensitive disk), the units in sorted order get the name, then the name with -2, -3,
+## ... so the same set of units always gets the same names. Returns them in the order of `x`, named by it.
+.ccAllNames <- function(x) {
+  x <- as.character(x)
+  stem <- gsub("[^A-Za-z0-9.-]+", "_", x)
+  stem[!nzchar(stem)] <- "unit"
+  out <- character(length(x))
+  used <- character(0)
+  for (i in order(x, method = "radix")) {
+    cand <- stem[i]
+    k <- 1L
+    while (tolower(cand) %in% used) {
+      k <- k + 1L
+      cand <- paste0(stem[i], "-", k)
+    }
+    used <- c(used, tolower(cand))
+    out[i] <- cand
+  }
+  stats::setNames(out, x)
+}
+
+## The `postprocess_cc` event: one figure per reporting layer and unit with every group's NRV comparison recorded by
+## the lm and st events (`.recordComparison()`), figures/all/<layer>/<unit>.png, registered as outputs. It runs
+## before the plot event, which leaves this folder alone, so it clears it here.
+currentConditionAll <- function(sim) {
+  .clearFigDirs(sim, "cc")
+  cmp <- do.call(rbind, mod$nrvComparisons)
+  if (is.null(cmp) || !nrow(cmp)) {
+    message("NRV_summary: no NRV comparisons for the combined current-condition figure")
+    return(invisible(sim))
+  }
+  files <- character(0) ## drawn with ggsave() as the st figures are, whatever `.plots` says
+  layers <- .ccAllNames(unique(cmp$layer))
+  for (l in names(layers)) {
+    inLayer <- cmp[cmp$layer == l, , drop = FALSE]
+    units <- .ccAllNames(unique(inLayer$poly))
+    dir <- reproducible::checkPath(file.path(.ppRoot(sim), "figures", "all", layers[[l]]), create = TRUE)
+    for (p in names(units)) {
+      d <- .currentConditionAllData(inLayer[inLayer$poly == p, , drop = FALSE])
+      f <- file.path(dir, paste0(units[[p]], ".png"))
+      ggplot2::ggsave(f, .currentConditionAll(d), width = 11, height = 2 + 0.25 * nrow(d), units = "in")
+      files <- c(files, f)
+    }
+  }
+  invisible(registerOutputs(files, sim))
 }
 
 ## The overview figures of the `stability` event, for each lm reporting layer: pages of at most 24 panels in
@@ -2892,9 +3059,11 @@ stabilityCheck <- function(sim) {
 }
 
 ## The rows of `.nrvComparison()` of the stand-level metrics in pages of at most `perPage` panels (a list of data
-## frames, each with only its own panels), each panel named by `.standLabel()`; for `.currentConditionOverview()`.
+## frames, each with only its own panels), each panel named by `.standLabel()` and in the order of `.standRank()`;
+## for `.currentConditionOverview()`.
 .standOverviewPages <- function(cmp, sppEquiv = NULL, sppEquivCol = "LandR", perPage = 24L) {
   cmp$panel <- .standLabel(cmp$metric, sppEquiv, sppEquivCol)
+  cmp <- cmp[order(.standRank(cmp$metric, rep("stand", nrow(cmp))), cmp$panel), , drop = FALSE] ## biomass, young to old, ...
   .ccOverviewPages(cmp, perPage)
 }
 
@@ -2946,6 +3115,7 @@ standMetrics <- function(sim) {
   env <- data.frame(poly = sa, metric = env$metric, time = env$time, env$value)
   cmp <- .nrvComparison(env, data.frame(poly = sa, metric = ccRows$metric, mean = ccRows$value), .nrvPeriod(sim))
   cmp$label <- .standLabel(cmp$metric, sim$sppEquiv, P(sim)$sppEquivCol)
+  .recordComparison("st", cmp, sa)
 
   d <- .ppCsvDir(sim, "st", sa)
   fs <- file.path(d, c("st.csv", "st_CC.csv", "st_nrvComparison.csv"))
@@ -3007,8 +3177,8 @@ plotFun <- function(sim) {
   saPrefix <- if (nzchar(saName)) paste0(saName, " — ") else ""
 
   events <- tolower(P(sim)$postprocessEvents)
-  ## not the autocorrelation and stand-level figures: those events ran before this one and have drawn them
-  .clearFigDirs(sim, setdiff(events, c("autocorr", "st")))
+  ## not the autocorrelation, stand-level and combined figures: those events ran before this one and have drawn them
+  .clearFigDirs(sim, setdiff(events, c("autocorr", "st", "cc")))
   tasks <- list()
   ## the NRV years; shaded on the envelopes only when they are fewer than the summary years
   nrvPeriod <- .nrvPeriod(sim)
