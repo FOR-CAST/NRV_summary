@@ -117,8 +117,9 @@ The autocorrelation check is opt-in in two parts. In `mode = "single"`,
 `recordAnnualSeries = TRUE` adds an `annual_series` event for every simulated year (about a
 thousand events per replicate) that writes `annualSeries.csv` beside the replicate's other
 outputs, one row per year with no rasters made, for the reporting area (`studyAreaReporting`):
-`time`; `propYoung` and `propOld`, the proportions of the forest below the first and at or above
-the last of `ageClassCutOffs`; `meanStandAge`; `totalBiomassTg`, the total biomass in teragrams;
+`time`; `propYoung`, the proportion of the forest younger than the first cut-off above the
+youngest (40 years with the default `ageClassCutOffs`, `c(0, 40, 80, 120)`); `propOld`, the
+proportion at or above the last cut-off (120 years); `meanStandAge`; `totalBiomassTg`, the total biomass in teragrams;
 and a `lead_<species>` column, the proportion of the forest led by each species (`lead_Mixed`
 for mixed stands). It is `FALSE` by default.
 In `mode = "multi"`, `"autocorr"` in `postprocessEvents` (not in the default) runs the
@@ -141,8 +142,8 @@ is then not estimated, and the message says so).
 A replicate whose file does not cover the NRV years is left out with a warning, and a series
 that is missing from a replicate's file is left out with a message.
 `csv/autocorrelation/autocorrelation.csv` has one row per series: `phi`, `tau`, `ar1Misfit`;
-`r`, `rMin`, `rMax`, the correlation at lag `summaryInterval` (pooled, lowest and highest
-replicate); `effectiveSnapshots`; `tauGeyer`, Geyer's estimate, kept for comparison;
+`r`, `rMin`, `rMax`, the correlation at lag `summaryInterval` (pooled, and the lowest and highest
+of the replicates' own correlations); `effectiveSnapshots`; `tauGeyer`, Geyer's estimate, kept for comparison;
 `lagBelow0.1`, the first lag below 0.1; `label`; `recommendedThin`; `summaryInterval`;
 and `nSnapshots`, the summary times in the NRV years over all replicates.
 Without `annualSeries.csv` files the event says so, removes an earlier run's csv and figure, and
