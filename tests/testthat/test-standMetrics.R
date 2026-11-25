@@ -69,6 +69,17 @@ test_that("snapshot files pair by rep folder and year", {
   expect_identical(s$vtm[i], "o/rep2/vegTypeMap_year2120.tif")
 })
 
+test_that("snapshot files pair by rep folder and year, the parquet cohorts too", {
+  f <- function(kind) sprintf("o/rep%d/%s_year%04d.tif", c(2, 1, 1), kind, c(2120, 2020, 2120))
+  cd <- sprintf("o/rep%d/cohortData/year=%04d/part-0.parquet", c(1, 2, 1), c(2120, 2120, 2020))
+  s <- moduleFn(".snapshotTable", new.env())(f("standAgeMap"), f("vegTypeMap"), f("pixelGroupMap"), cd)
+  expect_identical(nrow(s), 3L)
+  i <- s$rep == "rep2"
+  expect_identical(s$time[i], 2120)
+  expect_identical(s$cd[i], "o/rep2/cohortData/year=2120/part-0.parquet")
+  expect_identical(s$vtm[i], "o/rep2/vegTypeMap_year2120.tif")
+})
+
 test_that("a type absent from a snapshot leads 0% of it, also one found only in the current condition", {
   rows <- data.frame(rep = c(1, 1, 2), time = c(0, 100, 0), metric = c("lead_A", "lead_B", "lead_A"), value = c(5, 7, 3))
   out <- moduleFn(".fillAbsentMetrics", new.env())(rows, "lead_C")
@@ -287,13 +298,23 @@ test_that("the st figures folder is cleared only when the st event runs", {
 })
 
 ## two reps of a 4 x 4 landscape (two species, two stand ages) at years 0 and 1000 on disk, and the sim of
-## the module over them with `events` as postprocessEvents; the reporting polygon is the whole landscape
-stDiskSim <- function(events, subregion = "all", studyArea = "SA", .env = parent.frame()) {
+## the module over them with `events` as postprocessEvents; the reporting polygon is the whole landscape.
+## `cohorts`: the format of the saved cohortData, "qs2", "parquet", "both" (the .qs2 files then hold other cohorts,
+## with ten times the biomass and the species swapped, so the results show which were read) or "stale" (the .qs2
+## files hold the cohorts and the parquet ones the others). `outputsDF`: the files are given as an outputsDF, which
+## with "stale" does not list the parquet ones. `reporting`: the species are reported by group (Spruce, Aspen).
+stDiskSim <- function(events, subregion = "all", studyArea = "SA", cohorts = "qs2", outputsDF = FALSE,
+                      reporting = FALSE, .env = parent.frame()) {
   root <- withr::local_tempdir(.local_envir = .env)
   crs <- "EPSG:3400"
   rtm <- terra::rast(nrows = 4, ncols = 4, xmin = 0, xmax = 1000, ymin = 0, ymax = 1000, crs = crs)
   cd <- data.table::data.table(pixelGroup = c(1L, 2L), speciesCode = factor(c("Pice_gla", "Popu_tre")),
                                age = c(50L, 150L), B = c(2000L, 4000L))
+  other <- data.table::copy(cd)
+  data.table::set(other, j = "B", value = other$B * 10L)
+  data.table::set(other, j = "speciesCode", value = rev(other$speciesCode))
+  qsCd <- if (cohorts == "both") other else cd
+  pqCd <- if (cohorts == "stale") other else cd
   for (r in 1:2) {
     d <- file.path(root, "mainSim", sprintf("rep%02d", r))
     dir.create(d, recursive = TRUE)
@@ -304,12 +325,20 @@ stDiskSim <- function(events, subregion = "all", studyArea = "SA", .env = parent
       terra::writeRaster(sam, file.path(d, sprintf("standAgeMap_year%04d.tif", y)))
       terra::writeRaster(vtm, file.path(d, sprintf("vegTypeMap_year%04d.tif", y)), datatype = "INT1U")
       terra::writeRaster(terra::rast(rtm, vals = rep(1:2, 8)), file.path(d, sprintf("pixelGroupMap_year%04d.tif", y)))
-      qs2::qs_save(data.table::copy(cd), file.path(d, sprintf("cohortData_year%04d.qs2", y)))
+      if (cohorts %in% c("qs2", "both", "stale")) {
+        qs2::qs_save(data.table::copy(qsCd), file.path(d, sprintf("cohortData_year%04d.qs2", y)))
+      }
+      if (cohorts %in% c("parquet", "both", "stale")) {
+        nrvtools::write_cohort_parquet(pqCd, file.path(d, "cohortData"), y)
+      }
     }
     file.create(file.path(d, "flammableMap_year1000.tif"))
   }
   se <- LandR::sppEquivalencies_CA
-  se <- se[se[["LandR"]] %in% c("Pice_gla", "Popu_tre"), ]
+  se <- data.table::copy(se[se[["LandR"]] %in% c("Pice_gla", "Popu_tre"), ])
+  data.table::set(se, j = "Group", value = ifelse(se[["LandR"]] == "Pice_gla", "Spruce", "Aspen"))
+  listed <- list.files(file.path(root, "mainSim"), recursive = TRUE, full.names = TRUE)
+  if (cohorts == "stale") listed <- listed[basename(listed) != "part-0.parquet"]
   poly <- terra::as.polygons(terra::ext(rtm), crs = crs)
   poly$Name <- subregion
   list(root = root, sim = SpaDES.core::simInit(
@@ -317,10 +346,11 @@ stDiskSim <- function(events, subregion = "all", studyArea = "SA", .env = parent
     params = list(NRV_summary = list(
       mode = "multi", reps = 1:2, summaryPeriod = c(0L, 1000L), summaryInterval = 1000L, timeSeriesTimes = 1:2,
       simTimes = c(0, 1000), postprocessEvents = events, .studyAreaName = studyArea, ageClassCutOffs = c(0L, 100L),
-      ageClasses = c("Young", "Old")
+      ageClasses = c("Young", "Old"), sppEquivColReporting = if (reporting) "Group" else NA_character_
     )),
     modules = moduleName,
-    objects = list(reportingPolygons = list(A = sf::st_as_sf(poly)), sppEquiv = se, studyAreaReporting = poly),
+    objects = c(list(reportingPolygons = list(A = sf::st_as_sf(poly)), sppEquiv = se, studyAreaReporting = poly),
+                if (outputsDF) list(outputsDF = data.frame(file = listed))),
     paths = list(modulePath = modulePath, outputPath = file.path(root, "mainSim"),
                  cachePath = file.path(root, "cache"), inputPath = file.path(root, "in"))
   ))
@@ -582,4 +612,38 @@ test_that("init stops on an envelopeStyle that is neither ribbon nor lines", {
   sim <- multiSimSt(params = list(envelopeStyle = "dots"))
   expect_error(suppressWarnings(SpaDES.core::spades(sim, events = list(NRV_summary = "init"), debug = FALSE)),
                "envelopeStyle must be")
+})
+
+test_that("st gives the same tables from .qs2 and parquet cohorts", {
+  withr::local_package("SpaDES.core")
+  tables <- function(cohorts) {
+    fx <- stDiskSim("st", cohorts = cohorts)
+    suppressWarnings(SpaDES.core::spades(fx$sim, debug = FALSE,
+                                         events = list(NRV_summary = c("init", "postprocess_st"))))
+    csv <- file.path(fx$root, "postprocess", "csv", "st", "SA")
+    lapply(c(st = "st.csv", cc = "st_CC.csv", cmp = "st_nrvComparison.csv"), function(f) readLines(file.path(csv, f)))
+  }
+  qs <- tables("qs2")
+  expect_true(all(lengths(qs) > 1L))
+  expect_identical(tables("parquet"), qs)
+  expect_identical(tables("both"), qs) ## the parquet cohorts are read, at year 0 as at the summary times
+})
+
+test_that("given an outputsDF, every site reads the .qs2 cohorts it lists, not stale parquet ones beside them", {
+  ## the reporting-group maps (year 0 and the summary years), the st snapshots and the current-condition row
+  withr::local_package("SpaDES.core")
+  run <- function(cohorts) {
+    fx <- stDiskSim("st", cohorts = cohorts, outputsDF = TRUE, reporting = TRUE)
+    suppressWarnings(SpaDES.core::spades(fx$sim, debug = FALSE,
+                                         events = list(NRV_summary = c("init", "postprocess_st"))))
+    csv <- file.path(fx$root, "postprocess", "csv", "st", "SA")
+    mapDir <- file.path(fx$root, "postprocess", "_reportingMaps")
+    maps <- sort(list.files(mapDir, "\\.tif$", recursive = TRUE))
+    list(st = readLines(file.path(csv, "st.csv")), cc = readLines(file.path(csv, "st_CC.csv")), maps = maps,
+         values = lapply(maps, function(f) terra::values(terra::rast(file.path(mapDir, f)), mat = FALSE)))
+  }
+  qs <- run("qs2")
+  expect_true(all(c(file.path("rep01", "vegTypeMap_year0000.tif"), file.path("rep02", "vegTypeMap_year1000.tif"))
+                  %in% qs$maps))
+  expect_identical(run("stale"), qs)
 })
