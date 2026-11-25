@@ -2,6 +2,8 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+* **`.autocorrSummary()` no longer guesses the number of snapshots per replicate (`2.0.0.9047`).** The default, from the length of the NRV period and `summaryInterval`, ignored that the summary grid starts at `summaryPeriod[1]`. `nSnapshotsPerRep` is now required; the `autocorr` event already passed the exact count, so its results are unchanged.
+
 * **Tests for the stop on a missing year-0 cohort file (`2.0.0.9047`).** The `st` event and the `bc` year-0 check stop with both formats' paths named when the current condition's cohort file is missing; this had no test. No change to the module.
 
 * **A cohort file is paired with its `pixelGroupMap` by replicate folder and year, however the year is padded (`2.0.0.9047`).** Mode 'multi' used to build the `.qs2` name from the `pixelGroupMap` name, so `cohortData_year700.qs2` beside `pixelGroupMap_year0700.tif` was not found and the `bc` and `st` events stopped. Now, among the cohort files `InitMulti()` found, the one of the same replicate folder and the same year (compared as a number) is used, by every site that chooses a cohort file. With both formats the parquet file still wins. Files padded as LandWeb's are (`cohortData_year0700.qs2`) are chosen as before.

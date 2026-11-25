@@ -3711,7 +3711,8 @@ saveAnnualSeries <- function(sim) {
 ## - `effectiveSnapshots`: the snapshots `interval` apart over all reps, times (1 - r) / (1 + r);
 ## - `tauGeyer`: Geyer's initial positive sequence estimate, for comparison only (noisy for short series);
 ## - `lagBelow0.1`: first lag of the pooled ACF below 0.1.
-## `nSnapshotsPerRep`: the summary times in the NRV years of each rep (default: from `period` and `interval`).
+## `nSnapshotsPerRep`: the summary times in the NRV years of each rep, `length(.nrvYears())` (required: the summary
+## grid starts at `summaryPeriod[1]`, which `period` and `interval` do not give).
 ## `thin` is ceiling(max tau); `limiting` the series with that tau (both NA when no series has a tau); `absent`
 ## the series not in every replicate's table (left out) and `undefined` those with no tau: `constant`, or
 ## `tooFew` (fewer than 3 values in some replicate's NRV years). `acf` holds
@@ -3719,8 +3720,7 @@ saveAnnualSeries <- function(sim) {
 ## `fitted` the phi^lag curves. No lag reaches beyond the shortest rep's NRV years less one (there is no
 ## correlation to measure past that): with `nrvWindow` below 1 the NRV can be fewer years than `maxLag`. A lag
 ## that is cut away is NA (`r` when `interval` is cut), and the other columns use the lags that remain.
-.autocorrSummary <- function(tables, period, maxLag, interval,
-                             nSnapshotsPerRep = floor(diff(range(period)) / interval) + 1) {
+.autocorrSummary <- function(tables, period, maxLag, interval, nSnapshotsPerRep) {
   series <- setdiff(Reduce(intersect, lapply(tables, names)), "time")
   absent <- setdiff(Reduce(union, lapply(tables, names)), c(series, "time"))
   inPeriod <- lapply(tables, function(d) d[d$time >= period[1L] & d$time <= period[2L], , drop = FALSE])
