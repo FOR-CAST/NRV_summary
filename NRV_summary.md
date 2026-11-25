@@ -1,6 +1,6 @@
 ---
 title: "NRV_summary Manual"
-subtitle: "v.2.0.0.9046"
+subtitle: "v.2.0.0.9047"
 date: "Last updated: 2026-11-25"
 output:
   bookdown::html_document2:
@@ -555,27 +555,27 @@ Table \@ref(tab:eventObjects-NRV-summary) lists, for each object, the code that 
 <tr>
    <td style="text-align:left;padding-left: 2em;" indentlevel="1"> sppEquiv </td>
    <td style="text-align:left;">  </td>
-   <td style="text-align:left;"> init: .noTreeSpecies(), init: InitMulti(), map_generators (single), save_single (single) </td>
+   <td style="text-align:left;"> init: .noTreeSpecies(), init: InitMulti() (multi), map_generators (single), save_single (single) </td>
   </tr>
   <tr>
    <td style="text-align:left;padding-left: 2em;" indentlevel="1"> LandTypeCC_reporting </td>
    <td style="text-align:left;">  </td>
-   <td style="text-align:left;"> init: InitMulti() </td>
+   <td style="text-align:left;"> init: InitMulti() (multi) </td>
   </tr>
   <tr>
    <td style="text-align:left;padding-left: 2em;" indentlevel="1"> outputsDF </td>
    <td style="text-align:left;">  </td>
-   <td style="text-align:left;"> init: InitMulti() </td>
+   <td style="text-align:left;"> init: InitMulti() (multi) </td>
   </tr>
   <tr>
    <td style="text-align:left;padding-left: 2em;" indentlevel="1"> reportingPolygons </td>
    <td style="text-align:left;">  </td>
-   <td style="text-align:left;"> init: InitMulti(), init (own code), plot (multi), postprocess_lm (multi), postprocess_pm (multi) </td>
+   <td style="text-align:left;"> init: InitMulti() (multi), init (own code), plot (multi), postprocess_lm (multi), postprocess_pm (multi) </td>
   </tr>
   <tr>
    <td style="text-align:left;padding-left: 2em;" indentlevel="1"> sppColorVectReporting </td>
    <td style="text-align:left;">  </td>
-   <td style="text-align:left;"> init: InitMulti() </td>
+   <td style="text-align:left;"> init: InitMulti() (multi) </td>
   </tr>
   <tr>
    <td style="text-align:left;padding-left: 2em;" indentlevel="1"> cohortData </td>
@@ -614,13 +614,13 @@ Table \@ref(tab:eventObjects-NRV-summary) lists, for each object, the code that 
   </tr>
 </tbody>
 <tfoot><tr><td style="padding: 0; " colspan="100%">
-<sup></sup> Not shown, off with the default parameters: postprocess_lw, postprocess_bc, postprocess_on, postprocess_st, postprocess_cc, postprocess_stability, postprocess_autocorr, annual_series, animation. Not shown, touching no object in the metadata: .inputObjects, init: .checkNrvWindow(), init: .checkEnvelopeStyle(), init: .checkCohortDataFormat(), init: .nrvYears(), init: .warnStabilityWindow(), init: .checkPostprocessEvents(), postprocess.</td></tr></tfoot>
+<sup></sup> Not shown, off with the default parameters: .warnStabilityWindow(), postprocess_lw, postprocess_bc, postprocess_on, postprocess_st, postprocess_cc, postprocess_stability, postprocess_autocorr, annual_series, animation. Not shown, touching no object in the metadata: .inputObjects, init: .checkNrvWindow(), init: .checkEnvelopeStyle(), init: .checkCohortDataFormat(), init: .nrvYears(), init: .checkPostprocessEvents(), postprocess.</td></tr></tfoot>
 </table>
 
 
 #### .noTreeSpecies() {-}
 
-init event, step 1 of 8
+init event, step 1 of 5
 
 ![](figures/NRV_summary_io_init_.noTreeSpecies.png){width=100%}
 
@@ -628,7 +628,7 @@ init event, step 1 of 8
 
 #### InitMulti() {-}
 
-init event, step 8 of 8
+mode = "multi": init event, step 7 of 7
 
 ![](figures/NRV_summary_io_init_InitMulti.png){width=100%}
 
