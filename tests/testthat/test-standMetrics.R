@@ -304,7 +304,7 @@ test_that("the st figures folder is cleared only when the st event runs", {
 ## files hold the cohorts and the parquet ones the others). `outputsDF`: the files are given as an outputsDF, which
 ## with "stale" does not list the parquet ones. `reporting`: the species are reported by group (Spruce, Aspen).
 stDiskSim <- function(events, subregion = "all", studyArea = "SA", cohorts = "qs2", outputsDF = FALSE,
-                      reporting = FALSE, .env = parent.frame()) {
+                      reporting = FALSE, summaryPeriod = c(0L, 1000L), .env = parent.frame()) {
   root <- withr::local_tempdir(.local_envir = .env)
   crs <- "EPSG:3400"
   rtm <- terra::rast(nrows = 4, ncols = 4, xmin = 0, xmax = 1000, ymin = 0, ymax = 1000, crs = crs)
@@ -344,7 +344,7 @@ stDiskSim <- function(events, subregion = "all", studyArea = "SA", cohorts = "qs
   list(root = root, sim = SpaDES.core::simInit(
     times = list(start = 0, end = 1000),
     params = list(NRV_summary = list(
-      mode = "multi", reps = 1:2, summaryPeriod = c(0L, 1000L), summaryInterval = 1000L, timeSeriesTimes = 1:2,
+      mode = "multi", reps = 1:2, summaryPeriod = summaryPeriod, summaryInterval = 1000L, timeSeriesTimes = 1:2,
       simTimes = c(0, 1000), postprocessEvents = events, .studyAreaName = studyArea, ageClassCutOffs = c(0L, 100L),
       ageClasses = c("Young", "Old"), sppEquivColReporting = if (reporting) "Group" else NA_character_
     )),
@@ -646,4 +646,38 @@ test_that("given an outputsDF, every site reads the .qs2 cohorts it lists, not s
   expect_true(all(c(file.path("rep01", "vegTypeMap_year0000.tif"), file.path("rep02", "vegTypeMap_year1000.tif"))
                   %in% qs$maps))
   expect_identical(run("stale"), qs)
+})
+
+test_that("st stops, naming both formats' paths, when the year-0 cohort file is missing", {
+  ## summaryPeriod 1000 only: InitMulti() does not check year 0, so the event is the one to stop
+  withr::local_package("SpaDES.core")
+  fx <- stDiskSim("st", summaryPeriod = c(1000L, 1000L))
+  rep1 <- file.path(fx$root, "mainSim", "rep01")
+  expect_true(file.remove(file.path(rep1, "cohortData_year0000.qs2")))
+  expect_error(
+    suppressWarnings(SpaDES.core::spades(fx$sim, debug = FALSE, events = list(NRV_summary = c("init", "postprocess_st")))),
+    paste0("cannot take the stand-level measures of the current condition; missing:\n",
+           file.path(rep1, "cohortData_year0000.qs2"), " or ",
+           file.path(rep1, "cohortData", "year=0000", "part-0.parquet")),
+    fixed = TRUE
+  )
+})
+
+test_that("the bc year-0 check stops, naming both formats' paths, when the year-0 cohort file is missing", {
+  ## the bc event needs the BC seral inputs (landcover and seral tables), so the two steps it takes are run on their
+  ## own: .repYear0Files() chooses the file and .checkCohortFile() stops
+  year0 <- moduleFn(".repYear0Files", new.env())
+  check <- moduleFn(".checkCohortFile", new.env())
+  rep1 <- file.path(withr::local_tempdir(), "rep01")
+  dir.create(rep1)
+  f <- year0(rep1, file.path(rep1, "cohortData_year0700.qs2"))$cohortData
+  expect_error(
+    check(f, "cannot make the year-0 seral stage map"),
+    paste0("cannot make the year-0 seral stage map; missing:\n", file.path(rep1, "cohortData_year0000.qs2"), " or ",
+           file.path(rep1, "cohortData", "year=0000", "part-0.parquet")),
+    fixed = TRUE
+  )
+  ## and it does not stop when either format is there
+  file.create(file.path(rep1, "cohortData_year0000.qs2"))
+  expect_identical(check(year0(rep1)$cohortData, "x"), file.path(rep1, "cohortData_year0000.qs2"))
 })
