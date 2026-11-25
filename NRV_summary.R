@@ -557,8 +557,9 @@ InitMulti <- function(sim) {
   ## folders `rep1`, `rep2`, ...), else those found under `outputPath(sim)` (`rep01`, `rep02`, ...)
   useOutputs <- .hasOutputsDF(sim)
   files <- .discoverOutputFiles(sim)
-  ## dirnamesFromSet() answers `rep<reps>` for no files at all; with none, no replicate was found
-  mod$allReps <- if (length(files) > 0L) dirnamesFromSet(files, P(sim)$reps) else character(0)
+  ## dirnamesFromSet() answers `rep<reps>` for no files at all; with none, no replicate was found.
+  ## unname(): SpaDES.core may name the folders by replicate id (PR #543); the values are the same
+  mod$allReps <- if (length(files) > 0L) unname(dirnamesFromSet(files, P(sim)$reps)) else character(0)
   if (length(mod$allReps) < length(P(sim)$reps)) {
     stop(
       "found the files of ", length(mod$allReps), " replicate(s) ",
@@ -571,7 +572,7 @@ InitMulti <- function(sim) {
   ## where the replicates' folders are: wherever they were saved when listed in `outputsDF`
   ## (in multi mode `outputPath(sim)` is the summary folder, not a replicate's), else under `outputPath(sim)`
   repDirs <- if (useOutputs) {
-    dirnamesFromSet(files, P(sim)$reps, leafOnly = FALSE)
+    unname(dirnamesFromSet(files, P(sim)$reps, leafOnly = FALSE))
   } else {
     file.path(outputPath(sim), allReps)
   }

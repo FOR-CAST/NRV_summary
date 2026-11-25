@@ -253,6 +253,34 @@ test_that("files listed out of order are paired by replicate and year", {
   expect_identical(yearsByRep(m$cd), yearsByRep(m$pgm))
 })
 
+test_that("replicate folders stay unnamed when dirnamesFromSet() names them", {
+  ## SpaDES.core's PR #543 names the result by replicate id ("rep01" named "1"); the values are the same
+  real <- SpaDES.core::dirnamesFromSet
+  calls <- 0L
+  testthat::local_mocked_bindings(
+    dirnamesFromSet = function(...) {
+      calls <<- calls + 1L
+      out <- real(...)
+      stats::setNames(out, seq_along(out))
+    },
+    .package = "SpaDES.core"
+  )
+  root <- withr::local_tempdir()
+  out <- file.path(root, "mainSim")
+  touchFiles(unlist(lapply(file.path(out, sprintf("rep%02d", 1:2)), repFiles)))
+  m <- modOf(runInit(initMultiSim(root, reps = 1:2)))
+  expect_identical(m$allReps, c("rep01", "rep02"))
+  expect_identical(m$rep1Dir, file.path(out, "rep01"))
+
+  root2 <- withr::local_tempdir()
+  files <- unlist(lapply(file.path(root2, c("rep1", "rep2")), repFiles))
+  touchFiles(files)
+  m2 <- modOf(runInit(initMultiSim(root2, reps = 1:2, outputsFiles = files)))
+  expect_identical(m2$allReps, c("rep1", "rep2"))
+  expect_identical(m2$rep1Dir, file.path(root2, "rep1"))
+  expect_identical(calls, 3L) ## the mock was used: once on disk, twice with outputsDF
+})
+
 test_that("bare-number replicate folders (1/, 2/) are found through outputsDF", {
   root <- withr::local_tempdir()
   files <- unlist(lapply(file.path(root, c("1", "2")), repFiles))
