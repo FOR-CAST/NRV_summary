@@ -40,7 +40,8 @@ defineModule(sim, list(
     ## metric envelopes are built from and returns exact quartiles; nrv_metric_info() names the
     ## axes; the plot functions take captions.
     ## 0.4.0, not 0.3.4.9003: plot_nrv_envelope(type = "lines", reps_df =), for `envelopeStyle = "lines"`.
-    "FOR-CAST/nrvtools (>= 0.4.0)",
+    ## 0.5.0, not 0.4.0: read_cohort_data() reads the cohortData of either format, .qs2 or parquet (#1).
+    "FOR-CAST/nrvtools (>= 0.5.0)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9016)",
     ## 3.2.1.9057: InitMulti calls dirnamesFromSet(..., leafOnly = FALSE) and resolveSimYears();
     ## it relies on dirnamesFromSet() keeping zero-padded folders (rep01) as found (from 3.2.1.9038)
@@ -620,8 +621,9 @@ InitMulti <- function(sim) {
     mod$ftsf0 <- .maskCC(mod$ftsf0, urbanMask, ccDir)
   }
 
-  ## the name and type filters read the file name, not the folders above it
-  cdpgm <- files[grepl("cohortData|pixelGroupMap", basename(files))]
+  ## the name and type filters read the file name, not the folders above it; a cohort part file
+  ## (`<rep>/cohortData/year=<YYYY>/part-0.parquet`) is known by its two folders as well
+  cdpgm <- files[.isCohortQs2(files) | .isCohortPart(files) | grepl("pixelGroupMap", basename(files))]
   cdpgm <- cdpgm[.inReps(cdpgm, allReps) & .inYears(cdpgm, mod$analysesOutputsTimes)]
   allouts <- files[grepl("vegType|standAge", basename(files))]
   allouts <- allouts[.inReps(allouts, allReps)]
@@ -638,7 +640,9 @@ InitMulti <- function(sim) {
   dirsExpected <- repDirs
   filesExpected <- as.character(sapply(dirsExpected, function(d) {
     c(
-      file.path(d, sprintf("cohortData_year%04d.qs2", mod$analysesOutputsTimes)),
+      ## either format: the part file when one was found, else the .qs2 (see .cohortFile())
+      .cohortFile(d, mod$analysesOutputsTimes, sprintf("cohortData_year%04d.qs2", mod$analysesOutputsTimes),
+                  files = filesUserHas),
       file.path(d, sprintf("pixelGroupMap_year%04d.tif", mod$analysesOutputsTimes)),
       file.path(d, sprintf("standAgeMap_year%04d.tif", mod$analysesOutputsTimes)),
       file.path(d, sprintf("vegTypeMap_year%04d.tif", mod$analysesOutputsTimes))
@@ -649,6 +653,9 @@ InitMulti <- function(sim) {
 
   if (!all(filesNeeded$exists)) {
     missing <- filesNeeded[filesNeeded$exists == FALSE, ]$file
+    ## a replicate-year's cohorts may be in either format: name both
+    isCd <- .isCohortQs2(missing)
+    missing[isCd] <- paste(missing[isCd], "or", .cohortPartPath(dirname(missing[isCd]), .fileYear(missing[isCd])))
     stop(
       sum(!filesNeeded$exists),
       " simulation files appear to be missing:\n",
@@ -674,9 +681,12 @@ InitMulti <- function(sim) {
   mod$vtmTimeSeries <- gsub(".*standAgeMap.*", NA, mod$allouts)
   mod$vtmTimeSeries <- mod$vtmTimeSeries[.inYears(mod$vtmTimeSeries, P(sim)$timeSeriesTimes)]
 
-  ## cohortData and pixelGroupMap files
-  mod$cd <- grep("cohortData", cdpgm, value = TRUE)
+  ## cohortData and pixelGroupMap files: for each pixelGroupMap, in its place, the cohort file of the same replicate
+  ## and year (the BC seral maps pair them by position), the part file when both formats were found
   mod$pgm <- grep("pixelGroupMap", cdpgm, value = TRUE)
+  cd <- c(cdpgm[.isCohortPart(cdpgm)], cdpgm[.isCohortQs2(cdpgm)])
+  repYear <- function(f) paste(.repFolder(f), .fileYear(f))
+  mod$cd <- cd[match(repYear(mod$pgm), repYear(cd))]
 
   ## Reporting groups: the lm/lw/pm analyses read maps of the groups rather than of the simulated
   ## species, rebuilt from the saved cohorts (see .buildReportingVegTypeMaps()). Only the maps they
@@ -854,12 +864,13 @@ InitMulti <- function(sim) {
 }
 
 ## Rebuild species-level vegetation-type maps (`<dir>/<rep>/vegTypeMap_year<YYYY>.tif`) by reporting
-## group, from the cohortData and pixelGroupMap saved beside each. Written to
+## group, from the cohortData (either format; see .cohortFile()) and pixelGroupMap saved beside each. Written to
 ## `<outRoot>/<rep>/vegTypeMap_year<YYYY>.tif`, keeping the `<rep>/<prefix>_year<YYYY>` tail nrvtools
 ## labels its results from; `outRoot` is cleared first. Returns the new paths in the order of `vtm`.
 .buildReportingVegTypeMaps <- function(vtm, outRoot, grp, colors, vegLeadingProportion, mixedType) {
   stopifnot(all(grepl("^vegTypeMap_year[0-9]+\\.tif$", basename(vtm))))
-  cd <- file.path(dirname(vtm), sub("^vegTypeMap(_year[0-9]+)\\.tif$", "cohortData\\1.qs2", basename(vtm)))
+  cd <- .cohortFile(dirname(vtm), .fileYear(vtm),
+                    sub("^vegTypeMap(_year[0-9]+)\\.tif$", "cohortData\\1.qs2", basename(vtm)))
   pgm <- file.path(dirname(vtm), sub("^vegTypeMap", "pixelGroupMap", basename(vtm)))
   miss <- c(cd, pgm)[!file.exists(c(cd, pgm))]
   if (length(miss)) {
@@ -869,7 +880,7 @@ InitMulti <- function(sim) {
   out <- file.path(outRoot, basename(dirname(vtm)), basename(vtm))
   unlink(outRoot, recursive = TRUE)
   for (i in seq_along(vtm)) {
-    m <- .reportingVegTypeMap(qs2::qs_read(cd[i]), terra::rast(pgm[i]), grp, colors,
+    m <- .reportingVegTypeMap(nrvtools::read_cohort_data(cd[i]), terra::rast(pgm[i]), grp, colors,
                               vegLeadingProportion, mixedType)
     dir.create(dirname(out[i]), recursive = TRUE, showWarnings = FALSE)
     terra::writeRaster(m, out[i], datatype = "INT1U", overwrite = TRUE) ## a few classes; keeps the colour table
@@ -969,7 +980,7 @@ InitMulti <- function(sim) {
 
 ## The saved files of the replicates: those in `sim$outputsDF$file` (each once, in a fixed order, as
 ## a file saved twice is listed twice), or, when there is none, those one folder down under
-## `outputPath(sim)`.
+## `outputPath(sim)`, followed by the cohort part files of its folders (see .cohortPartFiles()).
 .discoverOutputFiles <- function(sim) {
   if (.hasOutputsDF(sim)) {
     if (!"file" %in% names(sim$outputsDF)) {
@@ -977,16 +988,73 @@ InitMulti <- function(sim) {
     }
     sort(unique(as.character(sim$outputsDF$file)))
   } else {
-    as.character(fs::dir_ls(outputPath(sim), recurse = 1, type = "file"))
+    c(as.character(fs::dir_ls(outputPath(sim), recurse = 1, type = "file")), .cohortPartFiles(outputPath(sim)))
   }
 }
 
-## The year of each saved file, from the `_year<digits>.<ext>` of its name (NA for a name without one).
-## Only the file name is read, so digits in a folder name are never taken for a year.
+## The cohort part files `<root>/<rep>/cohortData/year=<YYYY>/part-0.parquet` of each folder `<rep>` in `root`.
+## Only those cohortData folders are listed further down: a replicate's other folders (figures, the datasets of
+## other modules) can hold files of the same names.
+.cohortPartFiles <- function(root) {
+  cdDirs <- file.path(fs::dir_ls(root, type = "directory"), "cohortData")
+  cdDirs <- cdDirs[dir.exists(cdDirs)]
+  if (!length(cdDirs)) {
+    return(character(0))
+  }
+  parts <- as.character(fs::dir_ls(cdDirs, recurse = 1, type = "file"))
+  parts[.isCohortPart(parts)]
+}
+
+## The year of each saved file, from the `_year<digits>.<ext>` of its name (NA for a name without one), or,
+## for a file named `part-0.parquet` in a folder named `year=<digits>` (a cohort part file), from that folder.
+## No other folder is read, so digits in a folder name are never taken for a year.
 .fileYear <- function(files) {
-  b <- basename(as.character(files))
+  files <- as.character(files)
+  b <- basename(files)
   pat <- "^.*_year([0-9]+)\\.[^.]*$"
-  as.integer(ifelse(grepl(pat, b), sub(pat, "\\1", b), NA))
+  yr <- as.integer(ifelse(grepl(pat, b), sub(pat, "\\1", b), NA))
+  part <- b %in% "part-0.parquet" & grepl("^year=[0-9]+$", basename(dirname(files)))
+  yr[part] <- as.integer(sub("^year=", "", basename(dirname(files[part]))))
+  yr
+}
+
+## TRUE for each cohortData file of the .qs2 layout, `cohortData_year<digits>.qs2` (runs before 2.0.0.9046)
+.isCohortQs2 <- function(files) {
+  grepl("^cohortData_year[0-9]+\\.qs2$", basename(as.character(files)))
+}
+
+## TRUE for each cohortData part file of the parquet layout, `cohortData/year=<digits>/part-0.parquet`
+## (nrvtools::write_cohort_parquet()), by its name and its two folders
+.isCohortPart <- function(files) {
+  files <- as.character(files)
+  basename(files) %in% "part-0.parquet" & grepl("^year=[0-9]+$", basename(dirname(files))) &
+    basename(dirname(dirname(files))) %in% "cohortData"
+}
+
+## The replicate folder of each saved file: the folder it is in, or, for a cohort part file, the folder that
+## holds its cohortData folder
+.repFolder <- function(files) {
+  files <- as.character(files)
+  out <- dirname(files)
+  part <- .isCohortPart(files)
+  out[part] <- dirname(dirname(out[part]))
+  out
+}
+
+## The cohortData part file of replicate folder `repDir` and year `year`:
+## `<repDir>/cohortData/year=<YYYY>/part-0.parquet`, as nrvtools::write_cohort_parquet() names it
+.cohortPartPath <- function(repDir, year) {
+  file.path(repDir, "cohortData", sprintf("year=%04d", as.integer(year)), "part-0.parquet")
+}
+
+## The cohortData file of replicate folder `repDir` and year `year`, in either format: the part file (see
+## .cohortPartPath()) when there is one, else `<repDir>/<qs2>`, the .qs2 file of that year named as the caller
+## names it. With both, the part file. With `files` (the files InitMulti() found), a part file counts only if it
+## is one of them.
+.cohortFile <- function(repDir, year, qs2, files = NULL) {
+  pq <- .cohortPartPath(repDir, year)
+  found <- file.exists(pq) & (is.null(files) | pq %in% files)
+  ifelse(found, pq, file.path(repDir, qs2))
 }
 
 ## Stops when a map holds a code of 255 or more: it could not be saved as INT1U, whose NA value is 255.
@@ -1021,10 +1089,10 @@ InitMulti <- function(sim) {
   files[startsWith(files, paste0(sub("/+$", "", rep1Dir), "/"))]
 }
 
-## the year-0 cohortData and pixelGroupMap paths in the first replicate's folder.
+## the year-0 cohortData (either format; see .cohortFile()) and pixelGroupMap paths in the first replicate's folder.
 .repYear0Files <- function(rep1Dir) {
   list(
-    cohortData = file.path(rep1Dir, "cohortData_year0000.qs2"),
+    cohortData = .cohortFile(rep1Dir, 0, "cohortData_year0000.qs2"),
     pixelGroupMap = file.path(rep1Dir, "pixelGroupMap_year0000.tif")
   )
 }
@@ -3112,11 +3180,15 @@ stabilityCheck <- function(sim) {
   lv[[2]][match(terra::values(vtm, mat = FALSE), lv[[1]])]
 }
 
-## The snapshot files of each rep and time, one row each: rep (the rep folder), time, sam, vtm, pgm, cd.
+## The snapshot files of each rep and time, one row each: rep (the rep folder), time, sam, vtm, pgm, cd. A cohort
+## part file is keyed by its folders (see .repFolder(), .fileYear()), every other file by its own name and folder.
 .snapshotTable <- function(sam, vtm, pgm, cd) {
   key <- function(f, col) {
-    d <- data.frame(rep = basename(dirname(f)),
-                    time = as.numeric(sub("^.*_year([0-9.]+)\\.[^.]*$", "\\1", basename(f))), f)
+    part <- .isCohortPart(f)
+    time <- rep(NA_real_, length(f))
+    time[part] <- .fileYear(f[part])
+    time[!part] <- as.numeric(sub("^.*_year([0-9.]+)\\.[^.]*$", "\\1", basename(f[!part])))
+    d <- data.frame(rep = basename(.repFolder(f)), time = time, f)
     names(d)[3] <- col
     d
   }
@@ -3256,13 +3328,14 @@ standMetrics <- function(sim) {
   snaps <- .snapshotTable(mod$sam, mod$vtm, mod$pgm, mod$cd)
   cc <- data.frame(rep = "CC", time = P(sim)$simTimes[1], sam = mod$fsam0, vtm = mod$fvtm0,
                    pgm = file.path(mod$rep1Dir, paste0("pixelGroupMap_year", padStart, ".tif")),
-                   cd = file.path(mod$rep1Dir, paste0("cohortData_year", padStart, ".qs2")))
+                   cd = .cohortFile(mod$rep1Dir, P(sim)$simTimes[1], paste0("cohortData_year", padStart, ".qs2")))
   cells <- NULL
   one <- function(f) {
     pgm <- terra::rast(f$pgm)
     if (is.null(cells)) cells <<- which(.reportingCells(pgm, sim$studyAreaReporting))
     row <- .standRow(terra::values(terra::rast(f$sam), mat = FALSE)[cells], .vtmCodes(terra::rast(f$vtm))[cells],
-                     terra::values(pgm, mat = FALSE)[cells], qs2::qs_read(f$cd), prod(terra::res(pgm)) / 1e4,
+                     terra::values(pgm, mat = FALSE)[cells], nrvtools::read_cohort_data(f$cd),
+                     prod(terra::res(pgm)) / 1e4,
                      P(sim)$ageClassCutOffs, P(sim)$ageClasses)
     data.frame(rep = f$rep, time = f$time, row)
   }

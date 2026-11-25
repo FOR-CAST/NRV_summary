@@ -33,3 +33,15 @@ test_that("aux.xml sidecars carry no year", {
   expect_true(is.na(fileYear(f)))
   expect_false(inYears(f, 700))
 })
+
+test_that(".fileYear reads a cohort part file's year from its own folder only", {
+  ## the parquet cohorts are `<rep>/cohortData/year=<YYYY>/part-0.parquet`: the year is the folder's
+  fileYear <- moduleFn(".fileYear", new.env())
+  inYears <- moduleFn(".inYears", new.env())
+  expect_identical(fileYear("run_2820/rep01/cohortData/year=0700/part-0.parquet"), 700L)
+  expect_true(inYears("run_2820/rep01/cohortData/year=0700/part-0.parquet", 700))
+  f <- c("run_2820/rep01/x.parquet", "o/year=0700/rep01/part-0.parquet", "o/rep01/cohortData/year=07x0/part-0.parquet",
+         "o/rep01/cohortData/year=0700/part-1.parquet", "o/rep01/cohortData/xyear=0700/part-0.parquet",
+         "o/year=0700/part-0.parquet/x.tif")
+  expect_identical(fileYear(f), rep(NA_integer_, length(f)))
+})
