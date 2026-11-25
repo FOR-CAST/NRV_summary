@@ -115,9 +115,11 @@ defineModule(sim, list(
                           "'pm' for default patch metrics;",
                           "'on' for ON patch metrics;",
                           "'st' for stand-level measures (age-class, leading-type and forested shares, total",
-                          "biomass) at each summary time, from the saved snapshots (`st.csv`, `st_CC.csv`), their",
-                          "figures, and the NRV comparison tables, `csv/lm/<layer>/lm_nrvComparison.csv`, which",
-                          "say where the current condition falls against the NRV range.",
+                          "biomass) at each summary time, from the saved snapshots (`st.csv`, `st_CC.csv`,",
+                          "`st_nrvComparison.csv`) and their figures; with 'stability' in the same run they are",
+                          "tested too. With 'lm' in the same run, also the NRV comparison tables,",
+                          "`csv/lm/<layer>/lm_nrvComparison.csv`, which say where the current condition falls",
+                          "against the NRV range.",
                           "Not in the default: it runs only when asked for.",
                           "'autocorr' for the autocorrelation time of the annual landscape series",
                           "(`annualSeries.csv`, from `recordAnnualSeries = TRUE`), the correlation between",
@@ -2446,6 +2448,12 @@ makeAnimation <- function(sim) {
   if (!any(c("lm", "pm") %in% events)) {
     message("NRV_summary stability: no lm or pm event in this run, so no lm/pm series are tested")
   }
+  ## the stand-level series of the st event (kept in `mod`), when it ran in the same run
+  st <- if ("st" %in% events && !is.null(mod$standSeries)) {
+    d <- mod$standSeries
+    data.frame(kind = "st", layer = P(sim)$.studyAreaName, poly = P(sim)$.studyAreaName, level = "landscape",
+               class = NA_character_, metric = d$metric, rep = d$rep, time = d$time, value = d$value)
+  }
   vtmRAT <- if ("pm" %in% events) terra::rast(mod$fvtm0)
   one <- lapply(intersect(c("lm", "pm"), events), function(kind) {
     lapply(mod$rptPolyNames, function(p) {
@@ -2465,7 +2473,7 @@ makeAnimation <- function(sim) {
       data.frame(kind = kind, layer = p, raw[, c("poly", "level", "class", "metric", "rep", "time", "value")])
     })
   })
-  do.call(rbind, c(unlist(one, recursive = FALSE), list(.stabilityBurn(sim))))
+  do.call(rbind, c(unlist(one, recursive = FALSE), list(st, .stabilityBurn(sim))))
 }
 
 .stabilityKeys <- function() c("kind", "layer", "poly", "level", "class", "metric")
@@ -2483,18 +2491,24 @@ makeAnimation <- function(sim) {
 
 ## The title of each series: nrvtools' name and unit of the metric (the burn series is named already).
 ## Looked up once per distinct metric.
-.stabilityTitle <- function(kind, metric, level) {
+.stabilityTitle <- function(kind, metric, level, sppEquiv = NULL, sppEquivCol = "LandR") {
   key <- paste(kind, metric, level, sep = "\r")
   u <- !duplicated(key)
   title <- vapply(which(u), function(i) {
-    if (identical(kind[i], "burn")) metric[i] else .metricTitle(metric[i], level[i])
+    if (identical(kind[i], "burn")) {
+      metric[i]
+    } else if (identical(kind[i], "st")) {
+      .standLabel(metric[i], sppEquiv, sppEquivCol)
+    } else {
+      .metricTitle(metric[i], level[i])
+    }
   }, character(1L))
   title[match(key, key[u])]
 }
 
 ## Panels of the series in `d` over time (reps as thin lines, median in bold), the window shaded, and
 ## the verdict (`flags`, named by series id) in each panel title. `d` holds only the series of one page.
-.stabilityPanels <- function(d, flags, window, ncol = 4L) {
+.stabilityPanels <- function(d, flags, window, ncol = 4L, sppEquiv = NULL, sppEquivCol = "LandR") {
   id <- .stabilityId(d)
   ## layer/poly, leaving out a name that is missing (the burn series' study area name may be NA)
   where <- vapply(seq_len(nrow(d)), function(i) {
@@ -2505,7 +2519,7 @@ makeAnimation <- function(sim) {
   isPm <- d$kind == "pm" & !is.na(cls)
   cls[isPm] <- .vegTypeLabels(cls[isPm])
   d$panel <- paste0(
-    ifelse(is.na(cls), "", paste0(cls, " ")), .stabilityTitle(d$kind, d$metric, d$level),
+    ifelse(is.na(cls), "", paste0(cls, " ")), .stabilityTitle(d$kind, d$metric, d$level, sppEquiv, sppEquivCol),
     "\n", ifelse(nzchar(where), paste0(where, ": "), ""), flags[id]
   )
   ggplot2::ggplot(d, ggplot2::aes(time, value)) +
@@ -2520,8 +2534,8 @@ makeAnimation <- function(sim) {
 
 ## One summary of the verdicts: fitted change over the window as % of the window's range, one point per
 ## series, by metric, coloured by verdict, with the `minChange` thresholds.
-.stabilitySummary <- function(res, minChange) {
-  res$label <- paste(res$kind, .stabilityTitle(res$kind, res$metric, res$level))
+.stabilitySummary <- function(res, minChange, sppEquiv = NULL, sppEquivCol = "LandR") {
+  res$label <- paste(res$kind, .stabilityTitle(res$kind, res$metric, res$level, sppEquiv, sppEquivCol))
   ggplot2::ggplot(res, ggplot2::aes(changePctRange, label, colour = flag)) +
     ggplot2::geom_vline(xintercept = c(-1, 1) * 100 * minChange, linetype = "dashed") +
     ggplot2::geom_point(alpha = 0.7) +
@@ -2592,7 +2606,12 @@ makeAnimation <- function(sim) {
 ## when `.wantNrvComparison()`. `env` and `cc` are those the event kept in `mod`; of their rows, the landscape
 ## level's only, as a class-level metric repeats over classes. Registered with the other postprocess files.
 .writeNrvComparisonCSV <- function(sim, env, cc, kind, layer) {
-  if (!.wantNrvComparison(sim) || is.null(env) || !nrow(env) || is.null(cc) || !nrow(cc)) {
+  f <- file.path(.ppRoot(sim), "csv", kind, layer, paste0(kind, "_nrvComparison.csv"))
+  if (!.wantNrvComparison(sim)) {
+    unlink(f) ## a table of an earlier run with st is not left beside this run's csvs (no folder is made)
+    return(invisible())
+  }
+  if (is.null(env) || !nrow(env) || is.null(cc) || !nrow(cc)) {
     return(invisible())
   }
   if ("level" %in% names(env)) env <- env[env$level %in% "landscape", , drop = FALSE]
@@ -2600,7 +2619,7 @@ makeAnimation <- function(sim) {
   if (!nrow(env) || !nrow(cc)) {
     return(invisible())
   }
-  f <- file.path(.ppCsvDir(sim, kind, layer), paste0(kind, "_nrvComparison.csv"))
+  .ppCsvDir(sim, kind, layer) ## creates the folder
   utils::write.csv(.nrvComparison(env, cc, .nrvPeriod(sim)), f, row.names = FALSE)
   mod$ppFiles <- c(mod$ppFiles, f)
   invisible()
@@ -2732,14 +2751,15 @@ stabilityCheck <- function(sim) {
     pages <- .pages(res$id[res$kind == k])
     for (pg in seq_along(pages)) {
       lay <- .figLayout(length(pages[[pg]]), paginate = TRUE)
-      g <- .stabilityPanels(series[series$id %in% pages[[pg]], , drop = FALSE], flags, window, ncol = lay$ncol)
+      g <- .stabilityPanels(series[series$id %in% pages[[pg]], , drop = FALSE], flags, window, ncol = lay$ncol,
+                           sim$sppEquiv, P(sim)$sppEquivCol)
       f <- file.path(figDir, paste0("stability_", k, "_p", pg, ".png"))
       ggplot2::ggsave(f, g, width = lay$width, height = lay$height)
       files <- c(files, f)
     }
   }
   f <- file.path(figDir, "stability_summary.png")
-  ggplot2::ggsave(f, .stabilitySummary(res, P(sim)$stabilityMinChange), width = 10,
+  ggplot2::ggsave(f, .stabilitySummary(res, P(sim)$stabilityMinChange, sim$sppEquiv, P(sim)$sppEquivCol), width = 10,
                   height = max(4, 0.25 * length(unique(res$metric))))
   invisible(registerOutputs(c(files, f), sim))
 }
@@ -2807,9 +2827,7 @@ stabilityCheck <- function(sim) {
 ## the leading type (by `sppEquiv`'s EN_generic_full when it has one), or the measure itself.
 .standClass <- function(metric, sppEquiv = NULL, sppEquivCol = "LandR") {
   code <- sub("^lead_", "", metric)
-  sp <- if (!is.null(sppEquiv) && "EN_generic_full" %in% names(sppEquiv)) {
-    sppEquiv[["EN_generic_full"]][match(code, sppEquiv[[sppEquivCol]])]
-  } else rep(NA_character_, length(code))
+  sp <- .sppFullNames(code, sppEquiv, sppEquivCol)
   sp <- ifelse(is.na(sp), .vegTypeLabels(code), sp)
   ifelse(metric == "biomassTg", "Total tree biomass",
   ifelse(metric == "forested", "Forested",
@@ -2880,6 +2898,18 @@ stabilityCheck <- function(sim) {
   .ccOverviewPages(cmp, perPage)
 }
 
+## The figure groups of the stand-level metrics: age classes, leading types (those leading at least 0.5% of the
+## area in some snapshot; `leadMax` is the largest value of each metric) and biomass, each with its metrics `m`, y
+## title and what it shows.
+.standGroups <- function(leadMax, ageClasses) {
+  list(
+    age = list(m = paste0("age_", ageClasses), ylab = "Share of forested area (%)", what = "forest age classes"),
+    leading = list(m = names(leadMax)[grepl("^lead_", names(leadMax)) & leadMax >= 0.5],
+                   ylab = .leadingYlab(), what = "leading tree type"),
+    biomass = list(m = "biomassTg", ylab = "Total tree biomass (Tg)", what = "tree biomass")
+  )
+}
+
 ## The `postprocess_st` event: st.csv, st_CC.csv and st_nrvComparison.csv (csv/st/<studyArea>/) and the figures
 ## (figures/st/<studyArea>/). It runs before the plot event, which clears the figure folders of the events it
 ## draws (but not this one's), so it clears its own folder here.
@@ -2911,6 +2941,7 @@ standMetrics <- function(sim) {
   series$class <- .standClass(series$metric, sim$sppEquiv, P(sim)$sppEquivCol)
   ccRows$class <- .standClass(ccRows$metric, sim$sppEquiv, P(sim)$sppEquivCol)
 
+  mod$standSeries <- series ## for the stability check, when it runs in the same run
   env <- stats::aggregate(value ~ metric + time, series, function(v) c(mean = mean(v), min = min(v), max = max(v)))
   env <- data.frame(poly = sa, metric = env$metric, time = env$time, env$value)
   cmp <- .nrvComparison(env, data.frame(poly = sa, metric = ccRows$metric, mean = ccRows$value), .nrvPeriod(sim))
@@ -2930,16 +2961,11 @@ standMetrics <- function(sim) {
     ggplot2::ggsave(f, .standSeriesPanels(data), width = 9, height = 5, units = "in")
     f
   }
-  leadMax <- tapply(series$value, series$metric, max)
-  groups <- list(
-    age = list(m = paste0("age_", P(sim)$ageClasses), ylab = "Share of forested area (%)", what = "forest age classes"),
-    leading = list(m = names(leadMax)[grepl("^lead_", names(leadMax)) & leadMax >= 0.5],
-                   ylab = .leadingYlab(), what = "leading tree type"),
-    biomass = list(m = "biomassTg", ylab = "Total tree biomass (Tg)", what = "tree biomass")
-  )
+  groups <- .standGroups(tapply(series$value, series$metric, max), P(sim)$ageClasses)
   pngs <- character(0)
   for (g in names(groups)) {
     m <- groups[[g]]$m
+    if (!length(m)) next ## no leading type reaches 0.5% of the area: nothing to draw
     pngs <- c(pngs, save(
       list(series = series[series$metric %in% m, ], cc = ccRows[ccRows$metric %in% m, ],
            period = .nrvPeriod(sim), title = paste(sa, "-", groups[[g]]$what), ylab = groups[[g]]$ylab),
@@ -3240,20 +3266,25 @@ saveAnnualSeries <- function(sim) {
        tooFew = series[tooFew])
 }
 
+## The full names (`sppEquiv`'s EN_generic_full) of species `code`s, NA for a code without one or when `sppEquiv` has
+## no such column. A code shared by several sppEquiv rows (a merged species) takes all of their names, joined by " / ".
+.sppFullNames <- function(code, sppEquiv = NULL, sppEquivCol = "LandR") {
+  if (is.null(sppEquiv) || !"EN_generic_full" %in% names(sppEquiv)) {
+    return(rep(NA_character_, length(code)))
+  }
+  vapply(code, function(cd) {
+    nm <- unique(stats::na.omit(sppEquiv[["EN_generic_full"]][sppEquiv[[sppEquivCol]] %in% cd]))
+    if (length(nm)) paste(nm, collapse = " / ") else NA_character_
+  }, character(1), USE.NAMES = FALSE)
+}
+
 ## Full names of the annual series: the landscape scalars by name, and a species' full name for lead_<code>
 ## (its code when `sppEquiv` has no `EN_generic_full` column or no name for it)
 .annualSeriesLabel <- function(series, sppEquiv = NULL, sppEquivCol = "LandR") {
   known <- c(propYoung = "Proportion of forest young", propOld = "Proportion of forest old",
              meanStandAge = "Mean stand age", totalBiomassTg = "Total biomass (Tg)")
   code <- sub("^lead_", "", series)
-  full <- rep(NA_character_, length(code))
-  if (!is.null(sppEquiv) && "EN_generic_full" %in% names(sppEquiv)) {
-    ## a code shared by several sppEquiv rows (a merged species) takes all of their names
-    full <- vapply(code, function(cd) {
-      nm <- unique(stats::na.omit(sppEquiv[["EN_generic_full"]][sppEquiv[[sppEquivCol]] %in% cd]))
-      if (length(nm)) paste(nm, collapse = " / ") else NA_character_
-    }, character(1), USE.NAMES = FALSE)
-  }
+  full <- .sppFullNames(code, sppEquiv, sppEquivCol)
   ifelse(grepl("^lead_", series), paste("Leading:", ifelse(is.na(full), code, full)),
          ifelse(series %in% names(known), known[series], series))
 }

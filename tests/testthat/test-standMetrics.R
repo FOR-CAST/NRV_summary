@@ -164,26 +164,36 @@ test_that("the last stand page draws only its own panels", {
   expect_equal(length(unique(b$layout$layout$PANEL)), 6L)
 })
 
-test_that("a comparison table is written only when asked for, beside the lm csvs", {
+test_that("a comparison table is written only when asked for, beside the lm csvs, landscape level only", {
   withr::local_package("SpaDES.core")
   sim <- stSim()
-  env <- data.frame(poly = "E", metric = "a", time = c(700, 1000), mean = 5, min = 2, max = 9)
-  cc <- data.frame(poly = "E", metric = "a", mean = 9)
-  write <- function(events) {
+  ## a class-level row of the same metric, with another range, must not enter the table
+  env <- data.frame(poly = "E", level = rep(c("landscape", "class"), each = 2), class = rep(c(NA, "X"), each = 2),
+                    metric = "a", time = c(700, 1000), mean = 5, min = rep(c(2, 0), each = 2),
+                    max = rep(c(9, 100), each = 2))
+  cc <- data.frame(poly = "E", level = c("landscape", "class"), class = c(NA, "X"), metric = "a", mean = c(9, 50))
+  write <- function(events, layer = "layerA") {
     m <- new.env()
     m$ppFiles <- character(0)
     fn <- stP(moduleFn(".writeNrvComparisonCSV", m), postprocessEvents = events)
     environment(fn)$.nrvPeriod <- function(sim) c(700, 1000)
     environment(fn)$.wantNrvComparison <- function(sim) "st" %in% events
-    fn(sim, env, cc, "lm", "layerA")
+    fn(sim, env, cc, "lm", layer)
     m$ppFiles
   }
-  csv <- file.path(dirname(SpaDES.core::outputPath(sim)), "postprocess", "csv", "lm", "layerA", "lm_nrvComparison.csv")
+  csvDir <- function(layer) file.path(dirname(SpaDES.core::outputPath(sim)), "postprocess", "csv", "lm", layer)
+  csv <- file.path(csvDir("layerA"), "lm_nrvComparison.csv")
   expect_length(write(c("lm", "pm", "lw", "am")), 0L) ## LandWeb's events
   expect_false(file.exists(csv))
+  expect_false(dir.exists(csvDir("layerA"))) ## not even the folder
   expect_length(write(c("lm", "st")), 1L)
   expect_true(file.exists(csv))
-  expect_identical(utils::read.csv(csv)$position, "inside")
+  r <- utils::read.csv(csv)
+  expect_identical(r$position, "inside")
+  expect_equal(c(nrow(r), r$lo, r$hi), c(1, 2, 9)) ## the landscape row's range, not the class row's
+  ## a table of an earlier run with st does not stay beside the csvs of one without it
+  expect_length(write(c("lm", "pm")), 0L)
+  expect_false(file.exists(csv))
 })
 
 test_that("the comparison tables are wanted through one helper", {
@@ -269,18 +279,18 @@ test_that("the st figures folder is cleared only when the st event runs", {
   expect_false(file.exists(f))
 })
 
-test_that("the st event writes its tables and figures from snapshots on disk, and its figure folder is its own", {
-  withr::local_package("SpaDES.core")
-  root <- withr::local_tempdir()
+## two reps of a 4 x 4 landscape (two species, two stand ages) at years 0 and 1000 on disk, and the sim of
+## the module over them with `events` as postprocessEvents; the reporting polygon is the whole landscape
+stDiskSim <- function(events, .env = parent.frame()) {
+  root <- withr::local_tempdir(.local_envir = .env)
   crs <- "EPSG:3400"
   rtm <- terra::rast(nrows = 4, ncols = 4, xmin = 0, xmax = 1000, ymin = 0, ymax = 1000, crs = crs)
-  yrs <- c(0L, 1000L)
   cd <- data.table::data.table(pixelGroup = c(1L, 2L), speciesCode = factor(c("Pice_gla", "Popu_tre")),
                                age = c(50L, 150L), B = c(2000L, 4000L))
   for (r in 1:2) {
     d <- file.path(root, "mainSim", sprintf("rep%02d", r))
     dir.create(d, recursive = TRUE)
-    for (y in yrs) {
+    for (y in c(0L, 1000L)) {
       sam <- terra::rast(rtm, vals = rep(c(50, 150), 8))
       vtm <- terra::rast(rtm, vals = rep(1:2, 8))
       levels(vtm) <- data.frame(ID = 1:2, code = c("Pice_gla", "Popu_tre"))
@@ -293,24 +303,33 @@ test_that("the st event writes its tables and figures from snapshots on disk, an
   }
   se <- LandR::sppEquivalencies_CA
   se <- se[se[["LandR"]] %in% c("Pice_gla", "Popu_tre"), ]
-  sim <- SpaDES.core::simInit(
+  poly <- terra::as.polygons(terra::ext(rtm), crs = crs)
+  poly$Name <- "all"
+  list(root = root, sim = SpaDES.core::simInit(
     times = list(start = 0, end = 1000),
     params = list(NRV_summary = list(
       mode = "multi", reps = 1:2, summaryPeriod = c(0L, 1000L), summaryInterval = 1000L, timeSeriesTimes = 1:2,
-      simTimes = c(0, 1000), postprocessEvents = "st", .studyAreaName = "SA", ageClassCutOffs = c(0L, 100L),
+      simTimes = c(0, 1000), postprocessEvents = events, .studyAreaName = "SA", ageClassCutOffs = c(0L, 100L),
       ageClasses = c("Young", "Old")
     )),
     modules = moduleName,
-    objects = list(reportingPolygons = list(A = "placeholder"), sppEquiv = se,
-                   studyAreaReporting = terra::as.polygons(terra::ext(rtm), crs = crs)),
+    objects = list(reportingPolygons = list(A = sf::st_as_sf(poly)), sppEquiv = se, studyAreaReporting = poly),
     paths = list(modulePath = modulePath, outputPath = file.path(root, "mainSim"),
                  cachePath = file.path(root, "cache"), inputPath = file.path(root, "in"))
-  )
+  ))
+}
+
+test_that("the st event writes its tables and figures from snapshots on disk, and its figure folder is its own", {
+  withr::local_package("SpaDES.core")
+  fx <- stDiskSim(c("st", "stability"))
+  root <- fx$root
   figDir <- file.path(root, "postprocess", "figures", "st", "SA")
   dir.create(figDir, recursive = TRUE)
   file.create(file.path(figDir, "stale.png"))
-  done <- suppressWarnings(SpaDES.core::spades(sim, events = list(NRV_summary = c("init", "postprocess_st")),
-                                              debug = FALSE))
+  done <- suppressWarnings(SpaDES.core::spades(
+    fx$sim, debug = FALSE,
+    events = list(NRV_summary = c("init", "postprocess_st", "postprocess", "plot", "postprocess_stability"))
+  ))
   csv <- file.path(root, "postprocess", "csv", "st", "SA")
   st <- utils::read.csv(file.path(csv, "st.csv"))
   expect_setequal(st$rep, 1:2)
@@ -324,8 +343,66 @@ test_that("the st event writes its tables and figures from snapshots on disk, an
   expect_true(all(file.exists(file.path(csv, c("st_CC.csv", "st_nrvComparison.csv")))))
   expect_true(all(utils::read.csv(file.path(csv, "st_nrvComparison.csv"))$position == "inside"))
   expect_false(file.exists(file.path(figDir, "stale.png")))
-  expect_true(all(file.exists(file.path(figDir, c("stand_age.png", "stand_leading.png", "stand_biomass.png",
-                                                  "current_condition_overview_p1.png",
-                                                  file.path("species", "lead_Pice_gla.png"))))))
-  expect_true(any(basename(SpaDES.core::outputs(done)$file) == "stand_biomass.png"))
+  pngs <- file.path(figDir, c("stand_age.png", "stand_leading.png", "stand_biomass.png",
+                              "current_condition_overview_p1.png", file.path("species", "lead_Pice_gla.png")))
+  expect_true(all(file.exists(pngs))) ## still there after the plot event
+  out <- SpaDES.core::outputs(done)$file
+  expect_true(all(c("stand_biomass.png", "st.csv", "st_CC.csv", "st_nrvComparison.csv") %in% basename(out)))
+  ## with stability in the same run, the stand series are tested too
+  stab <- utils::read.csv(file.path(root, "postprocess", "csv", "stability", "all", "stability.csv"))
+  expect_true("st" %in% stab$kind)
+  expect_true(all(c("age_Young", "biomassTg") %in% stab$metric[stab$kind == "st"]))
+})
+
+test_that("with LandWeb's events the lm event writes no comparison table, with st it does", {
+  withr::local_package("SpaDES.core")
+  run <- function(events) {
+    fx <- stDiskSim(events)
+    suppressWarnings(suppressMessages(SpaDES.core::spades(
+      fx$sim, debug = FALSE, events = list(NRV_summary = c("init", "postprocess_lm"))
+    )))
+    list.files(file.path(fx$root, "postprocess", "csv", "lm"), recursive = TRUE)
+  }
+  without <- run(c("lm", "pm", "lw", "am"))
+  expect_true(length(without) > 0L) ## the lm event ran
+  expect_false(any(grepl("nrvComparison", without)))
+  with <- run(c("lm", "st"))
+  expect_identical(setdiff(with, without), file.path("A", "lm_nrvComparison.csv"))
+})
+
+test_that("a code shared by several sppEquiv rows is named by all of them", {
+  se <- data.frame(LandR = c("Pice_gla", "Pice_gla", "Betu_pap"),
+                   EN_generic_full = c("White spruce", "Engelmann spruce", "Paper birch"))
+  expect_identical(standClass(c("lead_Pice_gla", "lead_Betu_pap", "lead_Mixed"), se),
+                   c("White spruce / Engelmann spruce", "Paper birch", "Mixed"))
+  expect_identical(moduleFn(".annualSeriesLabel", new.env())("lead_Pice_gla", se),
+                   "Leading: White spruce / Engelmann spruce")
+})
+
+test_that("an empty figure group is skipped, not an error", {
+  expect_identical(moduleFn(".standGroups", new.env())(c(lead_A = 0.2, lead_B = 0.1), c("Young", "Old"))$leading$m,
+                   character(0))
+  expect_identical(names(Filter(function(g) length(g$m) > 0L,
+                                moduleFn(".standGroups", new.env())(c(lead_A = 0.2), c("Young")))),
+                   c("age", "biomass"))
+})
+
+test_that("the stand series join the stability check only when both st and stability are requested", {
+  m <- new.env()
+  m$rptPolyNames <- character(0)
+  m$standSeries <- data.frame(metric = rep(c("age_Old", "lead_A"), each = 6), rep = rep(1:2, each = 3),
+                              time = c(0, 500, 1000), value = 1:12)
+  series <- function(events) {
+    fn <- stP(moduleFn(".stabilitySeries", m), postprocessEvents = events)
+    environment(fn)$.stabilityBurn <- function(sim) NULL
+    suppressMessages(fn(NULL))
+  }
+  r <- series(c("st", "stability"))
+  expect_setequal(r$kind, "st")
+  expect_setequal(r$metric, c("age_Old", "lead_A"))
+  expect_setequal(c(r$layer, r$poly), "SA")
+  expect_setequal(r$level, "landscape")
+  expect_false("st" %in% series("stability")$kind) ## a left-over series of an earlier st event is not tested
+  expect_identical(moduleFn(".stabilityTitle", new.env())(c("st", "st"), c("age_Old", "forested"), "landscape"),
+                   standLabel(c("age_Old", "forested")))
 })
