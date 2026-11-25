@@ -134,4 +134,9 @@ test_that("reporting-group maps are identical from .qs2 and parquet cohorts", {
   qs2::qs_save(decoy, file.path(reps[2], "cohortData_year0700.qs2"))
   out2 <- buildMaps(file.path(reps[2], "vegTypeMap_year0700.tif"), outRoot, grp, colors, 0.75, 2L)
   expect_identical(cellLabels(terra::rast(out2)), c("Bl_Spruce", "Decid", "Pine", "Mixed"))
+  ## unless the cohort files InitMulti() found are given and the part file is not one of them (an outputsDF that
+  ## lists the .qs2): the .qs2 is read
+  out3 <- buildMaps(file.path(reps[2], "vegTypeMap_year0700.tif"), outRoot, grp, colors, 0.75, 2L,
+                    cohortFiles = file.path(reps[2], "cohortData_year0700.qs2"))
+  expect_identical(cellLabels(terra::rast(out3)), rep("Decid", 4L))
 })

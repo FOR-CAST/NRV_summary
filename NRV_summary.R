@@ -573,7 +573,8 @@ InitMulti <- function(sim) {
   useOutputs <- .hasOutputsDF(sim)
   files <- .discoverOutputFiles(sim)
   ## dirnamesFromSet() answers `rep<reps>` for no files at all; with none, no replicate was found.
-  ## unname(): SpaDES.core may name the folders by replicate id (PR #543); the values are the same
+  ## unname(): SpaDES.core may name the folders by replicate id (PredictiveEcology/SpaDES.core#543); the values
+  ## are the same
   mod$allReps <- if (length(files) > 0L) unname(dirnamesFromSet(files, P(sim)$reps)) else character(0)
   if (length(mod$allReps) < length(P(sim)$reps)) {
     stop(
@@ -639,6 +640,18 @@ InitMulti <- function(sim) {
   ## (`<rep>/cohortData/year=<YYYY>/part-0.parquet`) is known by its two folders as well
   cdpgm <- files[.isCohortQs2(files) | .isCohortPart(files) | grepl("pixelGroupMap", basename(files))]
   cdpgm <- cdpgm[.inReps(cdpgm, allReps) & .inYears(cdpgm, mod$analysesOutputsTimes)]
+
+  ## the replicates' cohort files of every year, in either format: each site that reads cohorts chooses from these
+  ## (see .cohortFile()), so all read the same file of a replicate-year. With outputsDF, those it lists.
+  repYear <- function(f) paste(.repFolder(f), .fileYear(f))
+  mod$cohortFiles <- files[(.isCohortQs2(files) | .isCohortPart(files)) & .inReps(files, allReps)]
+  isPart <- .isCohortPart(mod$cohortFiles)
+  both <- isPart & repYear(mod$cohortFiles) %in% repYear(mod$cohortFiles[!isPart])
+  if (any(both)) {
+    warning("NRV_summary: ", sum(both), " replicate-year(s) with cohortData in both formats; the parquet file is ",
+            "read and the .qs2 left as it is:\n", paste(utils::head(mod$cohortFiles[both], 3L), collapse = "\n"),
+            if (sum(both) > 3L) "\n...", call. = FALSE)
+  }
   allouts <- files[grepl("vegType|standAge", basename(files))]
   allouts <- allouts[.inReps(allouts, allReps)]
   mod$allouts <- allouts[!grepl("gri|png|txt|xml", basename(allouts))]
@@ -656,7 +669,7 @@ InitMulti <- function(sim) {
     c(
       ## either format: the part file when one was found, else the .qs2 (see .cohortFile())
       .cohortFile(d, mod$analysesOutputsTimes, sprintf("cohortData_year%04d.qs2", mod$analysesOutputsTimes),
-                  files = filesUserHas),
+                  files = mod$cohortFiles),
       file.path(d, sprintf("pixelGroupMap_year%04d.tif", mod$analysesOutputsTimes)),
       file.path(d, sprintf("standAgeMap_year%04d.tif", mod$analysesOutputsTimes)),
       file.path(d, sprintf("vegTypeMap_year%04d.tif", mod$analysesOutputsTimes))
@@ -697,10 +710,13 @@ InitMulti <- function(sim) {
 
   ## cohortData and pixelGroupMap files: for each pixelGroupMap, in its place, the cohort file of the same replicate
   ## and year (the BC seral maps pair them by position), the part file when both formats were found
-  mod$pgm <- grep("pixelGroupMap", cdpgm, value = TRUE)
+  mod$pgm <- cdpgm[grepl("pixelGroupMap", basename(cdpgm))]
   cd <- c(cdpgm[.isCohortPart(cdpgm)], cdpgm[.isCohortQs2(cdpgm)])
-  repYear <- function(f) paste(.repFolder(f), .fileYear(f))
   mod$cd <- cd[match(repYear(mod$pgm), repYear(cd))]
+  if (anyNA(mod$cd)) {
+    stop("NRV_summary: no cohortData file in the folder and of the year of these pixelGroupMap files:\n",
+         paste(mod$pgm[is.na(mod$cd)], collapse = "\n"), call. = FALSE)
+  }
 
   ## Reporting groups: the lm/lw/pm analyses read maps of the groups rather than of the simulated
   ## species, rebuilt from the saved cohorts (see .buildReportingVegTypeMaps()). Only the maps they
@@ -714,7 +730,8 @@ InitMulti <- function(sim) {
       grp = grp,
       colors = .reportingColors(sim$sppColorVectReporting, grp),
       vegLeadingProportion = P(sim)$vegLeadingProportion,
-      mixedType = P(sim)$mixedType
+      mixedType = P(sim)$mixedType,
+      cohortFiles = mod$cohortFiles
     )
     mod$vtm <- maps[-1L]
     mod$fvtm0 <- maps[[1L]]
@@ -881,10 +898,12 @@ InitMulti <- function(sim) {
 ## group, from the cohortData (either format; see .cohortFile()) and pixelGroupMap saved beside each. Written to
 ## `<outRoot>/<rep>/vegTypeMap_year<YYYY>.tif`, keeping the `<rep>/<prefix>_year<YYYY>` tail nrvtools
 ## labels its results from; `outRoot` is cleared first. Returns the new paths in the order of `vtm`.
-.buildReportingVegTypeMaps <- function(vtm, outRoot, grp, colors, vegLeadingProportion, mixedType) {
+## `cohortFiles`: the cohort files to choose from (InitMulti()'s mod$cohortFiles; see .cohortFile()).
+.buildReportingVegTypeMaps <- function(vtm, outRoot, grp, colors, vegLeadingProportion, mixedType,
+                                       cohortFiles = NULL) {
   stopifnot(all(grepl("^vegTypeMap_year[0-9]+\\.tif$", basename(vtm))))
   cd <- .cohortFile(dirname(vtm), .fileYear(vtm),
-                    sub("^vegTypeMap(_year[0-9]+)\\.tif$", "cohortData\\1.qs2", basename(vtm)))
+                    sub("^vegTypeMap(_year[0-9]+)\\.tif$", "cohortData\\1.qs2", basename(vtm)), files = cohortFiles)
   pgm <- file.path(dirname(vtm), sub("^vegTypeMap", "pixelGroupMap", basename(vtm)))
   miss <- c(cd, pgm)[!file.exists(c(cd, pgm))]
   if (length(miss)) {
@@ -1064,8 +1083,9 @@ InitMulti <- function(sim) {
 
 ## The cohortData file of replicate folder `repDir` and year `year`, in either format: the part file (see
 ## .cohortPartPath()) when there is one, else `<repDir>/<qs2>`, the .qs2 file of that year named as the caller
-## names it. With both, the part file. With `files` (the files InitMulti() found), a part file counts only if it
-## is one of them.
+## names it. With both, the part file. With `files` (mod$cohortFiles, the cohort files InitMulti() found), a part
+## file counts only if it is one of them: given an outputsDF, only a part file it lists. Every caller in mode
+## 'multi' passes them, so all choose the same file of a replicate-year.
 .cohortFile <- function(repDir, year, qs2, files = NULL) {
   pq <- .cohortPartPath(repDir, year)
   found <- file.exists(pq) & (is.null(files) | pq %in% files)
@@ -1104,10 +1124,11 @@ InitMulti <- function(sim) {
   files[startsWith(files, paste0(sub("/+$", "", rep1Dir), "/"))]
 }
 
-## the year-0 cohortData (either format; see .cohortFile()) and pixelGroupMap paths in the first replicate's folder.
-.repYear0Files <- function(rep1Dir) {
+## the year-0 cohortData (either format, from `cohortFiles`; see .cohortFile()) and pixelGroupMap paths in the first
+## replicate's folder.
+.repYear0Files <- function(rep1Dir, cohortFiles = NULL) {
   list(
-    cohortData = .cohortFile(rep1Dir, 0, "cohortData_year0000.qs2"),
+    cohortData = .cohortFile(rep1Dir, 0, "cohortData_year0000.qs2", files = cohortFiles),
     pixelGroupMap = file.path(rep1Dir, "pixelGroupMap_year0000.tif")
   )
 }
@@ -1656,7 +1677,7 @@ makeSeralStageMapsBC <- function(sim) {
   sf::st_write(NDTBEC, fNDTBEC, append = FALSE, quiet = TRUE)
   rm(studyAreaReporting, NDTBEC)
 
-  year0 <- .repYear0Files(mod$rep1Dir)
+  year0 <- .repYear0Files(mod$rep1Dir, mod$cohortFiles)
   fcd0 <- year0$cohortData
   fpgm0 <- year0$pixelGroupMap
 
@@ -3351,7 +3372,8 @@ standMetrics <- function(sim) {
   snaps <- .snapshotTable(mod$sam, mod$vtm, mod$pgm, mod$cd)
   cc <- data.frame(rep = "CC", time = P(sim)$simTimes[1], sam = mod$fsam0, vtm = mod$fvtm0,
                    pgm = file.path(mod$rep1Dir, paste0("pixelGroupMap_year", padStart, ".tif")),
-                   cd = .cohortFile(mod$rep1Dir, P(sim)$simTimes[1], paste0("cohortData_year", padStart, ".qs2")))
+                   cd = .cohortFile(mod$rep1Dir, P(sim)$simTimes[1], paste0("cohortData_year", padStart, ".qs2"),
+                                    files = mod$cohortFiles))
   cells <- NULL
   one <- function(f) {
     pgm <- terra::rast(f$pgm)

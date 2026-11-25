@@ -58,6 +58,20 @@ runInit <- function(sim) {
 
 modOf <- function(sim) sim@.xData$.modObjs[[moduleName]]
 
+## init, keeping its warnings other than the one for the absent `LandTypeCC_reporting`: list(m = the module state,
+## warnings =)
+initWithWarnings <- function(sim) {
+  w <- character(0)
+  sim <- withCallingHandlers(
+    SpaDES.core::spades(sim, events = list(NRV_summary = "init"), debug = FALSE),
+    warning = function(cnd) {
+      w <<- c(w, conditionMessage(cnd))
+      invokeRestart("muffleWarning")
+    }
+  )
+  list(m = modOf(sim), warnings = grep("LandTypeCC_reporting", w, value = TRUE, invert = TRUE))
+}
+
 test_that("rep01 folders, no outputsDF: all reps found", {
   root <- withr::local_tempdir()
   out <- file.path(root, "mainSim")
@@ -208,6 +222,11 @@ test_that("BC seral and animation read the first replicate folder found", {
   rep1pq <- file.path(withr::local_tempdir(), "rep1")
   touchFiles(cohortFiles(rep1pq, 0, "parquet"))
   expect_identical(year0(rep1pq)$cohortData, file.path(rep1pq, "cohortData", "year=0000", "part-0.parquet"))
+  ## given the cohort files InitMulti() found (here an outputsDF lists the .qs2), a stale part file beside them is not
+  ## read
+  rep1st <- file.path(withr::local_tempdir(), "rep1")
+  touchFiles(c(cohortFiles(rep1st, 0, "qs2"), cohortFiles(rep1st, 0, "parquet")))
+  expect_identical(year0(rep1st, cohortFiles(rep1st, 0, "qs2"))$cohortData, cohortFiles(rep1st, 0, "qs2"))
 
   sel <- moduleFn(".firstRepFiles", new.env())
   sam <- file.path("out", c("rep1", "rep2", "rep10"), "standAgeMap_year0701.tif")
@@ -322,7 +341,9 @@ test_that("InitMulti accepts .qs2-only replicates (old outputs)", {
   out <- file.path(root, "mainSim")
   touchFiles(unlist(lapply(file.path(out, sprintf("rep%02d", 1:3)), repFiles)))
 
-  m <- modOf(runInit(initMultiSim(root, reps = 1:3)))
+  r <- initWithWarnings(initMultiSim(root, reps = 1:3))
+  m <- r$m
+  expect_false(any(grepl("both formats", r$warnings)))
   expect_identical(m$cd, unlist(lapply(file.path(out, sprintf("rep%02d", 1:3)), cohortFiles)))
   expect_identical(m$pgm, file.path(out, rep(sprintf("rep%02d", 1:3), each = 2L),
                                     sprintf("pixelGroupMap_year%04d.tif", yrs)))
@@ -335,10 +356,18 @@ test_that("InitMulti finds parquet cohorts on disk and in outputsDF, one per rep
   want <- c(paste(rep(names(layout), each = 2L), c("0700", "1000"), rep(c("parquet", "qs2", "parquet"), each = 2L)))
   root <- withr::local_tempdir()
   out <- file.path(root, "mainSim")
-  touchFiles(unlist(Map(function(r, f) repFiles(file.path(out, r), cohorts = f), names(layout), layout)))
-  m <- modOf(runInit(initMultiSim(root, reps = 1:3)))
+  written <- unlist(Map(function(r, f) repFiles(file.path(out, r), cohorts = f), names(layout), layout))
+  touchFiles(written)
+  r <- initWithWarnings(initMultiSim(root, reps = 1:3))
+  m <- r$m
   expect_identical(cdOf(m), want)
   expect_identical(sub(" [a-z0-9]+$", "", cdOf(m)), pgmOf(m))
+  expect_setequal(m$cohortFiles, grep("cohortData", written, value = TRUE))
+  ## rep03 has both formats, at two years: one warning, which names the parquet files read
+  both <- grep("both formats", r$warnings, value = TRUE)
+  expect_length(both, 1L)
+  expect_match(both, "2 replicate-year(s) with cohortData in both formats", fixed = TRUE)
+  expect_match(both, file.path(out, "rep03", "cohortData", "year=0700", "part-0.parquet"), fixed = TRUE)
 
   ## the same from outputsDF, listed out of order
   layout2 <- stats::setNames(layout, c("rep1", "rep2", "rep3"))
@@ -346,9 +375,13 @@ test_that("InitMulti finds parquet cohorts on disk and in outputsDF, one per rep
   files <- unlist(Map(function(r, f) repFiles(file.path(root2, r), cohorts = f), names(layout2), layout2))
   touchFiles(files)
   set.seed(1)
-  m2 <- modOf(runInit(initMultiSim(root2, reps = 1:3, outputsFiles = sample(files))))
+  r2 <- initWithWarnings(initMultiSim(root2, reps = 1:3, outputsFiles = sample(files)))
+  m2 <- r2$m
   expect_identical(cdOf(m2), sub("^rep0", "rep", want))
   expect_identical(sub(" [a-z0-9]+$", "", cdOf(m2)), pgmOf(m2))
+  expect_identical(m2$allReps, c("rep1", "rep2", "rep3"))
+  expect_identical(m2$rep1Dir, file.path(root2, "rep1"))
+  expect_match(grep("both formats", r2$warnings, value = TRUE), "2 replicate-year(s)", fixed = TRUE)
 })
 
 test_that("a replicate-year with cohorts in neither format is missing, and the message names both", {
@@ -399,4 +432,38 @@ test_that(".discoverOutputFiles adds the cohort part files to a LandWeb-like lis
   touchFiles(c(parts, file.path(reps[1], "cohortData", c("year=0700/part-1.parquet", "year=07x0/part-0.parquet",
                                                         "part-0.parquet"))))
   expect_identical(discover(sim), c(before, parts))
+})
+
+test_that("reps = 1:2 ignores rep10-rep12 parquet cohorts on disk", {
+  root <- withr::local_tempdir()
+  out <- file.path(root, "mainSim")
+  touchFiles(unlist(lapply(file.path(out, sprintf("rep%02d", c(1:2, 10:12))), repFiles, cohorts = "parquet")))
+
+  m <- modOf(runInit(initMultiSim(root, reps = 1:2)))
+  expect_identical(m$allReps, c("rep01", "rep02"))
+  rep12 <- file.path(out, c("rep01", "rep02"))
+  expect_identical(m$cd, unlist(lapply(rep12, cohortFiles, format = "parquet")))
+  expect_setequal(m$cohortFiles, unlist(lapply(rep12, cohortFiles, format = "parquet")))
+})
+
+test_that("a pixelGroupMap with no cohort file of its folder and year stops InitMulti, naming it", {
+  root <- withr::local_tempdir()
+  files <- unlist(lapply(file.path(root, c("rep1", "rep2")), repFiles, cohorts = "parquet"))
+  extra <- file.path(root, "rep1", "sub", "pixelGroupMap_year0700.tif")
+  touchFiles(c(files, extra))
+  expect_error(
+    runInit(initMultiSim(root, reps = 1:2, outputsFiles = c(files, extra))),
+    paste0("no cohortData file in the folder and of the year of these pixelGroupMap files:\n", extra, "$")
+  )
+})
+
+test_that("a folder named like the pixelGroupMap files does not make other files pixel group maps", {
+  root <- withr::local_tempdir(pattern = "pixelGroupMap_")
+  out <- file.path(root, "mainSim")
+  reps <- file.path(out, c("rep01", "rep02"))
+  touchFiles(unlist(lapply(reps, repFiles)))
+
+  m <- modOf(runInit(initMultiSim(root, reps = 1:2)))
+  expect_identical(m$pgm, file.path(rep(reps, each = 2L), sprintf("pixelGroupMap_year%04d.tif", yrs)))
+  expect_identical(m$cd, unlist(lapply(reps, cohortFiles)))
 })

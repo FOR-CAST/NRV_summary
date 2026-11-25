@@ -299,16 +299,22 @@ test_that("the st figures folder is cleared only when the st event runs", {
 
 ## two reps of a 4 x 4 landscape (two species, two stand ages) at years 0 and 1000 on disk, and the sim of
 ## the module over them with `events` as postprocessEvents; the reporting polygon is the whole landscape.
-## `cohorts`: the format of the saved cohortData, "qs2", "parquet" or "both" (the .qs2 files then hold ten times
-## the biomass, so the tables show which were read)
-stDiskSim <- function(events, subregion = "all", studyArea = "SA", cohorts = "qs2", .env = parent.frame()) {
+## `cohorts`: the format of the saved cohortData, "qs2", "parquet", "both" (the .qs2 files then hold other cohorts,
+## with ten times the biomass and the species swapped, so the results show which were read) or "stale" (the .qs2
+## files hold the cohorts and the parquet ones the others). `outputsDF`: the files are given as an outputsDF, which
+## with "stale" does not list the parquet ones. `reporting`: the species are reported by group (Spruce, Aspen).
+stDiskSim <- function(events, subregion = "all", studyArea = "SA", cohorts = "qs2", outputsDF = FALSE,
+                      reporting = FALSE, .env = parent.frame()) {
   root <- withr::local_tempdir(.local_envir = .env)
   crs <- "EPSG:3400"
   rtm <- terra::rast(nrows = 4, ncols = 4, xmin = 0, xmax = 1000, ymin = 0, ymax = 1000, crs = crs)
   cd <- data.table::data.table(pixelGroup = c(1L, 2L), speciesCode = factor(c("Pice_gla", "Popu_tre")),
                                age = c(50L, 150L), B = c(2000L, 4000L))
-  qsCd <- data.table::copy(cd)
-  if (cohorts == "both") data.table::set(qsCd, j = "B", value = qsCd$B * 10L)
+  other <- data.table::copy(cd)
+  data.table::set(other, j = "B", value = other$B * 10L)
+  data.table::set(other, j = "speciesCode", value = rev(other$speciesCode))
+  qsCd <- if (cohorts == "both") other else cd
+  pqCd <- if (cohorts == "stale") other else cd
   for (r in 1:2) {
     d <- file.path(root, "mainSim", sprintf("rep%02d", r))
     dir.create(d, recursive = TRUE)
@@ -319,15 +325,20 @@ stDiskSim <- function(events, subregion = "all", studyArea = "SA", cohorts = "qs
       terra::writeRaster(sam, file.path(d, sprintf("standAgeMap_year%04d.tif", y)))
       terra::writeRaster(vtm, file.path(d, sprintf("vegTypeMap_year%04d.tif", y)), datatype = "INT1U")
       terra::writeRaster(terra::rast(rtm, vals = rep(1:2, 8)), file.path(d, sprintf("pixelGroupMap_year%04d.tif", y)))
-      if (cohorts %in% c("qs2", "both")) {
+      if (cohorts %in% c("qs2", "both", "stale")) {
         qs2::qs_save(data.table::copy(qsCd), file.path(d, sprintf("cohortData_year%04d.qs2", y)))
       }
-      if (cohorts %in% c("parquet", "both")) nrvtools::write_cohort_parquet(cd, file.path(d, "cohortData"), y)
+      if (cohorts %in% c("parquet", "both", "stale")) {
+        nrvtools::write_cohort_parquet(pqCd, file.path(d, "cohortData"), y)
+      }
     }
     file.create(file.path(d, "flammableMap_year1000.tif"))
   }
   se <- LandR::sppEquivalencies_CA
-  se <- se[se[["LandR"]] %in% c("Pice_gla", "Popu_tre"), ]
+  se <- data.table::copy(se[se[["LandR"]] %in% c("Pice_gla", "Popu_tre"), ])
+  data.table::set(se, j = "Group", value = ifelse(se[["LandR"]] == "Pice_gla", "Spruce", "Aspen"))
+  listed <- list.files(file.path(root, "mainSim"), recursive = TRUE, full.names = TRUE)
+  if (cohorts == "stale") listed <- listed[basename(listed) != "part-0.parquet"]
   poly <- terra::as.polygons(terra::ext(rtm), crs = crs)
   poly$Name <- subregion
   list(root = root, sim = SpaDES.core::simInit(
@@ -335,10 +346,11 @@ stDiskSim <- function(events, subregion = "all", studyArea = "SA", cohorts = "qs
     params = list(NRV_summary = list(
       mode = "multi", reps = 1:2, summaryPeriod = c(0L, 1000L), summaryInterval = 1000L, timeSeriesTimes = 1:2,
       simTimes = c(0, 1000), postprocessEvents = events, .studyAreaName = studyArea, ageClassCutOffs = c(0L, 100L),
-      ageClasses = c("Young", "Old")
+      ageClasses = c("Young", "Old"), sppEquivColReporting = if (reporting) "Group" else NA_character_
     )),
     modules = moduleName,
-    objects = list(reportingPolygons = list(A = sf::st_as_sf(poly)), sppEquiv = se, studyAreaReporting = poly),
+    objects = c(list(reportingPolygons = list(A = sf::st_as_sf(poly)), sppEquiv = se, studyAreaReporting = poly),
+                if (outputsDF) list(outputsDF = data.frame(file = listed))),
     paths = list(modulePath = modulePath, outputPath = file.path(root, "mainSim"),
                  cachePath = file.path(root, "cache"), inputPath = file.path(root, "in"))
   ))
@@ -615,4 +627,23 @@ test_that("st gives the same tables from .qs2 and parquet cohorts", {
   expect_true(all(lengths(qs) > 1L))
   expect_identical(tables("parquet"), qs)
   expect_identical(tables("both"), qs) ## the parquet cohorts are read, at year 0 as at the summary times
+})
+
+test_that("given an outputsDF, every site reads the .qs2 cohorts it lists, not stale parquet ones beside them", {
+  ## the reporting-group maps (year 0 and the summary years), the st snapshots and the current-condition row
+  withr::local_package("SpaDES.core")
+  run <- function(cohorts) {
+    fx <- stDiskSim("st", cohorts = cohorts, outputsDF = TRUE, reporting = TRUE)
+    suppressWarnings(SpaDES.core::spades(fx$sim, debug = FALSE,
+                                         events = list(NRV_summary = c("init", "postprocess_st"))))
+    csv <- file.path(fx$root, "postprocess", "csv", "st", "SA")
+    mapDir <- file.path(fx$root, "postprocess", "_reportingMaps")
+    maps <- sort(list.files(mapDir, "\\.tif$", recursive = TRUE))
+    list(st = readLines(file.path(csv, "st.csv")), cc = readLines(file.path(csv, "st_CC.csv")), maps = maps,
+         values = lapply(maps, function(f) terra::values(terra::rast(file.path(mapDir, f)), mat = FALSE)))
+  }
+  qs <- run("qs2")
+  expect_true(all(c(file.path("rep01", "vegTypeMap_year0000.tif"), file.path("rep02", "vegTypeMap_year1000.tif"))
+                  %in% qs$maps))
+  expect_identical(run("stale"), qs)
 })
