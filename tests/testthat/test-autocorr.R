@@ -40,12 +40,43 @@ repTables <- function(f, reps = 5, years = 300, seed = 1) {
 }
 nrv <- c(1, 300)
 
-test_that("5 reps x 300 years of AR(1) with phi 0.95 give a fitted tau within 30% of 39 in most seeds", {
-  tau <- vapply(1:6, function(seed) {
-    .autocorrSummary(repTables(function(n) as.numeric(stats::arima.sim(list(ar = 0.95), n)), seed = seed),
-                     nrv, 200, 100)$fit$tau
+## 15 reps x 301 NRV years of AR(1) with phi 0.95 (tau 39), as LandWeb's NRV: with each rep centred on its own
+## mean, the estimated tau is about 0.75 of the truth (the sample ACF is biased toward 0 when tau is a sizeable
+## fraction of the series); around the replicates' common mean it is about 0.95. 30 fixed seeds averaged.
+test_that("15 reps x 301 years of AR(1) with phi 0.95 give a mean fitted tau within 15% of 39", {
+  tau <- vapply(1:30, function(seed) {
+    .autocorrSummary(repTables(function(n) as.numeric(stats::arima.sim(list(ar = 0.95), n)), reps = 15,
+                               years = 301, seed = seed), c(1, 301), 200, 50)$fit$tau
   }, numeric(1))
-  expect_gte(sum(abs(tau / 39 - 1) < 0.3), 5)
+  expect_gt(mean(tau) / 39, 0.85)
+  expect_lt(mean(tau) / 39, 1.15)
+})
+
+test_that(".acf centres on the series' own mean unless given a centre and a scale", {
+  set.seed(3)
+  x <- as.numeric(stats::arima.sim(list(ar = 0.7), 200))
+  expect_equal(.acf(x, 20), as.numeric(stats::acf(x, lag.max = 20, plot = FALSE)$acf))
+  ## around a given centre, with a given sum of squares: the lagged products over that sum
+  d <- x - 1
+  expect_equal(.acf(x, 5, centre = 1, scale = 2 * sum(d^2))[3], sum(d[1:198] * d[3:200]) / (2 * sum(d^2)))
+})
+
+test_that("the ACF is pooled around the replicates' common mean", {
+  ## two reps with different levels and no variation inside: around their own means there is nothing to
+  ## correlate, around the common mean each is perfectly persistent
+  tables <- list(data.frame(time = 1:60, x = 0), data.frame(time = 1:60, x = 1))
+  fit <- .autocorrSummary(tables, c(1, 60), 20, 10)$fit
+  expect_gt(fit$phi, 0.9)
+})
+
+test_that("a merged species code is labelled with all of its names", {
+  sppEquiv <- data.frame(LandR = c("Pice_mar", "Pice_gla", "Pice_gla", "Betu_pap"),
+                         EN_generic_full = c("Black spruce", "White spruce", "Engelmann spruce", "Paper birch"))
+  expect_identical(.annualSeriesLabel(c("lead_Pice_gla", "lead_Betu_pap"), sppEquiv),
+                   c("Leading: White spruce / Engelmann spruce", "Leading: Paper birch"))
+  ## the same name twice is said once
+  dup <- data.frame(LandR = c("Pice_gla", "Pice_gla"), EN_generic_full = c("Spruce", "Spruce"))
+  expect_identical(.annualSeriesLabel("lead_Pice_gla", dup), "Leading: Spruce")
 })
 
 test_that("r at the summary interval is close to phi^interval and its reps bracket it", {

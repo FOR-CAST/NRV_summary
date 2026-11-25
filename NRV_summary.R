@@ -49,8 +49,9 @@ defineModule(sim, list(
   parameters = bindrows(
     defineParameter("autocorrMaxLag", "integer", 200L, 1L, NA,
                     paste("(mode = 'multi') longest lag (years) of the autocorrelation of the annual landscape",
-                          "series (the `autocorr` event). It is cut to the number of NRV years less one",
-                          "when the series is shorter.")),
+                          "series (the `autocorr` event). The longest lag used is the largest of this,",
+                          "`summaryInterval` and 50, cut to the number of NRV years less one when the",
+                          "series is shorter.")),
     defineParameter("ageClasses", "character", LandWebUtils:::.ageClasses, NA, NA,
                     "descriptions/labels for age classes (seral stages)"),
     defineParameter("ageClassCutOffs", "integer", LandWebUtils:::.ageClassCutOffs, NA, NA,
@@ -2844,11 +2845,19 @@ saveAnnualSeries <- function(sim) {
   registerOutputs(f, sim)
 }
 
-## The autocorrelation function of `x` (an annual series) at lags 0 to `maxLag` (NA beyond the series' length); all NA for a constant series.
-.acf <- function(x, maxLag) {
+## The autocorrelation function of `x` (an annual series) at lags 0 to `maxLag` (NA beyond the series' length):
+## the lagged products of the deviations from `centre` (default: the series' own mean) over `scale` (default: the
+## series' own sum of squared deviations). All NA for a constant series. `.autocorrSummary()` gives the centre and
+## scale of all replicates, so that their ACFs are those of one process.
+.acf <- function(x, maxLag, centre = NULL, scale = NULL) {
   x <- x[is.finite(x)]
-  if (length(x) < 3L || stats::sd(x) == 0) return(rep(NA_real_, maxLag + 1L))
-  rho <- as.numeric(stats::acf(x, lag.max = min(maxLag, length(x) - 1L), plot = FALSE)$acf)
+  if (length(x) < 3L || (is.null(centre) && stats::sd(x) == 0)) return(rep(NA_real_, maxLag + 1L))
+  d <- x - (if (is.null(centre)) mean(x) else centre)
+  if (is.null(scale)) scale <- sum(d^2)
+  if (!is.finite(scale) || scale <= 0) return(rep(NA_real_, maxLag + 1L))
+  n <- length(x)
+  k <- seq.int(0L, min(maxLag, n - 1L))
+  rho <- vapply(k, function(l) sum(d[seq_len(n - l)] * d[seq_len(n - l) + l]) / scale, numeric(1))
   c(rho, rep(NA_real_, maxLag + 1L - length(rho)))
 }
 
@@ -2879,9 +2888,15 @@ saveAnnualSeries <- function(sim) {
 }
 
 ## `tables`: per-rep data.frames of the annual series (a `time` column, one column per series); `period`: the NRV
-## years c(from, to); `interval`: `summaryInterval`. Per series:
+## years c(from, to); `interval`: `summaryInterval`. The replicates are realisations of one process, so each
+## series' ACF is taken around the mean of all replicates and NRV years, and the variance is pooled over the
+## replicates (a replicate's own mean would pull the sample ACF toward 0, the more so the longer the
+## autocorrelation time is against the series). A short series still biases it toward 0: the estimates are lower
+## bounds, and `nYears` (the shortest replicate's NRV years) says how much to trust them. If the replicates'
+## means differ, the common mean counts that difference as autocorrelation, which errs toward more thinning.
+## Per series:
 ## - `phi`: the lag-1 autocorrelation over the NRV years, the mean of the per-rep lag-1 ACFs (clipped to [0, 0.999]),
-##   and the autocorrelation time of the AR(1) decay it fits, `tau` = (1 + phi) / (1 - phi);
+##   and the autocorrelation time of the AR(1) decay it implies, `tau` = (1 + phi) / (1 - phi) (no curve is fitted);
 ## - `ar1Misfit`: the largest absolute difference between the pooled empirical ACF at lags 1 to 50 and phi^lag
 ##   (near 0 when the decay is exponential, large for e.g. oscillating series);
 ## - `r`, `rMin`, `rMax`: the ACF at lag `interval`, pooled (mean over reps) and the lowest and highest rep;
@@ -2889,20 +2904,27 @@ saveAnnualSeries <- function(sim) {
 ## - `tauGeyer`: Geyer's initial positive sequence estimate, for comparison only (noisy for short series);
 ## - `lagBelow0.1`: first lag of the pooled ACF below 0.1.
 ## `nSnapshotsPerRep`: the summary times in the NRV years of each rep (default: from `period` and `interval`).
-## `thin` is ceiling(max tau); `limiting` the series with that tau (both NA when no series has a tau). `acf` holds the empirical ACF per series, rep and
-## "pooled", for lags 0 to the larger of `maxLag`, `interval` and 50, and `fitted` the phi^lag curves. No lag
-## reaches beyond the shortest rep's NRV years less one (there is no correlation to measure past that): with
-## `nrvWindow` below 1 the NRV can be fewer years than `maxLag`. A lag that is cut away is NA (`r` when `interval`
-## is cut), and the other columns use the lags that remain.
+## `thin` is ceiling(max tau); `limiting` the series with that tau (both NA when no series has a tau); `absent`
+## the series not in every replicate's table (left out) and `undefined` those with no tau (constant). `acf` holds
+## the empirical ACF per series, rep and "pooled", for lags 0 to the larger of `maxLag`, `interval` and 50, and
+## `fitted` the phi^lag curves. No lag reaches beyond the shortest rep's NRV years less one (there is no
+## correlation to measure past that): with `nrvWindow` below 1 the NRV can be fewer years than `maxLag`. A lag
+## that is cut away is NA (`r` when `interval` is cut), and the other columns use the lags that remain.
 .autocorrSummary <- function(tables, period, maxLag, interval,
                              nSnapshotsPerRep = floor(diff(range(period)) / interval) + 1) {
   series <- setdiff(Reduce(intersect, lapply(tables, names)), "time")
+  absent <- setdiff(Reduce(union, lapply(tables, names)), c(series, "time"))
   inPeriod <- lapply(tables, function(d) d[d$time >= period[1L] & d$time <= period[2L], , drop = FALSE])
   nYears <- min(vapply(inPeriod, nrow, integer(1)))
   lagMax <- max(1L, min(max(maxLag, interval, 50L), nYears - 1L))
-  acfs <- do.call(rbind, lapply(seq_along(inPeriod), function(i) {
-    do.call(rbind, lapply(series, function(s) {
-      rho <- .acf(inPeriod[[i]][[s]], lagMax)
+  nReps <- length(tables)
+  acfs <- do.call(rbind, lapply(series, function(s) {
+    x <- lapply(inPeriod, function(d) d[[s]][is.finite(d[[s]])])
+    m <- mean(unlist(x))
+    ## constant in every replicate: no variation to correlate (the mean of equal values may differ by rounding)
+    scale <- if (length(unique(unlist(x))) < 2L) NA_real_ else sum(unlist(lapply(x, function(v) (v - m)^2))) / nReps
+    do.call(rbind, lapply(seq_len(nReps), function(i) {
+      rho <- if (is.na(scale)) rep(NA_real_, lagMax + 1L) else .acf(x[[i]], lagMax, centre = m, scale = scale)
       data.frame(series = s, rep = as.character(i), lag = seq_along(rho) - 1L, acf = rho)
     }))
   }))
@@ -2933,7 +2955,8 @@ saveAnnualSeries <- function(sim) {
   limiting <- if (hasTau) fit$series[which.max(fit$tau)] else NA_character_
   list(acf = rbind(acfs, pooledAcf), fitted = fitted, fit = fit,
        thin = if (hasTau) ceiling(max(fit$tau, na.rm = TRUE)) else NA_real_,
-       limiting = limiting, interval = interval, nSnapshots = nSnapshots * length(tables))
+       limiting = limiting, interval = interval, nSnapshots = nSnapshots * length(tables), nYears = nYears,
+       absent = absent, undefined = fit$series[is.na(fit$tau)])
 }
 
 ## Full names of the annual series: the landscape scalars by name, and a species' full name for lead_<code>
@@ -2944,7 +2967,11 @@ saveAnnualSeries <- function(sim) {
   code <- sub("^lead_", "", series)
   full <- rep(NA_character_, length(code))
   if (!is.null(sppEquiv) && "EN_generic_full" %in% names(sppEquiv)) {
-    full <- sppEquiv[["EN_generic_full"]][match(code, sppEquiv[[sppEquivCol]])]
+    ## a code shared by several sppEquiv rows (a merged species) takes all of their names
+    full <- vapply(code, function(cd) {
+      nm <- unique(stats::na.omit(sppEquiv[["EN_generic_full"]][sppEquiv[[sppEquivCol]] %in% cd]))
+      if (length(nm)) paste(nm, collapse = " / ") else NA_character_
+    }, character(1), USE.NAMES = FALSE)
   }
   ifelse(grepl("^lead_", series), paste("Leading:", ifelse(is.na(full), code, full)),
          ifelse(series %in% names(known), known[series], series))
@@ -2981,17 +3008,43 @@ autocorrSummary <- function(sim) {
     message("NRV_summary autocorrelation: no annualSeries.csv found; run with recordAnnualSeries = TRUE")
     return(invisible(sim))
   }
-  res <- .autocorrSummary(lapply(files, utils::read.csv), .nrvPeriod(sim), P(sim)$autocorrMaxLag,
-                          P(sim)$summaryInterval,
+  period <- .nrvPeriod(sim)
+  tables <- lapply(files, utils::read.csv)
+  ## a file that does not span the NRV years would cap the lags for every replicate
+  covers <- vapply(tables, function(d) min(d$time) <= period[1L] && max(d$time) >= period[2L], logical(1))
+  if (!all(covers)) {
+    warning("NRV_summary autocorrelation: the annual series of ",
+            paste0(basename(dirname(files[!covers])), " (years ",
+                   vapply(tables[!covers], function(d) paste(range(d$time), collapse = "-"), character(1)),
+                   ")", collapse = ", "),
+            " do not cover the NRV years ", period[1L], "-", period[2L], "; left out", call. = FALSE)
+    files <- files[covers]
+    tables <- tables[covers]
+  }
+  if (!length(tables)) {
+    message("NRV_summary autocorrelation: no annualSeries.csv covers the NRV years; nothing written")
+    return(invisible(sim))
+  }
+  nReps <- max(length(mod$allReps), length(files))
+  res <- .autocorrSummary(tables, period, P(sim)$autocorrMaxLag, P(sim)$summaryInterval,
                           nSnapshotsPerRep = length(.nrvYears(P(sim)$summaryPeriod, P(sim)$summaryInterval,
                                                               P(sim)$nrvWindow)))
+  labelOf <- function(x) .annualSeriesLabel(x, sim$sppEquiv, P(sim)$sppEquivCol)
+  if (length(res$absent)) {
+    message("NRV_summary autocorrelation: left out, not in every replicate's annualSeries.csv: ",
+            paste(res$absent, collapse = ", "))
+  }
+  if (length(res$undefined)) {
+    message("NRV_summary autocorrelation: no autocorrelation time (constant over the NRV years): ",
+            paste(res$undefined, collapse = ", "))
+  }
   if (is.na(res$thin)) {
     message("NRV_summary autocorrelation: no series has a defined autocorrelation time (constant series, or ",
             "fewer than 3 NRV years); nothing written")
     return(invisible(sim))
   }
   fit <- res$fit
-  fit$label <- .annualSeriesLabel(fit$series, sim$sppEquiv, P(sim)$sppEquivCol)
+  fit$label <- labelOf(fit$series)
   fit$recommendedThin <- res$thin
   fit$summaryInterval <- res$interval
   fit$nSnapshots <- res$nSnapshots
@@ -3000,10 +3053,23 @@ autocorrSummary <- function(sim) {
   utils::write.csv(fit, f_csv, row.names = FALSE)
 
   lim <- fit[fit$series == res$limiting, ]
-  message("NRV_summary autocorrelation: snapshots ", res$interval, " years apart: correlation r = ", signif(lim$r, 2),
-          " (reps ", signif(lim$rMin, 2), "-", signif(lim$rMax, 2), "); about ", signif(lim$effectiveSnapshots, 2),
-          " effectively independent snapshots in the NRV; fitted autocorrelation time tau = ", signif(lim$tau, 3),
-          " years (series: ", lim$label, "); recommended thinning ", res$thin, " years")
+  message("NRV_summary autocorrelation: annual series of ", length(files), " of ", nReps, " replicates, ",
+          res$nYears, " NRV years.")
+  if (is.na(lim$r)) {
+    message("NRV_summary autocorrelation: the NRV (", res$nYears, " years) is too short to measure the correlation ",
+            "of snapshots ", res$interval, " years apart; no r or effective number of snapshots")
+  } else {
+    message("NRV_summary autocorrelation: snapshots ", res$interval, " years apart: correlation r = ",
+            signif(lim$r, 2), " (reps ", signif(lim$rMin, 2), "-", signif(lim$rMax, 2), "); about ",
+            signif(lim$effectiveSnapshots, 2), " effectively independent snapshots in the NRV")
+  }
+  message("NRV_summary autocorrelation: autocorrelation time tau = ", signif(lim$tau, 3), " years (series: ",
+          lim$label, "); recommended thinning ", res$thin, " years")
+  if (res$nYears < 20 * res$thin) {
+    message("NRV_summary autocorrelation: the NRV has ", res$nYears, " years, fewer than 20 times the recommended ",
+            "thinning (", res$thin, "); a short series biases the estimates toward no correlation, so they are lower ",
+            "bounds and the thinning may need to be longer")
+  }
 
   f_png <- file.path(.ppFigDir(sim, "autocorrelation", "all"), "autocorrelation.png")
   ggplot2::ggsave(f_png, .autocorrPanels(res, sim$sppEquiv, P(sim)$sppEquivCol), width = 12, height = 8)

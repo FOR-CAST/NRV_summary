@@ -51,6 +51,56 @@ initEvents <- function(sim) {
   SpaDES.core::events(sim)$eventType
 }
 
+## A mode = "multi" run of init and the autocorr event on stub replicates: `tables` are the replicates'
+## annualSeries.csv (data.frames with a `time` column); the other files are empty stand-ins. Returns the
+## messages and warnings of the run, the finished sim and the root folder.
+multiRun <- function(tables, end = 600L, interval = 300L, params = list(), .env = parent.frame()) {
+  root <- withr::local_tempdir(.local_envir = .env)
+  yrs <- unique(c(0L, moduleFn("analysesOutputsTimes", new.env())(c(0L, end), interval), end))
+  for (i in seq_along(tables)) {
+    d <- file.path(root, "mainSim", sprintf("rep%02d", i))
+    dir.create(d, recursive = TRUE)
+    utils::write.csv(tables[[i]], file.path(d, "annualSeries.csv"), row.names = FALSE)
+    file.create(file.path(d, c(sprintf("cohortData_year%04d.qs2", yrs), sprintf("pixelGroupMap_year%04d.tif", yrs),
+                               sprintf("standAgeMap_year%04d.tif", yrs), sprintf("vegTypeMap_year%04d.tif", yrs),
+                               sprintf("flammableMap_year%04d.tif", end))))
+  }
+  sim <- SpaDES.core::simInit(
+    times = list(start = 0, end = end),
+    params = list(NRV_summary = utils::modifyList(
+      list(mode = "multi", reps = seq_along(tables), summaryPeriod = c(0L, end), summaryInterval = interval,
+           postprocessEvents = "autocorr", simTimes = c(0, end), timeSeriesTimes = 1:2),
+      params
+    )),
+    modules = moduleName,
+    objects = list(reportingPolygons = list(A = "placeholder")),
+    paths = list(modulePath = modulePath, outputPath = file.path(root, "mainSim"),
+                 cachePath = file.path(root, "cache"), inputPath = file.path(root, "in"))
+  )
+  msgs <- character()
+  warns <- character()
+  done <- withCallingHandlers(
+    SpaDES.core::spades(sim, events = list(NRV_summary = c("init", "postprocess_autocorr")), debug = FALSE),
+    message = function(m) {
+      msgs <<- c(msgs, conditionMessage(m))
+      invokeRestart("muffleMessage")
+    },
+    warning = function(w) {
+      warns <<- c(warns, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    }
+  )
+  list(msgs = paste(msgs, collapse = "\n"), warns = warns, sim = done, root = root)
+}
+
+## `reps` AR(1) series of `years` years from year 0, one column `x` (and `...` more columns, by name)
+arTables <- function(reps, years, phi, ..., seed = 1) {
+  lapply(seq_len(reps), function(r) {
+    set.seed(seed * 100 + r)
+    data.frame(time = seq_len(years) - 1L, x = as.numeric(stats::arima.sim(list(ar = phi), years)), ...)
+  })
+}
+
 test_that("recordAnnualSeries defaults to FALSE: no annual_series events", {
   withr::local_package("SpaDES.core")
   expect_false(SpaDES.core::params(singleSim())$NRV_summary$recordAnnualSeries)
@@ -113,7 +163,7 @@ test_that("with LandWeb's parameters, init schedules the events it did before an
     eventPriority = last
   )
   expect_equal(scheduleOf(sim), expected)
-  expect_false(any(grepl("annualSeries|autocorrelation", SpaDES.core::outputs(sim)$file)))
+  expect_identical(NROW(SpaDES.core::outputs(sim)), 0L) ## init registers nothing
 
   ## single mode: year 0 at the first priority + 1; the start of the summary period, the end and each
   ## timeSeriesTimes year at the last
@@ -128,6 +178,15 @@ test_that("with LandWeb's parameters, init schedules the events it did before an
     eventPriority = rep(c(first1, last, last, last), each = 2)
   )
   expect_equal(scheduleOf(single), expectedSingle)
+
+  ## the files a default run registers are those it did; the annual series adds only its own
+  files <- function(...) {
+    done <- suppressWarnings(SpaDES.core::spades(singleSim(params = list(...)), debug = FALSE))
+    basename(SpaDES.core::outputs(done)$file)
+  }
+  default <- files()
+  expect_identical(setdiff(files(recordAnnualSeries = TRUE), default), "annualSeries.csv")
+  expect_false("annualSeries.csv" %in% default)
 })
 
 test_that("no annualSeries.csv: a message, no error, and no stale csv left", {
@@ -158,38 +217,67 @@ test_that("no series with a defined autocorrelation time: a message, no thinning
 
   ## the event, on a constant series
   withr::local_package("SpaDES.core")
-  root <- withr::local_tempdir()
-  d <- file.path(root, "mainSim", "rep01")
-  dir.create(d, recursive = TRUE)
-  utils::write.csv(data.frame(time = 0:600, propYoung = 0.5), file.path(d, "annualSeries.csv"), row.names = FALSE)
-  yrs <- c(0L, 300L, 600L)
-  file.create(file.path(d, c(sprintf("cohortData_year%04d.qs2", yrs), sprintf("pixelGroupMap_year%04d.tif", yrs),
-                             sprintf("standAgeMap_year%04d.tif", yrs), sprintf("vegTypeMap_year%04d.tif", yrs),
-                             "flammableMap_year0600.tif")))
-  sim <- SpaDES.core::simInit(
-    times = list(start = 0, end = 600),
-    params = list(NRV_summary = list(mode = "multi", reps = 1L, summaryPeriod = c(0L, 600L), summaryInterval = 300L,
-                                     postprocessEvents = "autocorr", simTimes = c(0, 600), timeSeriesTimes = 1:2)),
-    modules = moduleName,
-    objects = list(reportingPolygons = list(A = "placeholder")),
-    paths = list(modulePath = modulePath, outputPath = file.path(root, "mainSim"),
-                 cachePath = file.path(root, "cache"), inputPath = file.path(root, "in"))
-  )
-  expect_message(
-    expect_no_warning(suppressWarnings(
-      SpaDES.core::spades(sim, events = list(NRV_summary = c("init", "postprocess_autocorr")), debug = FALSE)
-    )),
-    "no series has a defined autocorrelation time"
-  )
-  expect_length(list.files(root, "autocorrelation", recursive = TRUE), 0L)
+  run <- multiRun(list(data.frame(time = 0:600, propYoung = 0.5)))
+  expect_match(run$msgs, "no series has a defined autocorrelation time")
+  expect_false(any(grepl("no non-missing|-Inf", run$warns)))
+  expect_length(list.files(run$root, "autocorrelation", recursive = TRUE), 0L)
 })
 
-test_that("the snapshots counted are the summary times of the NRV years, not an approximation", {
-  ## a 100-year period from 1 with a 30-year interval: the summary times 30, 60, 90 are three snapshots per rep
-  ## (the approximation floor(99 / 30) + 1 gives 4)
-  tables <- lapply(1:2, function(i) data.frame(time = 1:100, x = as.numeric(stats::arima.sim(list(ar = 0.5), 100))))
-  res <- moduleFn(".autocorrSummary", new.env())(tables, c(1, 100), 50, 30, nSnapshotsPerRep = 3L)
-  expect_equal(res$nSnapshots, 6L)
+test_that("the snapshots counted by the event are the summary times of the NRV years", {
+  withr::local_package("SpaDES.core")
+  ## summaryPeriod 0-600 every 250, the last half: the one summary time 500 is a snapshot per rep (the count
+  ## floor(300 / 250) + 1 = 2 would be wrong)
+  run <- multiRun(arTables(3, 601, 0.5), interval = 250L, params = list(nrvWindow = 0.5))
+  d <- utils::read.csv(list.files(run$root, "autocorrelation.csv", recursive = TRUE, full.names = TRUE))
+  expect_identical(unique(d$nSnapshots), 3L)
+})
+
+test_that("the event says how many replicates it read and drops a file that does not cover the NRV years", {
+  withr::local_package("SpaDES.core")
+  tables <- arTables(3, 601, 0.8)
+  tables[[3]] <- tables[[3]][1:101, ] ## years 0-100 of 0-600
+  run <- multiRun(tables)
+  expect_match(run$warns, "rep03", all = FALSE)
+  expect_match(run$msgs, "2 of 3 replicates")
+  ## the short file did not cap the lags for the others
+  d <- utils::read.csv(list.files(run$root, "autocorrelation.csv", recursive = TRUE, full.names = TRUE))
+  expect_true(is.finite(d$r[1]))
+})
+
+test_that("a series missing from a replicate, or constant, is named as left out", {
+  withr::local_package("SpaDES.core")
+  tables <- arTables(3, 601, 0.8, constant = 2)
+  tables[[1]]$lead_Pice_mar <- tables[[1]]$x
+  run <- multiRun(tables)
+  expect_match(run$msgs, "left out.*lead_Pice_mar")
+  expect_match(run$msgs, "no autocorrelation time.*constant")
+})
+
+test_that("the message does not print NA when summaryInterval is longer than the NRV years", {
+  withr::local_package("SpaDES.core")
+  ## the NRV years of nrvWindow 0.3 (420-600) are fewer than the 300-year interval
+  run <- multiRun(arTables(3, 601, 0.8), params = list(nrvWindow = 0.3))
+  expect_match(run$msgs, "too short to measure the correlation")
+  expect_false(grepl("r = NA|NA effectively", run$msgs))
+})
+
+test_that("the event says when the NRV is too short for the autocorrelation time it finds", {
+  withr::local_package("SpaDES.core")
+  ## tau about 99 over 601 years: fewer than 20 taus
+  slow <- multiRun(arTables(3, 601, 0.98))
+  expect_match(slow$msgs, "lower bounds")
+  ## tau about 2 over 601 years
+  fast <- multiRun(arTables(3, 601, 0.3))
+  expect_false(grepl("lower bounds", fast$msgs))
+})
+
+test_that(".reportingCells keeps the pixels inside a reporting area smaller than the map", {
+  pgm <- terra::rast(nrows = 4, ncols = 4, xmin = 0, xmax = 400, ymin = 0, ymax = 400, vals = rep(1:4, 4))
+  half <- terra::as.polygons(terra::ext(0, 200, 0, 400))
+  terra::crs(half) <- terra::crs(pgm)
+  cells <- moduleFn(".reportingCells", new.env())(pgm, half)
+  expect_identical(sum(cells), 8L)
+  expect_identical(tabulate(terra::values(pgm, mat = FALSE)[cells]), c(4L, 4L)) ## groups 1 and 2 only
 })
 
 test_that("multi mode reads the reps' annual series and writes the autocorrelation csv and figure", {
@@ -231,7 +319,7 @@ test_that("multi mode reads the reps' annual series and writes the autocorrelati
     done <- SpaDES.core::spades(sim, events = list(NRV_summary = c("init", "postprocess_autocorr", "plot")), debug = FALSE)
   ))
   expect_match(paste(msgs, collapse = ""),
-               "correlation r = .*fitted autocorrelation time tau = .*recommended thinning [0-9]+ years")
+               "correlation r = .*autocorrelation time tau = .*recommended thinning [0-9]+ years")
   csv <- list.files(root, "autocorrelation.csv", recursive = TRUE, full.names = TRUE)
   expect_length(csv, 1L)
   d <- utils::read.csv(csv)
