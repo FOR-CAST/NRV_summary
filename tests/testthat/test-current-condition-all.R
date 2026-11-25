@@ -242,3 +242,29 @@ test_that("the plot event leaves figures/all/ alone, though cc is among the even
   moduleFn(".clearFigDirs", new.env())(e$sim, "cc")
   expect_false(file.exists(kept))
 })
+
+test_that("a unit named 'NA' and rows with no unit are two figures", {
+  named <- cmpRows("NA", "Layer one")[1:2, ]
+  named$group <- "landscape"
+  none <- cmpRows(NA_character_, "Layer one")[1:2, ]
+  none$group <- "landscape"
+  figs <- ccFn(".ccAllFigures", rbind(named, none))
+  expect_length(figs, 2L)
+  expect_setequal(vapply(figs, function(f) nrow(f$data), 1L), 2L)
+  expect_true(any(vapply(figs, function(f) is.na(f$unit), NA)))
+  expect_true("NA" %in% vapply(figs, function(f) as.character(f$unit), ""))
+  ## the same with stand rows that no unit is named like
+  stNamed <- cmpRows("NA", "Stand")[3:4, ]
+  stNone <- cmpRows(NA_character_, "Stand")[3:4, ]
+  figs <- ccFn(".ccAllFigures", rbind(stNamed, stNone))
+  expect_length(figs, 2L)
+  expect_true(all(vapply(figs, function(f) f$standOnly, NA)))
+})
+
+test_that(".naSafeKey keeps a missing value apart from the text 'NA'", {
+  key <- moduleFn(".naSafeKey", new.env())
+  expect_false(identical(key("L", "NA"), key("L", NA_character_)))
+  expect_identical(key(c("L", "L"), c("a", "a")), rep(key("L", "a"), 2L))
+  expect_false(identical(key("a", "b"), key("ab", "")))
+  expect_identical(key(character(0), character(0)), character(0))
+})

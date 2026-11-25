@@ -2,6 +2,8 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+* **On the `cc` figures, a unit named "NA" is no longer the missing unit (`2.0.0.9047`).** Rows were grouped into figures by `paste(layer, poly)`, which writes a missing unit and a unit named "NA" alike, so their rows shared one figure. The grouping key now keeps them apart; nothing is written differently otherwise.
+
 * **`.autocorrSummary()` no longer guesses the number of snapshots per replicate (`2.0.0.9047`).** The default, from the length of the NRV period and `summaryInterval`, ignored that the summary grid starts at `summaryPeriod[1]`. `nSnapshotsPerRep` is now required; the `autocorr` event already passed the exact count, so its results are unchanged.
 
 * **Tests for the stop on a missing year-0 cohort file (`2.0.0.9047`).** The `st` event and the `bc` year-0 check stop with both formats' paths named when the current condition's cohort file is missing; this had no test. No change to the module.

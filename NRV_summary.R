@@ -3097,6 +3097,14 @@ makeAnimation <- function(sim) {
   .distinctFileNames(x, stem)
 }
 
+## One key per row of the vectors in `...`, to compare rows or group them: a missing value is "!", any other value is
+## "=" and the value, so a missing unit is not the unit named "NA" (`paste()` writes both as "NA"). The keys are only
+## compared, never written.
+.naSafeKey <- function(...) {
+  parts <- lapply(list(...), function(x) ifelse(is.na(x), "!", paste0("=", x)))
+  do.call(paste, c(parts, sep = "\r"))
+}
+
 ## The figures from the recorded comparisons (`.recordComparison()` rows): a list of figures, each list(layer, unit,
 ## data, standOnly), one per lm layer and unit. The stand-level rows (st) are added to the figure of every unit named
 ## like them (the study area), in any layer; stand rows no unit is named like have a figure of their own
@@ -3106,14 +3114,14 @@ makeAnimation <- function(sim) {
   rest <- cmp[!stand, , drop = FALSE]
   st <- cmp[stand, , drop = FALSE]
   figs <- list()
-  key <- paste(rest$layer, rest$poly, sep = "\r")
+  key <- .naSafeKey(rest$layer, rest$poly)
   for (k in unique(key)) {
     r <- rest[key == k, , drop = FALSE]
     own <- st[!is.na(st$poly) & st$poly %in% r$poly[1L], , drop = FALSE]
     figs[[length(figs) + 1L]] <- list(layer = r$layer[1L], unit = r$poly[1L], data = rbind(r, own), standOnly = FALSE)
   }
   alone <- st[is.na(st$poly) | !st$poly %in% rest$poly, , drop = FALSE]
-  key <- paste(alone$layer, alone$poly, sep = "\r")
+  key <- .naSafeKey(alone$layer, alone$poly)
   for (k in unique(key)) {
     r <- alone[key == k, , drop = FALSE]
     figs[[length(figs) + 1L]] <- list(layer = r$layer[1L], unit = r$poly[1L], data = r, standOnly = TRUE)
