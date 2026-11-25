@@ -195,7 +195,7 @@ In `mode = "multi"`, `plotFun` writes these figures for each reporting-polygon l
   age of a patch) enters as each replicate's mean over its patches, so the envelope spans the
   replicates, as for the class-level metrics.
   With `envelopeStyle = "lines"` (default `"ribbon"`), the ribbon figures show instead one thin grey
-  line per replicate under a bold line for their median (the files keep the name `<metric>_ribbon.png`).
+  line per replicate under a bold line for their median (the files keep their names, `<subregion> <metric>_ribbon.png` and `<metric>_ribbon_p<N>.png`).
   The replicate values are read once per layer; a layer without any gets ribbons, and a message says so.
   The boxplot figures are the same in both styles.
 - `lm/<layer>/per-metric/`: the envelopes of each landscape metric with a panel per subregion,
@@ -211,9 +211,10 @@ In `mode = "multi"`, `plotFun` writes these figures for each reporting-polygon l
   `boxplots/<layer>/<subregion> share of forest.png` has a panel per age class and a box per
   leading type of its share of the subregion's forested area.
 - `sspm/<layer>/`: the BC seral patch metrics (`bc`), one paginated envelope figure-set per metric.
-- `st/` (only with `"st"` in `postprocessEvents`): `stand_age.png`, `stand_leading.png` and
-  `stand_biomass.png` (the replicates over time, their median and the current condition), `species/lead_<code>.png` for each leading type, and `current_condition_overview_p<N>.png`
-  (where each stand-level measure's current condition lies against its NRV range, paged). The folder
+- `st/<studyArea>/` (only with `"st"` in `postprocessEvents`): `stand_age.png`,
+  `stand_leading.png` and `stand_biomass.png` (the replicates over time, their median and the
+  current condition), `species/lead_<code>.png` for each leading type, and
+  `current_condition_overview_p<N>.png` (where each stand-level measure's current condition lies against its NRV range, paged). The folder
   is emptied when the event runs.
 - `all/<layer>/<unit>.png` (only with `"cc"` in `postprocessEvents`, and `"lm"` or `"st"`): every
   metric of the unit with its current condition against the NRV range, rescaled to 0-1 and clipped at

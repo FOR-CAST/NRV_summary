@@ -34,8 +34,9 @@ new_pm_replicate <- function(r, time = 700L, areaMn = FALSE) {
 ## and summarise them into `mod` as the pm event does. `times` are the years of each replicate
 ## (default: the one year of `...`); `codes = TRUE` writes the classes as the integer codes of an
 ## older aggregate, with their labels in a year-0 map at `mod$fvtm0`, and labels the envelopes
-## as the pm event does.
-write_pm_aggregates <- function(sim, layer, mod, times = NULL, codes = FALSE, ...) {
+## as the pm event does. `unnumbered = TRUE` names the replicate folders "alpha", "beta", "gamma",
+## so that the replicate number nrvtools parses from them (`rep`) is NA.
+write_pm_aggregates <- function(sim, layer, mod, times = NULL, codes = FALSE, unnumbered = FALSE, ...) {
   aggRoot <- moduleFn(".nrvAggRoot", mod)
   summarizeRepDataset <- moduleFn(".summarizeRepDataset", mod)
   refCode <- LandWebUtils::refCodeFor("pm", layer)
@@ -50,7 +51,9 @@ write_pm_aggregates <- function(sim, layer, mod, times = NULL, codes = FALSE, ..
     } else {
       do.call(rbind, lapply(times, function(t) new_pm_replicate(r, time = t, ...)))
     }
-    nrvtools::write_nrv_parquet(coded(d), aggRoot(sim, refCode), sprintf("rep%02d", r))
+    if (unnumbered) d$rep <- NA_integer_
+    nrvtools::write_nrv_parquet(coded(d), aggRoot(sim, refCode),
+                                if (unnumbered) c("alpha", "beta", "gamma")[r] else sprintf("rep%02d", r))
   }
   nrvtools::write_nrv_parquet(coded(new_pm_replicate(1, time = 0L, ...)),
                               aggRoot(sim, paste0(refCode, "_CC")), "CC")
@@ -400,7 +403,7 @@ test_that("lines style draws one line per replicate and the median", {
   env <- Filter(function(t) t$plotter == "envelope", tasks)
   lines <- Filter(function(t) identical(t$type, "lines"), env)
   ca <- lines[[match("A ca_ribbon.png", basename(taskFiles(lines)))]]
-  expect_equal(sort(unique(ca$reps$rep)), 1:3)
+  expect_equal(sort(unique(ca$reps$rep)), sprintf("rep%02d", 1:3)) ## the partitions
 
   gg <- plotOfTask(ca)
   expect_equal(layerClasses(gg), c("GeomLine", "GeomLine", "GeomHline")) ## no ribbon
@@ -505,4 +508,57 @@ test_that("lines figures render to PNG, with the NRV shading", {
 
   expect_setequal(files, taskFiles(tasks))
   expect_true(all(file.exists(files)))
+  ## the shading, behind the lines: a rectangle over the NRV years, on the continuous time axis
+  gg <- moduleFn(".addNrvShading", mod)(plotOfTask(tasks[[1]]), c(750, 800))
+  rect <- Filter(function(l) inherits(l$geom, "GeomRect"), gg$layers)
+  expect_length(rect, 1L)
+  expect_identical(gg$layers[[1]], rect[[1]]) ## drawn first, behind the data
+  d <- ggplot2::layer_data(gg, 1)
+  expect_equal(unique(c(d$xmin, d$xmax)), 800) ## the NRV years that the figure has (year 800)
+})
+
+test_that("lines are grouped by replicate, not by the replicate number parsed from its folder", {
+  withr::local_package("SpaDES.core")
+  mod <- new.env()
+  sim <- SpaDES.core::simInit(paths = testPaths)
+  write_pm_aggregates(sim, "FMA", mod, times = c(700L, 800L), unnumbered = TRUE)
+
+  tasks <- plotRun(sim, mod, "lines")
+  ca <- Filter(function(t) identical(t$type, "lines") && grepl("A ca_", basename(t$file)), tasks)[[1]]
+  reps <- ggplot2::layer_data(plotOfTask(ca), 1)
+
+  for (pn in split(reps, reps$PANEL)) {
+    expect_length(unique(pn$group), 3L) ## three lines, though no folder gives a number
+  }
+})
+
+test_that("lm envelopes draw as lines too: the subregion figures and the per-metric pages", {
+  withr::local_package("SpaDES.core")
+  mod <- new.env()
+  sim <- SpaDES.core::simInit(paths = testPaths)
+  polys <- c("A", "B")
+  refCode <- LandWebUtils::refCodeFor("lm", "FMA")
+  root <- moduleFn(".nrvAggRoot", mod)(sim, refCode)
+  unlink(root, recursive = TRUE)
+  one <- function(r) {
+    d <- expand.grid(time = c(700L, 800L), poly = polys, metric = c("ai", "ed"), stringsAsFactors = FALSE)
+    data.frame(level = "landscape", class = NA_character_, id = NA, metric = d$metric, value = r * d$time / 100,
+               rep = r, time = d$time, poly = d$poly)
+  }
+  for (r in 1:3) nrvtools::write_nrv_parquet(one(r), root, sprintf("rep%02d", r))
+  mod[[refCode]] <- moduleFn(".summarizeRepDataset", mod)(root, perReplicate = TRUE)
+
+  tasks <- plotRun(sim, mod, "lines", events = "lm")
+
+  lines <- Filter(function(t) identical(t$type, "lines"), tasks)
+  expect_length(lines, 2L * 2L + 2L) ## per subregion x metric, and one page per metric
+  expect_setequal(basename(taskFiles(lines)),
+                  c("A ai_ribbon.png", "B ai_ribbon.png", "A ed_ribbon.png", "B ed_ribbon.png",
+                    "ai_ribbon_p1.png", "ed_ribbon_p1.png"))
+  page <- lines[[match("ai_ribbon_p1.png", basename(taskFiles(lines)))]]
+  reps <- ggplot2::layer_data(plotOfTask(page), 1)
+  expect_equal(nrow(reps), 12L) ## 3 replicates x 2 years x 2 subregions
+  for (pn in split(reps, reps$PANEL)) expect_length(unique(pn$group), 3L)
+  expect_true(all(vapply(Filter(function(t) identical(t$type, "boxplot"), tasks),
+                         function(t) is.null(t$reps), logical(1L)))) ## no slices built for the boxplots
 })

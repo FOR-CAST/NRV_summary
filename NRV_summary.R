@@ -104,7 +104,7 @@ defineModule(sim, list(
                           "`\"ribbon\"` (default) draws the range of the replicates as a band around their mean;",
                           "`\"lines\"` draws one thin grey line per replicate under a bold line for their",
                           "median (`nrvtools::plot_nrv_envelope(type = \"lines\")`). The files keep their",
-                          "names (`<metric>_ribbon.png`). The replicate values are read once per",
+                          "names (`<subregion> <metric>_ribbon.png`, `<metric>_ribbon_p<N>.png`). The replicate values are read once per",
                           "reporting layer; a layer whose aggregates hold none gets ribbons, and a message",
                           "says so. The boxplot figures and the per-class pages are the same in both styles.")),
     defineParameter("plotWorkers", "integer", 8L, 1L, NA,
@@ -134,8 +134,9 @@ defineModule(sim, list(
                           "(`figures/all/<layer>/<unit>.png`), with 'lm' or 'st' in the same run: it draws the",
                           "comparisons those events record. The stand-level rows go on the figure of every unit",
                           "named like the study area (`.studyAreaName`); with no such unit they have a figure of",
-                          "their own, `figures/all/<studyArea>/<studyArea>.png`. It also writes the NRV",
-                          "comparison tables. Not in the default: it runs only when asked for.",
+                          "their own, `figures/all/<studyArea>/<studyArea>.png`. With 'cc' in the run, the 'lm'",
+                          "event also writes the NRV comparison tables. Not in the default: it runs only when",
+                          "asked for.",
                           "'autocorr' for the autocorrelation time of the annual landscape series",
                           "(`annualSeries.csv`, from `recordAnnualSeries = TRUE`), the correlation between",
                           "snapshots `summaryInterval` years apart and a recommended thinning interval;",
@@ -2109,8 +2110,8 @@ makeAnimation <- function(sim) {
     if (is.null(reps)) {
       return(NULL)
     }
-    keep <- reps$metric == met
-    if (!is.null(poly)) keep <- keep & reps$poly == poly
+    keep <- reps$metric %in% met
+    if (!is.null(poly)) keep <- keep & reps$poly %in% poly
     reps[keep, , drop = FALSE]
   }
   tasks <- list()
@@ -2128,7 +2129,7 @@ makeAnimation <- function(sim) {
             sub, .ccFor(cc, met, poly), type, facet,
             title = paste0(poly, " — ", met), page = NULL, lay = lay,
             file = file.path(d, paste0(safe(poly), " ", safe(met), "_", type, ".png")),
-            repsSub = repsOf(met, poly)
+            repsSub = if (type == "ribbon") repsOf(met, poly)
           )
         }
       }
@@ -2152,7 +2153,7 @@ makeAnimation <- function(sim) {
           sub, .ccFor(cc, met), type, facet,
           title = .pageTitle(paste0(titlePrefix, met), pg, nPages), page = pg, lay = lay,
           file = file.path(d, paste0(safe(met), "_", type, "_p", pg, ".png")),
-          repsSub = repsOf(met)
+          repsSub = if (type == "ribbon") repsOf(met)
         )
       }
     }
@@ -2246,7 +2247,7 @@ makeAnimation <- function(sim) {
 }
 
 ## `reps` (.readReplicates()) as the lines of an envelope figure need them: one `rep` column naming
-## the replicate (nrv_replicate_values() calls it `replicate`), finite values, the class names shown
+## the replicate (a copy of nrv_replicate_values()'s `replicate`), finite values, the class names shown
 ## on the figure (`classLabels`, as for the envelope). NULL when there are none.
 .envelopeReps <- function(reps, classLabels = NULL) {
   if (is.null(reps) || !nrow(reps)) {
@@ -2256,7 +2257,9 @@ makeAnimation <- function(sim) {
   if (!nrow(reps)) {
     return(NULL)
   }
-  if (!"rep" %in% names(reps) && "replicate" %in% names(reps)) {
+  ## one line per partition (`replicate`): the `rep` that nrvtools parses from the folder name is NA
+  ## for a folder not named rep<NN>, which would draw every replicate as one line
+  if ("replicate" %in% names(reps)) {
     reps$rep <- reps$replicate
   }
   if (!is.null(classLabels) && "class" %in% names(reps)) {
