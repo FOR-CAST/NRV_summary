@@ -1,7 +1,7 @@
 ---
 title: "NRV_summary Manual"
-subtitle: "v.2.0.0.9043"
-date: "Last updated: 2026-11-24"
+subtitle: "v.2.0.0.9044"
+date: "Last updated: 2026-11-25"
 output:
   bookdown::html_document2:
     toc: true
@@ -149,6 +149,15 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
  </thead>
 <tbody>
   <tr>
+   <td style="text-align:left;"> autocorrMaxLag </td>
+   <td style="text-align:left;"> integer </td>
+   <td style="text-align:left;"> 200 </td>
+   <td style="text-align:left;"> 1 </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> (mode = 'multi') longest lag (years) of the autocorrelation of the annual landscape series (the `autocorr` event). The longest lag used is the largest of this, `summaryInterval` and 50, cut to the number of NRV years less one when the series is shorter. </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
    <td style="text-align:left;"> ageClasses </td>
    <td style="text-align:left;"> character </td>
    <td style="text-align:left;"> Young, I.... </td>
@@ -221,6 +230,15 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
+   <td style="text-align:left;"> recordAnnualSeries </td>
+   <td style="text-align:left;"> logical </td>
+   <td style="text-align:left;"> FALSE </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> (mode = 'single') record a few landscape scalars every year (proportion young and old, mean stand age, total biomass, proportion by leading species) in `annualSeries.csv`. Off by default: it adds an event per simulated year to each replicate. The `autocorr` event of 'multi' mode reads these files to give the autocorrelation time of the landscape, hence how far apart the summary snapshots must be to be independent. </td>
+   <td style="text-align:left;"> TRUE </td>
+  </tr>
+  <tr>
    <td style="text-align:left;"> reuseAggregates </td>
    <td style="text-align:left;"> logical </td>
    <td style="text-align:left;"> FALSE </td>
@@ -244,7 +262,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
    <td style="text-align:left;"> lm, pm </td>
    <td style="text-align:left;"> NA </td>
    <td style="text-align:left;"> NA </td>
-   <td style="text-align:left;"> Specify which subset of postprocessing events to run. At least one of: 'am' for the stand-age time-series animation (GIF); 'bc' for BC seral stage patch metrics; 'lm' for default landscape metrics; 'lw' for default LandWeb summaries 'pm' for default patch metrics; 'on' for ON patch metrics; 'stability' for the check that the run is long enough (is each metric still trending over the end of the NRV period?), `stability.csv` and its figures, and, with 'lm' in the same run, the current-condition overview of each lm layer. Not in the default: it runs only when asked for. Any other value is an error ('fd', forest degradation indicators, is not implemented). </td>
+   <td style="text-align:left;"> Specify which subset of postprocessing events to run. At least one of: 'am' for the stand-age time-series animation (GIF); 'bc' for BC seral stage patch metrics; 'lm' for default landscape metrics; 'lw' for default LandWeb summaries 'pm' for default patch metrics; 'on' for ON patch metrics; 'autocorr' for the autocorrelation time of the annual landscape series (`annualSeries.csv`, from `recordAnnualSeries = TRUE`), the correlation between snapshots `summaryInterval` years apart and a recommended thinning interval; `autocorrelation.csv` and its figure. Not in the default: it runs only when asked for. 'stability' for the check that the run is long enough (is each metric still trending over the end of the NRV period?), `stability.csv` and its figures, and, with 'lm' in the same run, the current-condition overview of each lm layer. Not in the default: it runs only when asked for. Any other value is an error ('fd', forest degradation indicators, is not implemented). </td>
    <td style="text-align:left;"> TRUE </td>
   </tr>
   <tr>
@@ -445,6 +463,42 @@ raising ImageMagick's `policy.xml` memory/disk limits (see
 [LandWeb #153](https://github.com/PredictiveEcology/LandWeb/issues/153)). With `gifski`
 **no such system configuration is required**.
 
+The autocorrelation check is opt-in in two parts. In `mode = "single"`,
+`recordAnnualSeries = TRUE` adds an `annual_series` event for every simulated year (about a
+thousand events per replicate) that writes `annualSeries.csv` beside the replicate's other
+outputs, one row per year with no rasters made, for the reporting area (`studyAreaReporting`):
+`time`; `propYoung`, the proportion of the forest younger than the first cut-off above the
+youngest (40 years with the default `ageClassCutOffs`, `c(0, 40, 80, 120)`); `propOld`, the
+proportion at or above the last cut-off (120 years); `meanStandAge`; `totalBiomassTg`, the total biomass in teragrams;
+and a `lead_<species>` column, the proportion of the forest led by each species (`lead_Mixed`
+for mixed stands). It is `FALSE` by default.
+In `mode = "multi"`, `"autocorr"` in `postprocessEvents` (not in the default) runs the
+`postprocess_autocorr` event, which reads the `annualSeries.csv` files found in the replicate
+folders (so a file left by an earlier run with `recordAnnualSeries = TRUE` is analysed if the
+folder was not cleared) and, over the NRV years, takes the autocorrelation of each series.
+The replicates are treated as realisations of one process: each series is centred on the mean
+of all replicates and NRV years, and the variance is pooled over the replicates.
+The autocorrelation time of a series is that of an exponential decay with the mean lag-1
+autocorrelation as its rate, `tau = (1 + phi) / (1 - phi)`; no curve is fitted, and `ar1Misfit`
+says how far the autocorrelation at lags 1 to 50 departs from that decay.
+The recommended thinning is the largest `tau`.
+If the replicates' means differ, the common mean counts that difference as autocorrelation,
+which errs toward more thinning.
+The estimates are lower bounds: a short series biases the sample autocorrelation toward 0,
+and the event says so when the NRV has fewer than 20 times the recommended thinning in years.
+The longest lag is the largest of `autocorrMaxLag` (200 years), `summaryInterval` and 50, cut to
+the number of NRV years less one when the series is shorter (the correlation at `summaryInterval`
+is then not estimated, and the message says so).
+A replicate whose file does not cover the NRV years is left out with a warning, and a series
+that is missing from a replicate's file is left out with a message.
+`csv/autocorrelation/autocorrelation.csv` has one row per series: `phi`, `tau`, `ar1Misfit`;
+`r`, `rMin`, `rMax`, the correlation at lag `summaryInterval` (pooled, and the lowest and highest
+of the replicates' own correlations); `effectiveSnapshots`; `tauGeyer`, Geyer's estimate, kept for comparison;
+`lagBelow0.1`, the first lag below 0.1; `label`; `recommendedThin`; `summaryInterval`;
+and `nSnapshots`, the summary times in the NRV years over all replicates.
+Without `annualSeries.csv` files the event says so, removes an earlier run's csv and figure, and
+writes nothing.
+
 
 
 <div class="figure">
@@ -497,7 +551,7 @@ Table \@ref(tab:eventObjects-NRV-summary) lists, for each object, the code that 
   </tr>
 </tbody>
 <tfoot><tr><td style="padding: 0; " colspan="100%">
-<sup></sup> Not shown, off with the default parameters: postprocess_lw, postprocess_bc, postprocess_on, postprocess_stability, animation. Not shown, touching no object in the metadata: .inputObjects, init: .checkNrvWindow(), init: .nrvYears(), init: .warnStabilityWindow(), init: .checkPostprocessEvents(), save_single, postprocess. Not traced to any code (e.g. reached indirectly): cohortData, flammableMap, pixelGroupMap, speciesLayers, sppColorVect, standAgeMap.</td></tr></tfoot>
+<sup></sup> Not shown, off with the default parameters: postprocess_lw, postprocess_bc, postprocess_on, postprocess_stability, postprocess_autocorr, annual_series, animation. Not shown, touching no object in the metadata: .inputObjects, init: .checkNrvWindow(), init: .nrvYears(), init: .warnStabilityWindow(), init: .checkPostprocessEvents(), save_single, postprocess. Not traced to any code (e.g. reached indirectly): cohortData, flammableMap, pixelGroupMap, speciesLayers, sppColorVect, standAgeMap.</td></tr></tfoot>
 </table>
 
 
@@ -580,6 +634,10 @@ In `mode = "multi"`, `plotFun` writes these figures for each reporting-polygon l
   The verdicts are also in `csv/stability/all/stability.csv`. The check needs at least 3 summary times
   in the stability window (the last `stabilityWindow` of the NRV years); `init` warns when there are
   fewer, and the verdict then says that no series could be tested.
+- `autocorrelation/all/` (only with `"autocorr"` in `postprocessEvents`): the autocorrelation of each
+  annual series by lag (replicates thin, their mean in bold, the fitted decay dashed, and a line at
+  `summaryInterval`). The numbers are in `csv/autocorrelation/autocorrelation.csv`. The folder is
+  emptied when the event runs.
 
 When `nrvWindow` is below 1, the envelope figures still show every summary year, and shade the NRV
 years.
