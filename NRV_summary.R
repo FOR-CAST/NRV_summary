@@ -641,10 +641,12 @@ InitMulti <- function(sim) {
   cdpgm <- files[.isCohortQs2(files) | .isCohortPart(files) | grepl("pixelGroupMap", basename(files))]
   cdpgm <- cdpgm[.inReps(cdpgm, allReps) & .inYears(cdpgm, mod$analysesOutputsTimes)]
 
-  ## the replicates' cohort files of every year, in either format: each site that reads cohorts chooses from these
-  ## (see .cohortFile()), so all read the same file of a replicate-year. With outputsDF, those it lists.
+  ## the replicates' cohort files of every year, in either format, that are on disk: each site that reads cohorts
+  ## chooses from these (see .cohortFile()), so all read the same file of a replicate-year. With outputsDF, those it
+  ## lists.
   repYear <- function(f) paste(.repFolder(f), .fileYear(f))
   mod$cohortFiles <- files[(.isCohortQs2(files) | .isCohortPart(files)) & .inReps(files, allReps)]
+  mod$cohortFiles <- mod$cohortFiles[file.exists(mod$cohortFiles)]
   isPart <- .isCohortPart(mod$cohortFiles)
   both <- isPart & repYear(mod$cohortFiles) %in% repYear(mod$cohortFiles[!isPart])
   if (any(both)) {
@@ -680,13 +682,10 @@ InitMulti <- function(sim) {
 
   if (!all(filesNeeded$exists)) {
     missing <- filesNeeded[filesNeeded$exists == FALSE, ]$file
-    ## a replicate-year's cohorts may be in either format: name both
-    isCd <- .isCohortQs2(missing)
-    missing[isCd] <- paste(missing[isCd], "or", .cohortPartPath(dirname(missing[isCd]), .fileYear(missing[isCd])))
     stop(
       sum(!filesNeeded$exists),
       " simulation files appear to be missing:\n",
-      paste(missing, collapse = "\n")
+      paste(.cohortCandidates(missing), collapse = "\n") ## a cohort file in either format: both named
     )
   }
 
@@ -708,12 +707,15 @@ InitMulti <- function(sim) {
   mod$vtmTimeSeries <- gsub(".*standAgeMap.*", NA, mod$allouts)
   mod$vtmTimeSeries <- mod$vtmTimeSeries[.inYears(mod$vtmTimeSeries, P(sim)$timeSeriesTimes)]
 
-  ## cohortData and pixelGroupMap files: for each pixelGroupMap, in its place, the cohort file of the same replicate
-  ## and year (the BC seral maps pair them by position), the part file when both formats were found
+  ## cohortData and pixelGroupMap files: for each pixelGroupMap, in its place, the cohort file of the same folder and
+  ## year (the BC seral maps pair them by position), chosen by .cohortFile() as everywhere else; NA where there is none
   mod$pgm <- cdpgm[grepl("pixelGroupMap", basename(cdpgm))]
-  cd <- c(cdpgm[.isCohortPart(cdpgm)], cdpgm[.isCohortQs2(cdpgm)])
-  mod$cd <- cd[match(repYear(mod$pgm), repYear(cd))]
-  if (anyNA(mod$cd)) {
+  mod$cd <- .cohortFile(dirname(mod$pgm), .fileYear(mod$pgm),
+                        sub("^pixelGroupMap(_year[0-9]+)\\.tif$", "cohortData\\1.qs2", basename(mod$pgm)),
+                        files = mod$cohortFiles)
+  mod$cd[!mod$cd %in% mod$cohortFiles] <- NA_character_
+  ## only the bc and st events read these pairs
+  if (anyNA(mod$cd) && any(c("bc", "st") %in% tolower(P(sim)$postprocessEvents))) {
     stop("NRV_summary: no cohortData file in the folder and of the year of these pixelGroupMap files:\n",
          paste(mod$pgm[is.na(mod$cd)], collapse = "\n"), call. = FALSE)
   }
@@ -907,8 +909,8 @@ InitMulti <- function(sim) {
   pgm <- file.path(dirname(vtm), sub("^vegTypeMap", "pixelGroupMap", basename(vtm)))
   miss <- c(cd, pgm)[!file.exists(c(cd, pgm))]
   if (length(miss)) {
-    stop("NRV_summary: cannot build the reporting-group maps; missing:\n", paste(miss, collapse = "\n"),
-         call. = FALSE)
+    stop("NRV_summary: cannot build the reporting-group maps; missing:\n",
+         paste(.cohortCandidates(miss), collapse = "\n"), call. = FALSE)
   }
   out <- file.path(outRoot, basename(dirname(vtm)), basename(vtm))
   unlink(outRoot, recursive = TRUE)
@@ -1089,7 +1091,25 @@ InitMulti <- function(sim) {
 .cohortFile <- function(repDir, year, qs2, files = NULL) {
   pq <- .cohortPartPath(repDir, year)
   found <- file.exists(pq) & (is.null(files) | pq %in% files)
-  ifelse(found, pq, file.path(repDir, qs2))
+  as.character(ifelse(found, pq, file.path(repDir, qs2))) ## character(0) for no files, not logical(0)
+}
+
+## `files`, each .qs2 cohort path followed by the part file that would also do ("<qs2> or <part file>"): what a
+## message about missing files names
+.cohortCandidates <- function(files) {
+  isCd <- .isCohortQs2(files)
+  files[isCd] <- paste(files[isCd], "or", .cohortPartPath(dirname(files[isCd]), .fileYear(files[isCd])))
+  files
+}
+
+## Stops when the cohort file `f` (from .cohortFile()) of a year InitMulti() does not check, e.g. year 0, is missing,
+## naming both formats' paths
+.checkCohortFile <- function(f, what) {
+  if (!all(file.exists(f))) {
+    stop("NRV_summary: ", what, "; missing:\n", paste(.cohortCandidates(f[!file.exists(f)]), collapse = "\n"),
+         call. = FALSE)
+  }
+  invisible(f)
 }
 
 ## Stops when a map holds a code of 255 or more: it could not be saved as INT1U, whose NA value is 255.
@@ -1678,7 +1698,7 @@ makeSeralStageMapsBC <- function(sim) {
   rm(studyAreaReporting, NDTBEC)
 
   year0 <- .repYear0Files(mod$rep1Dir, mod$cohortFiles)
-  fcd0 <- year0$cohortData
+  fcd0 <- .checkCohortFile(year0$cohortData, "cannot make the year-0 seral stage map")
   fpgm0 <- year0$pixelGroupMap
 
   fcd <- c(fcd0, mod$cd)
@@ -3374,6 +3394,7 @@ standMetrics <- function(sim) {
                    pgm = file.path(mod$rep1Dir, paste0("pixelGroupMap_year", padStart, ".tif")),
                    cd = .cohortFile(mod$rep1Dir, P(sim)$simTimes[1], paste0("cohortData_year", padStart, ".qs2"),
                                     files = mod$cohortFiles))
+  .checkCohortFile(cc$cd, "cannot take the stand-level measures of the current condition")
   cells <- NULL
   one <- function(f) {
     pgm <- terra::rast(f$pgm)

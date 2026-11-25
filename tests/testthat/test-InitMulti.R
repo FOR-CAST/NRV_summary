@@ -30,15 +30,17 @@ touchFiles <- function(files) {
   invisible(files)
 }
 
+## `events`: postprocessEvents (NULL: the parameter's default, lm and pm)
 initMultiSim <- function(root, reps, outputsFiles = NULL, times = c(0, 1000), simTimes = c(0, 1000),
                          summaryPeriod = c(700L, 1000L), timeSeriesTimes = 701:702,
-                         outputsDF = NULL) {
+                         outputsDF = NULL, events = NULL) {
   sim <- SpaDES.core::simInit(
     times = list(start = times[1], end = times[2]),
     params = list(NRV_summary = c(
       list(mode = "multi", reps = reps, summaryPeriod = summaryPeriod, summaryInterval = 300L,
            timeSeriesTimes = timeSeriesTimes),
-      if (!is.null(simTimes)) list(simTimes = simTimes)
+      if (!is.null(simTimes)) list(simTimes = simTimes),
+      if (!is.null(events)) list(postprocessEvents = events)
     )),
     modules = moduleName,
     objects = c(list(reportingPolygons = list(ELF = "placeholder")),
@@ -446,15 +448,21 @@ test_that("reps = 1:2 ignores rep10-rep12 parquet cohorts on disk", {
   expect_setequal(m$cohortFiles, unlist(lapply(rep12, cohortFiles, format = "parquet")))
 })
 
-test_that("a pixelGroupMap with no cohort file of its folder and year stops InitMulti, naming it", {
+test_that("a pixelGroupMap with no cohort file of its folder and year stops InitMulti, naming it, if bc or st runs", {
   root <- withr::local_tempdir()
   files <- unlist(lapply(file.path(root, c("rep1", "rep2")), repFiles, cohorts = "parquet"))
   extra <- file.path(root, "rep1", "sub", "pixelGroupMap_year0700.tif")
   touchFiles(c(files, extra))
-  expect_error(
-    runInit(initMultiSim(root, reps = 1:2, outputsFiles = c(files, extra))),
-    paste0("no cohortData file in the folder and of the year of these pixelGroupMap files:\n", extra, "$")
-  )
+  ## only the bc and st events read the cohort files and pixel group maps: lm and pm (the default) run as before
+  expect_no_error(runInit(initMultiSim(root, reps = 1:2, outputsFiles = c(files, extra))))
+  expect_no_error(runInit(initMultiSim(root, reps = 1:2, outputsFiles = c(files, extra), events = c("lm", "lw", "am"))))
+  for (ev in c("st", "bc", "BC")) {
+    expect_error(
+      runInit(initMultiSim(root, reps = 1:2, outputsFiles = c(files, extra), events = c("lm", ev))),
+      paste0("no cohortData file in the folder and of the year of these pixelGroupMap files:\n", extra, "$"),
+      info = ev
+    )
+  }
 })
 
 test_that("a folder named like the pixelGroupMap files does not make other files pixel group maps", {
@@ -466,4 +474,17 @@ test_that("a folder named like the pixelGroupMap files does not make other files
   m <- modOf(runInit(initMultiSim(root, reps = 1:2)))
   expect_identical(m$pgm, file.path(rep(reps, each = 2L), sprintf("pixelGroupMap_year%04d.tif", yrs)))
   expect_identical(m$cd, unlist(lapply(reps, cohortFiles)))
+})
+
+test_that("a part file the outputsDF lists but that is not on disk is not taken: the .qs2 beside it is", {
+  root <- withr::local_tempdir()
+  files <- unlist(lapply(file.path(root, c("rep1", "rep2")), repFiles, cohorts = c("qs2", "parquet")))
+  touchFiles(files)
+  gone <- cohortFiles(file.path(root, "rep1"), 700, "parquet")
+  file.remove(gone)
+  r <- initWithWarnings(initMultiSim(root, reps = 1:2, outputsFiles = files, events = c("lm", "st")))
+  expect_identical(cdOf(r$m), c("rep1 0700 qs2", "rep1 1000 parquet", "rep2 0700 parquet", "rep2 1000 parquet"))
+  expect_false(gone %in% r$m$cohortFiles)
+  ## the other three replicate-years have both formats
+  expect_match(grep("both formats", r$warnings, value = TRUE), "3 replicate-year(s)", fixed = TRUE)
 })

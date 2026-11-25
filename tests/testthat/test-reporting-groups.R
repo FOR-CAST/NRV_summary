@@ -98,7 +98,9 @@ test_that("the rebuilt maps keep the <rep>/vegTypeMap_year<YYYY>.tif path nrvtoo
 
   ## without the saved cohorts there is nothing to rebuild from
   file.remove(file.path(repDir, "cohortData_year0700.qs2"))
-  expect_error(buildMaps(vtm, outRoot, grp, colors, 0.75, 2L), "missing:.*cohortData_year0700.qs2")
+  ## the message names both formats' paths
+  expect_error(buildMaps(vtm, outRoot, grp, colors, 0.75, 2L),
+               "missing:\n.*/rep01/cohortData_year0700.qs2 or .*/rep01/cohortData/year=0700/part-0.parquet$")
 })
 
 test_that("reporting-group maps are identical from .qs2 and parquet cohorts", {
