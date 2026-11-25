@@ -246,11 +246,14 @@ test_that("the event says how many replicates it read and drops a file that does
 
 test_that("a series missing from a replicate, or constant, is named as left out", {
   withr::local_package("SpaDES.core")
-  tables <- arTables(3, 601, 0.8, constant = 2)
+  tables <- arTables(3, 601, 0.8, flat = 2)
   tables[[1]]$lead_Pice_mar <- tables[[1]]$x
+  tables[[2]]$sparse <- c(1, 2, rep(NA, 599)) ## fewer than 3 values in one replicate
+  tables[[1]]$sparse <- tables[[3]]$sparse <- tables[[1]]$x
   run <- multiRun(tables)
   expect_match(run$msgs, "left out.*lead_Pice_mar")
-  expect_match(run$msgs, "no autocorrelation time.*constant")
+  expect_match(run$msgs, "constant over the NRV years\\): flat")
+  expect_match(run$msgs, "fewer than 3 values.*: sparse")
 })
 
 test_that("the message does not print NA when summaryInterval is longer than the NRV years", {

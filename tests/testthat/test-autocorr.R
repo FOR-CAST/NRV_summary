@@ -43,7 +43,7 @@ nrv <- c(1, 300)
 ## 15 reps x 301 NRV years of AR(1) with phi 0.95 (tau 39), as LandWeb's NRV: with each rep centred on its own
 ## mean, the estimated tau is about 0.75 of the truth (the sample ACF is biased toward 0 when tau is a sizeable
 ## fraction of the series); around the replicates' common mean it is about 0.95. 30 fixed seeds averaged.
-test_that("15 reps x 301 years of AR(1) with phi 0.95 give a mean fitted tau within 15% of 39", {
+test_that("15 reps x 301 years of AR(1) with phi 0.95 give a mean tau within 15% of 39", {
   tau <- vapply(1:30, function(seed) {
     .autocorrSummary(repTables(function(n) as.numeric(stats::arima.sim(list(ar = 0.95), n)), reps = 15,
                                years = 301, seed = seed), c(1, 301), 200, 50)$fit$tau
@@ -67,6 +67,38 @@ test_that("the ACF is pooled around the replicates' common mean", {
   tables <- list(data.frame(time = 1:60, x = 0), data.frame(time = 1:60, x = 1))
   fit <- .autocorrSummary(tables, c(1, 60), 20, 10)$fit
   expect_gt(fit$phi, 0.9)
+})
+
+test_that("each replicate's ACF is a correlation (1 at lag 0, within [-1, 1]); the pooled one is the pooled estimator", {
+  ## replicates of very different variance around one level: the per-rep curves are scaled by their own sum of squares
+  set.seed(11)
+  sd <- c(1, 5, 0.2)
+  tables <- lapply(sd, function(k) data.frame(time = 1:200, x = k * as.numeric(stats::arima.sim(list(ar = 0.8), 200))))
+  res <- .autocorrSummary(tables, c(1, 200), 30, 10)
+  perRep <- res$acf[res$acf$rep != "pooled", ]
+  expect_equal(perRep$acf[perRep$lag == 0], rep(1, 3))
+  expect_true(all(abs(perRep$acf) <= 1 + 1e-12))
+  ## the pooled curve: summed lagged products over the summed squares, around the common mean
+  x <- lapply(tables, `[[`, "x")
+  m <- mean(unlist(x))
+  pooledAt <- function(k) {
+    sum(vapply(x, function(v) sum((v[seq_len(200 - k)] - m) * (v[seq_len(200 - k) + k] - m)), 0)) /
+      sum(vapply(x, function(v) sum((v - m)^2), 0))
+  }
+  pooled <- res$acf[res$acf$rep == "pooled", ]
+  expect_equal(pooled$acf[pooled$lag %in% 0:5], vapply(0:5, pooledAt, 0))
+  expect_lte(res$fit$rMax, 1)
+  expect_gte(res$fit$rMin, -1)
+})
+
+test_that("a series with fewer than 3 values in a replicate is 'tooFew', not 'constant'", {
+  tables <- list(data.frame(time = 1:100, a = stats::rnorm(100), b = 1, c = stats::rnorm(100)),
+                 data.frame(time = 1:100, a = c(1, 2, rep(NA, 98)), b = 1, c = stats::rnorm(100)))
+  res <- .autocorrSummary(tables, c(1, 100), 20, 10)
+  expect_identical(res$tooFew, "a")
+  expect_identical(res$constant, "b")
+  expect_setequal(res$undefined, c("a", "b"))
+  expect_false(is.na(res$limiting))
 })
 
 test_that("a merged species code is labelled with all of its names", {
