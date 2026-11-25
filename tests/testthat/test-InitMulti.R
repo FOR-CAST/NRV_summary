@@ -488,3 +488,45 @@ test_that("a part file the outputsDF lists but that is not on disk is not taken:
   ## the other three replicate-years have both formats
   expect_match(grep("both formats", r$warnings, value = TRUE), "3 replicate-year(s)", fixed = TRUE)
 })
+
+test_that(".cohortFile pairs the files of a folder and year, whatever the year's padding", {
+  cohortFile <- moduleFn(".cohortFile", new.env())
+  rep1 <- file.path("o", "rep01")
+  rep2 <- file.path("o", "rep02")
+  built <- "cohortData_year0700.qs2"
+  padded <- file.path(rep1, "cohortData_year700.qs2")
+  ## a file padded differently beside the pixelGroupMap of that year
+  expect_identical(cohortFile(rep1, 700L, built, files = padded), padded)
+  ## its replicate folder counts: another folder's file of that year is not taken
+  other <- file.path(rep2, "cohortData_year700.qs2")
+  expect_identical(cohortFile(rep1, 700L, built, files = other), file.path(rep1, built))
+  expect_identical(cohortFile(c(rep1, rep2), c(700L, 700L), c(built, built), files = c(padded, other)), c(padded, other))
+  ## another year's is not either
+  expect_identical(cohortFile(rep1, 1000L, "cohortData_year1000.qs2", files = padded),
+                   file.path(rep1, "cohortData_year1000.qs2"))
+  ## the file named as the caller names it is kept when it is among them
+  exact <- file.path(rep1, built)
+  expect_identical(cohortFile(rep1, 700L, built, files = c(padded, exact)), exact)
+  ## without candidates, the path is built as before
+  expect_identical(cohortFile(rep1, 700L, built), file.path(rep1, built))
+  ## the part file wins over a .qs2 of any padding, when it exists and is a candidate
+  root <- withr::local_tempdir()
+  r1 <- file.path(root, "rep01")
+  pq <- touchFiles(cohortFiles(r1, 700, "parquet"))
+  qs <- touchFiles(file.path(r1, "cohortData_year700.qs2"))
+  expect_identical(cohortFile(r1, 700L, built, files = c(qs, pq)), pq)
+  expect_identical(cohortFile(r1, 700L, built, files = qs), qs)
+})
+
+test_that("InitMulti pairs a cohort file padded differently from its pixelGroupMap", {
+  root <- withr::local_tempdir()
+  out <- file.path(root, "mainSim")
+  reps <- file.path(out, sprintf("rep%02d", 1:2))
+  files <- unlist(lapply(reps, repFiles))
+  files <- sub("cohortData_year0700.qs2", "cohortData_year700.qs2", files, fixed = TRUE)
+  touchFiles(files)
+  m <- modOf(runInit(initMultiSim(root, reps = 1:2, events = c("lm", "pm", "bc"))))
+  expect_identical(m$cd, file.path(rep(reps, each = 2L), c("cohortData_year700.qs2", "cohortData_year1000.qs2")))
+  fileYear <- moduleFn(".fileYear", new.env())
+  expect_identical(fileYear(m$cd), fileYear(m$pgm))
+})

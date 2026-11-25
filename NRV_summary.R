@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9046"),
+  version = list(NRV_summary = "2.0.0.9047"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -1087,14 +1087,35 @@ InitMulti <- function(sim) {
 }
 
 ## The cohortData file of replicate folder `repDir` and year `year`, in either format: the part file (see
-## .cohortPartPath()) when there is one, else `<repDir>/<qs2>`, the .qs2 file of that year named as the caller
-## names it. With both, the part file. With `files` (mod$cohortFiles, the cohort files InitMulti() found), a part
-## file counts only if it is one of them: given an outputsDF, only a part file it lists. Every caller in mode
-## 'multi' passes them, so all choose the same file of a replicate-year.
+## .cohortPartPath()) when there is one, else the .qs2 file of that year. With both, the part file. Without `files`,
+## the .qs2 is `<repDir>/<qs2>`, named as the caller names it. With `files` (mod$cohortFiles, the cohort files
+## InitMulti() found), the file is the one of `files` in the same replicate folder and of the same year, however the
+## year is padded (`cohortData_year700.qs2` goes with `pixelGroupMap_year0700.tif`); a part file counts only if it is
+## one of them: given an outputsDF, only a part file it lists. Where `files` has no .qs2 of that folder and year,
+## the answer is `<repDir>/<qs2>`. Every caller in mode 'multi' passes `files`, so all choose the same file of a
+## replicate-year.
 .cohortFile <- function(repDir, year, qs2, files = NULL) {
   pq <- .cohortPartPath(repDir, year)
   found <- file.exists(pq) & (is.null(files) | pq %in% files)
-  as.character(ifelse(found, pq, file.path(repDir, qs2))) ## character(0) for no files, not logical(0)
+  out <- file.path(repDir, qs2)
+  if (!is.null(files) && length(files)) {
+    qs2Files <- files[.isCohortQs2(files)]
+    fRep <- .repFolder(qs2Files)
+    fYear <- .fileYear(qs2Files)
+    n <- max(length(repDir), length(year), length(qs2))
+    repDir <- rep_len(repDir, n)
+    year <- rep_len(as.integer(year), n)
+    out <- rep_len(out, n)
+    for (i in seq_len(n)) {
+      hit <- qs2Files[fRep == repDir[i] & fYear %in% year[i]]
+      if (length(hit) && !out[i] %in% hit) {
+        out[i] <- sort(hit)[1]
+      }
+    }
+    found <- rep_len(found, n)
+    pq <- rep_len(pq, n)
+  }
+  as.character(ifelse(found, pq, out)) ## character(0) for no files, not logical(0)
 }
 
 ## `files`, each .qs2 cohort path followed by the part file that would also do ("<qs2> or <part file>"): what a
