@@ -70,6 +70,13 @@ defineModule(sim, list(
                           "'standAgeMap' warns and uses the cohorts when `sim$standAgeMap` is absent or",
                           "not on a grid aligned with `pixelGroupMap`. The simulated years always come",
                           "from the cohorts.")),
+    defineParameter("cohortDataFormat", "character", "parquet", NA, NA,
+                    paste("(mode = 'single') how `cohortData` is saved at each summary year: 'parquet' (the",
+                          "default), as an arrow dataset grouped by simulation time,",
+                          "`cohortData/year=<YYYY>/part-0.parquet` (`nrvtools::write_cohort_parquet()`); or",
+                          "'qs2', as `cohortData_year<YYYY>.qs2`, one file per year, as every run before",
+                          "2.0.0.9046 saved it. Mode = 'multi' reads both formats, and takes the parquet file",
+                          "of a replicate and year that has both.")),
     defineParameter("patchDirections", "integer", 4L, 4L, 8L,
                     paste("patch connectivity for the 'lw' (LandWeb summary) large-patch analysis,",
                           "passed to `nrvtools::largePatchCounts()` (via `landscapemetrics::get_patches`):",
@@ -282,6 +289,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       }
       .checkNrvWindow(P(sim)$nrvWindow)
       .checkEnvelopeStyle(P(sim)$envelopeStyle)
+      .checkCohortDataFormat(P(sim)$cohortDataFormat)
       if (!length(.nrvYears(P(sim)$summaryPeriod, P(sim)$summaryInterval, P(sim)$nrvWindow))) {
         stop("no summary time falls in the NRV years: with summaryPeriod ",
              paste(P(sim)$summaryPeriod, collapse = "-"), " and summaryInterval ", P(sim)$summaryInterval,
@@ -519,8 +527,14 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       }
 
       if (time(sim) %in% times_during) {
-        f_cohortData <- file.path(outputPath(sim), paste0("cohortData_year", padYear, ".qs2"))
-        qs2::qs_save(sim$cohortData, f_cohortData)
+        ## this year's part of the cohortData dataset, `cohortData/year=<YYYY>/part-0.parquet`; or one .qs2 file
+        if (P(sim)$cohortDataFormat == "parquet") {
+          f_cohortData <- nrvtools::write_cohort_parquet(sim$cohortData, file.path(outputPath(sim), "cohortData"),
+                                                         time(sim))
+        } else {
+          f_cohortData <- file.path(outputPath(sim), paste0("cohortData_year", padYear, ".qs2"))
+          qs2::qs_save(sim$cohortData, f_cohortData)
+        }
         sim <- registerOutputs(f_cohortData, sim)
 
         f_pixelGroupMap <- file.path(outputPath(sim), paste0("pixelGroupMap_year", padYear, ".tif"))
@@ -1018,7 +1032,8 @@ InitMulti <- function(sim) {
   yr
 }
 
-## TRUE for each cohortData file of the .qs2 layout, `cohortData_year<digits>.qs2` (runs before 2.0.0.9046)
+## TRUE for each cohortData file of the .qs2 layout, `cohortData_year<digits>.qs2` (runs before 2.0.0.9046,
+## and `cohortDataFormat = "qs2"`)
 .isCohortQs2 <- function(files) {
   grepl("^cohortData_year[0-9]+\\.qs2$", basename(as.character(files)))
 }
@@ -1129,6 +1144,14 @@ InitMulti <- function(sim) {
     stop("envelopeStyle must be \"ribbon\" or \"lines\"", call. = FALSE)
   }
   invisible(envelopeStyle)
+}
+
+## Stops unless `cohortDataFormat` is "parquet" or "qs2"
+.checkCohortDataFormat <- function(cohortDataFormat) {
+  if (!isTRUE(length(cohortDataFormat) == 1L && cohortDataFormat %in% c("parquet", "qs2"))) {
+    stop("cohortDataFormat must be \"parquet\" or \"qs2\"", call. = FALSE)
+  }
+  invisible(cohortDataFormat)
 }
 
 ## The NRV years: the last `nrvWindow` of the summary period (a subset of it by construction), as c(from, to)
