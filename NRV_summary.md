@@ -542,11 +542,11 @@ Table \@ref(tab:eventObjects-NRV-summary) lists, for each object, the code that 
   </tr>
  </thead>
 <tbody>
-  <tr grouplength="6"><td colspan="3" style="border-bottom: 1px solid;"><strong>Inputs</strong></td></tr>
+  <tr grouplength="12"><td colspan="3" style="border-bottom: 1px solid;"><strong>Inputs</strong></td></tr>
 <tr>
    <td style="text-align:left;padding-left: 2em;" indentlevel="1"> sppEquiv </td>
    <td style="text-align:left;">  </td>
-   <td style="text-align:left;"> init: .noTreeSpecies(), init: InitMulti(), map_generators (single) </td>
+   <td style="text-align:left;"> init: .noTreeSpecies(), init: InitMulti(), map_generators (single), save_single (single) </td>
   </tr>
   <tr>
    <td style="text-align:left;padding-left: 2em;" indentlevel="1"> LandTypeCC_reporting </td>
@@ -561,7 +561,7 @@ Table \@ref(tab:eventObjects-NRV-summary) lists, for each object, the code that 
   <tr>
    <td style="text-align:left;padding-left: 2em;" indentlevel="1"> reportingPolygons </td>
    <td style="text-align:left;">  </td>
-   <td style="text-align:left;"> init: InitMulti(), plot (multi), postprocess_lm (multi), postprocess_pm (multi) </td>
+   <td style="text-align:left;"> init: InitMulti(), init (own code), plot (multi), postprocess_lm (multi), postprocess_pm (multi) </td>
   </tr>
   <tr>
    <td style="text-align:left;padding-left: 2em;" indentlevel="1"> sppColorVectReporting </td>
@@ -569,13 +569,43 @@ Table \@ref(tab:eventObjects-NRV-summary) lists, for each object, the code that 
    <td style="text-align:left;"> init: InitMulti() </td>
   </tr>
   <tr>
+   <td style="text-align:left;padding-left: 2em;" indentlevel="1"> cohortData </td>
+   <td style="text-align:left;">  </td>
+   <td style="text-align:left;"> map_generators (single), save_single (single) </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;padding-left: 2em;" indentlevel="1"> pixelGroupMap </td>
+   <td style="text-align:left;">  </td>
+   <td style="text-align:left;"> map_generators (single), save_single (single) </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;padding-left: 2em;" indentlevel="1"> sppColorVect </td>
+   <td style="text-align:left;">  </td>
+   <td style="text-align:left;"> map_generators (single), save_single (single) </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;padding-left: 2em;" indentlevel="1"> standAgeMap </td>
+   <td style="text-align:left;">  </td>
+   <td style="text-align:left;"> map_generators (single) </td>
+  </tr>
+  <tr>
    <td style="text-align:left;padding-left: 2em;" indentlevel="1"> studyAreaReporting </td>
    <td style="text-align:left;">  </td>
-   <td style="text-align:left;"> postprocess_lm (multi), postprocess_pm (multi) </td>
+   <td style="text-align:left;"> map_generators (single), postprocess_lm (multi), postprocess_pm (multi) </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;padding-left: 2em;" indentlevel="1"> flammableMap </td>
+   <td style="text-align:left;">  </td>
+   <td style="text-align:left;"> save_single (single) </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;padding-left: 2em;" indentlevel="1"> speciesLayers </td>
+   <td style="text-align:left;">  </td>
+   <td style="text-align:left;"> save_single (single) </td>
   </tr>
 </tbody>
 <tfoot><tr><td style="padding: 0; " colspan="100%">
-<sup></sup> Not shown, off with the default parameters: postprocess_lw, postprocess_bc, postprocess_on, postprocess_st, postprocess_cc, postprocess_stability, postprocess_autocorr, annual_series, animation. Not shown, touching no object in the metadata: .inputObjects, init: .checkNrvWindow(), init: .checkEnvelopeStyle(), init: .nrvYears(), init: .warnStabilityWindow(), init: .checkPostprocessEvents(), save_single, postprocess. Not traced to any code (e.g. reached indirectly): cohortData, flammableMap, pixelGroupMap, speciesLayers, sppColorVect, standAgeMap.</td></tr></tfoot>
+<sup></sup> Not shown, off with the default parameters: postprocess_lw, postprocess_bc, postprocess_on, postprocess_st, postprocess_cc, postprocess_stability, postprocess_autocorr, annual_series, animation. Not shown, touching no object in the metadata: .inputObjects, init: .checkNrvWindow(), init: .checkEnvelopeStyle(), init: .nrvYears(), init: .warnStabilityWindow(), init: .checkPostprocessEvents(), postprocess.</td></tr></tfoot>
 </table>
 
 
@@ -595,11 +625,27 @@ init event, step 7 of 7
 
 
 
+#### init (own code) {-}
+
+the init event's own code, outside the functions it calls
+
+![](figures/NRV_summary_io_init_own.png){width=100%}
+
+
+
 #### map\_generators {-}
 
 mode = "single": once, at start and at times set in the code
 
 ![](figures/NRV_summary_io_map_generators.png){width=100%}
+
+
+
+#### save\_single {-}
+
+mode = "single": once, at start and at times set in the code
+
+![](figures/NRV_summary_io_save_single.png){width=100%}
 
 
 
