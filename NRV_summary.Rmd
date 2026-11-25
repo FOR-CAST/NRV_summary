@@ -116,18 +116,37 @@ raising ImageMagick's `policy.xml` memory/disk limits (see
 The autocorrelation check is opt-in in two parts. In `mode = "single"`,
 `recordAnnualSeries = TRUE` adds an `annual_series` event for every simulated year (about a
 thousand events per replicate) that writes `annualSeries.csv` beside the replicate's other
-outputs: the proportion of the forest that is young and old, the mean stand age, the total
-biomass and the proportion led by each species, one row per year, with no rasters made. It is
-`FALSE` by default. In `mode = "multi"`, `"autocorr"` in `postprocessEvents` (not in the
-default) runs the `postprocess_autocorr` event, which reads those files and, over the NRV years,
-fits an exponential decay to the autocorrelation of each series. It reports the autocorrelation
-time, the correlation between snapshots `summaryInterval` years apart (pooled, and the lowest
-and highest replicate), the effective number of independent snapshots and a recommended
-thinning interval, the largest autocorrelation time. `autocorrMaxLag` (200 years) is the longest
-lag shown; when the NRV years are fewer, it is cut to the number of years less one. Without
-`annualSeries.csv` files the event says so and does nothing.
-The event reads the `annualSeries.csv` files found in the replicate folders, so a file left by an earlier
-run with `recordAnnualSeries = TRUE` is analysed if the folder was not cleared.
+outputs, one row per year with no rasters made, for the reporting area (`studyAreaReporting`):
+`time`; `propYoung` and `propOld`, the proportions of the forest below the first and at or above
+the last of `ageClassCutOffs`; `meanStandAge`; `totalBiomassTg`, the total biomass in teragrams;
+and a `lead_<species>` column, the proportion of the forest led by each species (`lead_Mixed`
+for mixed stands). It is `FALSE` by default.
+In `mode = "multi"`, `"autocorr"` in `postprocessEvents` (not in the default) runs the
+`postprocess_autocorr` event, which reads the `annualSeries.csv` files found in the replicate
+folders (so a file left by an earlier run with `recordAnnualSeries = TRUE` is analysed if the
+folder was not cleared) and, over the NRV years, takes the autocorrelation of each series.
+The replicates are treated as realisations of one process: each series is centred on the mean
+of all replicates and NRV years, and the variance is pooled over the replicates.
+The autocorrelation time of a series is that of an exponential decay with the mean lag-1
+autocorrelation as its rate, `tau = (1 + phi) / (1 - phi)`; no curve is fitted, and `ar1Misfit`
+says how far the autocorrelation at lags 1 to 50 departs from that decay.
+The recommended thinning is the largest `tau`.
+If the replicates' means differ, the common mean counts that difference as autocorrelation,
+which errs toward more thinning.
+The estimates are lower bounds: a short series biases the sample autocorrelation toward 0,
+and the event says so when the NRV has fewer than 20 times the recommended thinning in years.
+The longest lag is the largest of `autocorrMaxLag` (200 years), `summaryInterval` and 50, cut to
+the number of NRV years less one when the series is shorter (the correlation at `summaryInterval`
+is then not estimated, and the message says so).
+A replicate whose file does not cover the NRV years is left out with a warning, and a series
+that is missing from a replicate's file is left out with a message.
+`csv/autocorrelation/autocorrelation.csv` has one row per series: `phi`, `tau`, `ar1Misfit`;
+`r`, `rMin`, `rMax`, the correlation at lag `summaryInterval` (pooled, lowest and highest
+replicate); `effectiveSnapshots`; `tauGeyer`, Geyer's estimate, kept for comparison;
+`lagBelow0.1`, the first lag below 0.1; `label`; `recommendedThin`; `summaryInterval`;
+and `nSnapshots`, the summary times in the NRV years over all replicates.
+Without `annualSeries.csv` files the event says so, removes an earlier run's csv and figure, and
+writes nothing.
 
 ```{r eventFlowCheck-NRV-summary, include = FALSE, eval = TRUE, cache = FALSE}
 ## the generated figures need SpaDES.core 3.2.1.9068 or later; older versions skip them
