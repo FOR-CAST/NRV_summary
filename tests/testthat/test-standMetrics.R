@@ -172,12 +172,14 @@ test_that("a comparison table is written only when asked for, beside the lm csvs
                     metric = "a", time = c(700, 1000), mean = 5, min = rep(c(2, 0), each = 2),
                     max = rep(c(9, 100), each = 2))
   cc <- data.frame(poly = "E", level = c("landscape", "class"), class = c(NA, "X"), metric = "a", mean = c(9, 50))
+  recorded <- character(0)
   write <- function(events, layer = "layerA") {
     m <- new.env()
     m$ppFiles <- character(0)
     fn <- stP(moduleFn(".writeNrvComparisonCSV", m), postprocessEvents = events)
     environment(fn)$.nrvPeriod <- function(sim) c(700, 1000)
-    environment(fn)$.wantNrvComparison <- function(sim) "st" %in% events
+    environment(fn)$.wantNrvComparison <- function(sim) any(c("st", "cc") %in% events)
+    environment(fn)$.recordComparison <- function(kind, cmp, layer) recorded <<- c(recorded, paste(kind, layer))
     fn(sim, env, cc, "lm", layer)
     m$ppFiles
   }
@@ -186,7 +188,10 @@ test_that("a comparison table is written only when asked for, beside the lm csvs
   expect_length(write(c("lm", "pm", "lw", "am")), 0L) ## LandWeb's events
   expect_false(file.exists(csv))
   expect_false(dir.exists(csvDir("layerA"))) ## not even the folder
+  expect_length(recorded, 0L) ## nothing is kept for the combined figure either
   expect_length(write(c("lm", "st")), 1L)
+  expect_identical(recorded, "lm layerA") ## the figure of every group gets it
+  expect_length(write(c("lm", "cc")), 1L) ## cc asks for the table too
   expect_true(file.exists(csv))
   r <- utils::read.csv(csv)
   expect_identical(r$position, "inside")
@@ -368,6 +373,8 @@ test_that("with LandWeb's events the lm event writes no comparison table, with s
   expect_false(any(grepl("nrvComparison", without)))
   with <- run(c("lm", "st"))
   expect_identical(setdiff(with, without), file.path("A", "lm_nrvComparison.csv"))
+  withCc <- run(c("lm", "cc")) ## cc asks for the tables too
+  expect_identical(setdiff(withCc, without), file.path("A", "lm_nrvComparison.csv"))
 })
 
 test_that("a code shared by several sppEquiv rows is named by all of them", {
@@ -405,4 +412,53 @@ test_that("the stand series join the stability check only when both st and stabi
   expect_false("st" %in% series("stability")$kind) ## a left-over series of an earlier st event is not tested
   expect_identical(moduleFn(".stabilityTitle", new.env())(c("st", "st"), c("age_Old", "forested"), "landscape"),
                    standLabel(c("age_Old", "forested")))
+})
+
+## ---- the opt-in `cc` event: scheduling, the comparison tables and a run (the rest is in test-current-condition-all.R)
+
+test_that("cc is not drawn unless postprocessEvents asks", {
+  withr::local_package("SpaDES.core")
+  scheduled <- function(sim) {
+    sim <- suppressWarnings(SpaDES.core::spades(sim, events = list(NRV_summary = "init"), debug = FALSE))
+    SpaDES.core::events(sim)$eventType
+  }
+  expect_false("postprocess_cc" %in% scheduled(multiSimSt()))
+  expect_false("postprocess_cc" %in% scheduled(multiSimSt(events = c("lm", "pm", "lw", "am", "st"))))
+  expect_true("postprocess_cc" %in% scheduled(multiSimSt(events = c("lm", "cc"))))
+  expect_true("postprocess_cc" %in% scheduled(multiSimSt(events = c("lm", "CC"))))
+  expect_no_error(moduleFn(".checkPostprocessEvents", new.env())(c("lm", "cc")))
+})
+
+test_that("cc runs after the events that record the comparisons and before the plot event", {
+  withr::local_package("SpaDES.core")
+  sim <- suppressWarnings(SpaDES.core::spades(multiSimSt(events = c("lm", "st", "cc")),
+                                              events = list(NRV_summary = "init"), debug = FALSE))
+  e <- as.data.frame(SpaDES.core::events(sim))
+  e <- e[order(as.numeric(e$eventTime), as.numeric(e$eventPriority)), ]
+  ev <- e$eventType[e$eventType %in% c("postprocess_lm", "postprocess_st", "postprocess_cc", "plot")]
+  expect_identical(ev, c("postprocess_lm", "postprocess_st", "postprocess_cc", "plot"))
+})
+
+test_that("cc writes the comparison tables", {
+  want <- function(events) stP(moduleFn(".wantNrvComparison", new.env()), postprocessEvents = events)(NULL)
+  expect_false(want(c("lm", "pm", "lw", "am")))
+  expect_true(want(c("lm", "cc")))
+  expect_true(want("CC"))
+})
+
+test_that("a run of st and cc draws the figure in the study area's layer, and the plot event keeps it", {
+  withr::local_package("SpaDES.core")
+  fx <- stDiskSim(c("st", "cc"))
+  all <- file.path(fx$root, "postprocess", "figures", "all")
+  dir.create(file.path(all, "SA"), recursive = TRUE)
+  stale <- file.path(all, "SA", "stale.png")
+  file.create(stale)
+  done <- suppressWarnings(suppressMessages(SpaDES.core::spades(
+    fx$sim, debug = FALSE,
+    events = list(NRV_summary = c("init", "postprocess_st", "postprocess_cc", "postprocess", "plot"))
+  )))
+  expect_false(file.exists(stale))
+  f <- file.path(all, "SA", "SA.png") ## the unit is the study area, in its own layer
+  expect_true(file.exists(f))
+  expect_true(normalizePath(f) %in% normalizePath(SpaDES.core::outputs(done)$file))
 })
