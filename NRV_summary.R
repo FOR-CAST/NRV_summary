@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9044"),
+  version = list(NRV_summary = "2.0.0.9045"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -39,7 +39,8 @@ defineModule(sim, list(
     ## 0.3.4.9001, not 0.3.4.9000: summarize_nrv() takes the per-replicate values that the patch
     ## metric envelopes are built from and returns exact quartiles; nrv_metric_info() names the
     ## axes; the plot functions take captions.
-    "FOR-CAST/nrvtools (>= 0.3.4.9003)",
+    ## 0.4.0, not 0.3.4.9003: plot_nrv_envelope(type = "lines", reps_df =), for `envelopeStyle = "lines"`.
+    "FOR-CAST/nrvtools (>= 0.4.0)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9016)",
     ## 3.2.1.9057: InitMulti calls dirnamesFromSet(..., leafOnly = FALSE) and resolveSimYears();
     ## it relies on dirnamesFromSet() keeping zero-padded folders (rep01) as found (from 3.2.1.9038)
@@ -98,6 +99,14 @@ defineModule(sim, list(
                           "parquets to regenerate the envelopes/CSVs/figures. Use to iterate on the",
                           "plots/CSVs without re-running the (~hours) landscape-metric aggregation;",
                           "leave FALSE for a fresh run.")),
+    defineParameter("envelopeStyle", "character", "ribbon", NA, NA,
+                    paste("(mode = 'multi') how the lm and pm envelope figures show the replicates:",
+                          "`\"ribbon\"` (default) draws the range of the replicates as a band around their mean;",
+                          "`\"lines\"` draws one thin grey line per replicate under a bold line for their",
+                          "median (`nrvtools::plot_nrv_envelope(type = \"lines\")`). The files keep their",
+                          "names (`<metric>_ribbon.png`). The replicate values are read once per",
+                          "reporting layer; a layer whose aggregates hold none gets ribbons, and a message",
+                          "says so. The boxplot figures and the per-class pages are the same in both styles.")),
     defineParameter("plotWorkers", "integer", 8L, 1L, NA,
                     paste("(mode = 'multi') hard cap on the number of local worker processes used to",
                           "render the postprocess figures in parallel (each figure is an independent",
@@ -270,6 +279,7 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         stop("timeSeriesTimes values are outside the range of simulation times")
       }
       .checkNrvWindow(P(sim)$nrvWindow)
+      .checkEnvelopeStyle(P(sim)$envelopeStyle)
       if (!length(.nrvYears(P(sim)$summaryPeriod, P(sim)$summaryInterval, P(sim)$nrvWindow))) {
         stop("no summary time falls in the NRV years: with summaryPeriod ",
              paste(P(sim)$summaryPeriod, collapse = "-"), " and summaryInterval ", P(sim)$summaryInterval,
@@ -1041,6 +1051,14 @@ InitMulti <- function(sim) {
 .lastFraction <- function(period, fraction) {
   sp <- range(period)
   c(sp[2L] - fraction * diff(sp), sp[2L])
+}
+
+## Stops unless `envelopeStyle` is "ribbon" or "lines"
+.checkEnvelopeStyle <- function(envelopeStyle) {
+  if (!isTRUE(length(envelopeStyle) == 1L && envelopeStyle %in% c("ribbon", "lines"))) {
+    stop("envelopeStyle must be \"ribbon\" or \"lines\"", call. = FALSE)
+  }
+  invisible(envelopeStyle)
 }
 
 ## The NRV years: the last `nrvWindow` of the summary period (a subset of it by construction), as c(from, to)
@@ -1980,17 +1998,19 @@ makeAnimation <- function(sim) {
 }
 
 ## The caption of an NRV figure: what its marks show, with the replicate and year counts of the
-## data drawn. `type` is "ribbon" or "boxplot" for an envelope (`df` from summarize_nrv(), whose
+## data drawn. `type` is "ribbon", "lines" or "boxplot" for an envelope (`df` from summarize_nrv(), whose
 ## n_reps count the replicates with a value), "box" or "violin" for a per-class page (`df` of
 ## per-replicate values). `cc` holds the figure's current-condition rows, if any; the caption names
 ## the current condition when one of them has a value to draw. Wrapped to `width` inches.
 .figCaption <- function(type, df, cc = NULL, perPatch = FALSE, width = 16) {
   fewer <- " (fewer where a class is absent or the metric undefined)"
-  if (type %in% c("ribbon", "boxplot")) {
+  if (type %in% c("ribbon", "boxplot", "lines")) {
     n <- .countText(df$n_reps, "replicate")
     varies <- length(unique(df$n_reps)) > 1L
     parts <- if (type == "ribbon") {
       c(paste0("Grey band: range of ", n, " at each simulation year", if (varies) fewer), "line: mean")
+    } else if (type == "lines") {
+      c(paste0("Grey lines: one for each of ", n, if (varies) fewer), "bold line: median")
     } else {
       c(
         paste0("Boxes: median and quartiles of ", n, " at each simulation year", if (varies) fewer),
@@ -2043,10 +2063,12 @@ makeAnimation <- function(sim) {
 ## Only units with a value get a panel, so the panels and pages counted here are those drawn. The
 ## y title is the metric's plain name and unit unless `ylab` is given; `classLabels` maps the class
 ## codes to the names shown; `captions = FALSE` omits the captions, which describe replicate
-## envelopes. The output dirs are created here (main worker).
+## envelopes. `reps`, the dataset's replicate values (see .envelopeReps()), makes each ribbon figure
+## that has some of them a "lines" figure (one line per replicate under the median); the rest stay
+## ribbons, and the boxplots are as ever. The output dirs are created here (main worker).
 .envelopeFigTasks <- function(sim, kind, p, ylab = NULL, layout = c("subregion", "metric"),
                               subdir = NULL, titlePrefix = "", minSubregions = 1L,
-                              classLabels = NULL, captions = TRUE, nrvPeriod = NULL) {
+                              classLabels = NULL, captions = TRUE, nrvPeriod = NULL, reps = NULL) {
   layout <- match.arg(layout)
   refCode <- LandWebUtils::refCodeFor(kind, p)
   env <- mod[[refCode]]
@@ -2062,9 +2084,14 @@ makeAnimation <- function(sim) {
     }
   }
   safe <- function(s) gsub("[/\\]", "-", s) ## filename-safe metric / subregion
-  task <- function(sub, ccSub, type, facet, title, page, lay, file) {
+  task <- function(sub, ccSub, type, facet, title, page, lay, file, repsSub = NULL) {
     lev <- .levelOf(sub)
-    list(
+    if (identical(type, "ribbon") && !is.null(repsSub) && nrow(repsSub)) {
+      type <- "lines"
+    } else {
+      repsSub <- NULL
+    }
+    tk <- list(
       plotter = "envelope", df = sub, cc = ccSub, type = type, facet = facet, nrvPeriod = nrvPeriod,
       ylab = if (is.null(ylab)) .metricTitle(unique(sub$metric), lev) else ylab,
       xlab = "Simulation year", title = title,
@@ -2074,6 +2101,17 @@ makeAnimation <- function(sim) {
       page = page, ncol = lay$ncol, nrow = if (is.null(page)) NULL else lay$nrow,
       file = file, width = lay$width, height = lay$height
     )
+    if (!is.null(repsSub)) tk$reps <- repsSub
+    tk
+  }
+  ## the replicates of one metric (and subregion), for the lines figure
+  repsOf <- function(met, poly = NULL) {
+    if (is.null(reps)) {
+      return(NULL)
+    }
+    keep <- reps$metric == met
+    if (!is.null(poly)) keep <- keep & reps$poly == poly
+    reps[keep, , drop = FALSE]
   }
   tasks <- list()
 
@@ -2089,7 +2127,8 @@ makeAnimation <- function(sim) {
           tasks[[length(tasks) + 1L]] <- task(
             sub, .ccFor(cc, met, poly), type, facet,
             title = paste0(poly, " — ", met), page = NULL, lay = lay,
-            file = file.path(d, paste0(safe(poly), " ", safe(met), "_", type, ".png"))
+            file = file.path(d, paste0(safe(poly), " ", safe(met), "_", type, ".png")),
+            repsSub = repsOf(met, poly)
           )
         }
       }
@@ -2112,7 +2151,8 @@ makeAnimation <- function(sim) {
         tasks[[length(tasks) + 1L]] <- task(
           sub, .ccFor(cc, met), type, facet,
           title = .pageTitle(paste0(titlePrefix, met), pg, nPages), page = pg, lay = lay,
-          file = file.path(d, paste0(safe(met), "_", type, "_p", pg, ".png"))
+          file = file.path(d, paste0(safe(met), "_", type, "_p", pg, ".png")),
+          repsSub = repsOf(met)
         )
       }
     }
@@ -2128,14 +2168,17 @@ makeAnimation <- function(sim) {
 ## replicate's patches), so a box spans the variation across replicates and time. A layer this run
 ## did not summarise gets none: what is on disk may be another run's. Patch area has no pages of
 ## its own: a replicate's mean patch area is the class's mean patch area, area_mn. Only subregions
-## with a value get a panel, so the pages counted here are those drawn.
+## with a value get a panel, so the pages counted here are those drawn. `reps` is the layer's
+## replicate values when the caller has read them already (.readReplicates()), else they are read here.
 .byClassFigTasks <- function(sim, kind, p, xlab = "class", subdir = "per-metric", titlePrefix = "",
-                             classLabels = NULL, nrvPeriod = NULL) {
+                             classLabels = NULL, nrvPeriod = NULL, reps = NULL) {
   refCode <- LandWebUtils::refCodeFor(kind, p)
   if (is.null(mod[[refCode]]) || !nrow(mod[[refCode]])) {
     return(list())
   }
-  reps <- nrvtools::nrv_replicate_values(.nrvAggRoot(sim, refCode))
+  if (is.null(reps)) {
+    reps <- nrvtools::nrv_replicate_values(.nrvAggRoot(sim, refCode))
+  }
   ## the NRV years only; the current condition is the one snapshot of year 0
   if (!is.null(nrvPeriod)) {
     reps <- reps[reps$time >= min(nrvPeriod) & reps$time <= max(nrvPeriod), , drop = FALSE]
@@ -2184,6 +2227,42 @@ makeAnimation <- function(sim) {
     }
   }
   tasks
+}
+
+## The replicate values of the aggregate at `root` (nrvtools::nrv_replicate_values(): a patch-level
+## metric's replicate value is its mean over the patches), read once for the figures of a layer. The
+## classes are labelled from the year-0 map `vtm` when there is one, as the envelopes are, so integer
+## codes in an older aggregate match their panels. Says so when there are none.
+.readReplicates <- function(root, vtm = NULL, what = root) {
+  reps <- nrvtools::nrv_replicate_values(root)
+  if (!nrow(reps)) {
+    message("NRV_summary: no replicate values for ", what, "; its envelope figures are ribbons")
+    return(reps)
+  }
+  if (!is.null(vtm) && file.exists(vtm)) {
+    reps <- nrvtools::label_vegtype_classes(reps, terra::rast(vtm))
+  }
+  reps
+}
+
+## `reps` (.readReplicates()) as the lines of an envelope figure need them: one `rep` column naming
+## the replicate (nrv_replicate_values() calls it `replicate`), finite values, the class names shown
+## on the figure (`classLabels`, as for the envelope). NULL when there are none.
+.envelopeReps <- function(reps, classLabels = NULL) {
+  if (is.null(reps) || !nrow(reps)) {
+    return(NULL)
+  }
+  reps <- reps[is.finite(reps$value), , drop = FALSE]
+  if (!nrow(reps)) {
+    return(NULL)
+  }
+  if (!"rep" %in% names(reps) && "replicate" %in% names(reps)) {
+    reps$rep <- reps$replicate
+  }
+  if (!is.null(classLabels) && "class" %in% names(reps)) {
+    reps$class <- classLabels(reps$class)
+  }
+  reps
 }
 
 ## Number of local worker processes for parallel plot rendering: RAM-aware (optimalClusterNum) but
@@ -2241,7 +2320,7 @@ makeAnimation <- function(sim) {
               task[["df"]], type = task[["type"]], facet = task[["facet"]],
               ylab = task[["ylab"]], title = task[["title"]], ncol = task[["ncol"]],
               nrow = task[["nrow"]], page = task[["page"]], cc = task[["cc"]],
-              xlab = task[["xlab"]], caption = task[["caption"]]
+              xlab = task[["xlab"]], caption = task[["caption"]], reps_df = task[["reps"]]
             ),
             task[["nrvPeriod"]]
           ),
@@ -3242,26 +3321,38 @@ plotFun <- function(sim) {
   ## the NRV years; shaded on the envelopes only when they are fewer than the summary years
   nrvPeriod <- .nrvPeriod(sim)
   shadePeriod <- if (P(sim)$nrvWindow < 1) nrvPeriod
+  ## "lines": the replicates are read once per layer and shared by its figures
+  lines <- identical(P(sim)$envelopeStyle, "lines")
+  layerReps <- function(kind, p, vtm = NULL) {
+    refCode <- LandWebUtils::refCodeFor(kind, p)
+    if (lines && !is.null(mod[[refCode]]) && nrow(mod[[refCode]])) {
+      .readReplicates(.nrvAggRoot(sim, refCode), vtm, what = refCode)
+    }
+  }
 
   ## y titles name each metric and its unit; vegetation types are shown by their display names
   if ("lm" %in% events) {
     for (p in mod$rptPolyNames) {
+      reps <- .envelopeReps(layerReps("lm", p))
       tasks <- c(
         tasks,
-        .envelopeFigTasks(sim, "lm", p, nrvPeriod = shadePeriod),
+        .envelopeFigTasks(sim, "lm", p, nrvPeriod = shadePeriod, reps = reps),
         .envelopeFigTasks(sim, "lm", p, layout = "metric", subdir = "per-metric",
-                          titlePrefix = paste0(p, " — "), minSubregions = 2L, nrvPeriod = shadePeriod)
+                          titlePrefix = paste0(p, " — "), minSubregions = 2L, nrvPeriod = shadePeriod,
+                          reps = reps)
       )
     }
   }
   if ("pm" %in% events) {
     for (p in mod$rptPolyNames) {
+      reps <- layerReps("pm", p, mod$fvtm0)
       tasks <- c(
         tasks,
-        .envelopeFigTasks(sim, "pm", p, classLabels = .vegTypeLabels, nrvPeriod = shadePeriod),
+        .envelopeFigTasks(sim, "pm", p, classLabels = .vegTypeLabels, nrvPeriod = shadePeriod,
+                          reps = .envelopeReps(reps, .vegTypeLabels)),
         .byClassFigTasks(sim, "pm", p, xlab = "Vegetation type",
                          titlePrefix = paste0(p, " — "), classLabels = .vegTypeLabels,
-                         nrvPeriod = nrvPeriod)
+                         nrvPeriod = nrvPeriod, reps = reps)
       )
     }
   }

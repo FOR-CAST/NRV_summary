@@ -51,7 +51,7 @@ test_that("parameters are the expected names", {
     sort(md$parameters$paramName),
     c(
       ".plotInitialTime", ".plotInterval", ".plots", ".seed", ".studyAreaName",
-      ".useCache", "ageClassCutOffs", "ageClasses", "ageClassMaxAge", "autocorrMaxLag", "ccStandAgeSource", "mixedType",
+      ".useCache", "ageClassCutOffs", "ageClasses", "ageClassMaxAge", "autocorrMaxLag", "ccStandAgeSource", "envelopeStyle", "mixedType",
       "mode", "nrvWindow", "patchDirections", "plotWorkers", "postprocessEvents", "recordAnnualSeries", "reps",
       "reuseAggregates", "sieveThresh", "simTimes", "sppEquivCol", "sppEquivColReporting", "stabilityAlpha",
       "stabilityMinChange", "stabilityWindow", "summaryInterval",
