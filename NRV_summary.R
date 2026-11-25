@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9046"),
+  version = list(NRV_summary = "2.0.0.9047"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -657,6 +657,17 @@ InitMulti <- function(sim) {
             "read and the .qs2 left as it is:\n", paste(utils::head(mod$cohortFiles[both], 3L), collapse = "\n"),
             if (sum(both) > 3L) "\n...", call. = FALSE)
   }
+  ## several .qs2 files of one folder and year (padded differently): .cohortFile() takes the one named
+  ## `cohortData_year<YYYY>.qs2` if there is one, else the first by name
+  qsFiles <- mod$cohortFiles[!isPart]
+  dupQs <- qsFiles[repYear(qsFiles) %in% repYear(qsFiles)[duplicated(repYear(qsFiles))]]
+  if (length(dupQs)) {
+    yr <- .fileYear(dupQs)
+    used <- unique(.cohortFile(.repFolder(dupQs), yr, sprintf("cohortData_year%04d.qs2", yr), files = mod$cohortFiles))
+    warning("NRV_summary: ", length(used), " replicate-year(s) with several .qs2 cohortData files:\n",
+            paste(utils::head(dupQs, 6L), collapse = "\n"), if (length(dupQs) > 6L) "\n...",
+            "\nused:\n", paste(utils::head(used, 3L), collapse = "\n"), if (length(used) > 3L) "\n...", call. = FALSE)
+  }
   allouts <- files[grepl("vegType|standAge", basename(files))]
   allouts <- allouts[.inReps(allouts, allReps)]
   mod$allouts <- allouts[!grepl("gri|png|txt|xml", basename(allouts))]
@@ -1087,14 +1098,37 @@ InitMulti <- function(sim) {
 }
 
 ## The cohortData file of replicate folder `repDir` and year `year`, in either format: the part file (see
-## .cohortPartPath()) when there is one, else `<repDir>/<qs2>`, the .qs2 file of that year named as the caller
-## names it. With both, the part file. With `files` (mod$cohortFiles, the cohort files InitMulti() found), a part
-## file counts only if it is one of them: given an outputsDF, only a part file it lists. Every caller in mode
-## 'multi' passes them, so all choose the same file of a replicate-year.
+## .cohortPartPath()) when there is one, else the .qs2 file of that year. With both, the part file. Without `files`,
+## the .qs2 is `<repDir>/<qs2>`, named as the caller names it. With `files` (mod$cohortFiles, the cohort files
+## InitMulti() found), the .qs2 is the one of `files` in the same replicate folder and of the same year, however the
+## year is padded (`cohortData_year700.qs2` goes with `pixelGroupMap_year0700.tif`): the one named as the caller
+## names it if it is among them, else the first by name (InitMulti() warns when there are several). Only .qs2 files
+## are matched this way; a part file is always the exact `year=<YYYY>` path, and counts only if it is one of `files`:
+## given an outputsDF, only a part file it lists. Where `files` has no .qs2 of that folder and year,
+## the answer is `<repDir>/<qs2>`. Every caller in mode 'multi' passes `files`, so all choose the same file of a
+## replicate-year.
 .cohortFile <- function(repDir, year, qs2, files = NULL) {
   pq <- .cohortPartPath(repDir, year)
   found <- file.exists(pq) & (is.null(files) | pq %in% files)
-  as.character(ifelse(found, pq, file.path(repDir, qs2))) ## character(0) for no files, not logical(0)
+  out <- file.path(repDir, qs2)
+  if (!is.null(files) && length(files)) {
+    qs2Files <- files[.isCohortQs2(files)]
+    fRep <- .repFolder(qs2Files)
+    fYear <- .fileYear(qs2Files)
+    n <- max(length(repDir), length(year), length(qs2))
+    repDir <- rep_len(repDir, n)
+    year <- rep_len(as.integer(year), n)
+    out <- rep_len(out, n)
+    for (i in seq_len(n)) {
+      hit <- qs2Files[fRep == repDir[i] & fYear %in% year[i]]
+      if (length(hit) && !out[i] %in% hit) {
+        out[i] <- sort(hit)[1]
+      }
+    }
+    found <- rep_len(found, n)
+    pq <- rep_len(pq, n)
+  }
+  as.character(ifelse(found, pq, out)) ## character(0) for no files, not logical(0)
 }
 
 ## `files`, each .qs2 cohort path followed by the part file that would also do ("<qs2> or <part file>"): what a
@@ -3076,6 +3110,14 @@ makeAnimation <- function(sim) {
   .distinctFileNames(x, stem)
 }
 
+## One key per row of the vectors in `...`, to compare rows or group them: a missing value is "!", any other value is
+## "=" and the value, so a missing unit is not the unit named "NA" (`paste()` writes both as "NA"). The keys are only
+## compared, never written.
+.naSafeKey <- function(...) {
+  parts <- lapply(list(...), function(x) ifelse(is.na(x), "!", paste0("=", x)))
+  do.call(paste, c(parts, sep = "\r"))
+}
+
 ## The figures from the recorded comparisons (`.recordComparison()` rows): a list of figures, each list(layer, unit,
 ## data, standOnly), one per lm layer and unit. The stand-level rows (st) are added to the figure of every unit named
 ## like them (the study area), in any layer; stand rows no unit is named like have a figure of their own
@@ -3085,14 +3127,14 @@ makeAnimation <- function(sim) {
   rest <- cmp[!stand, , drop = FALSE]
   st <- cmp[stand, , drop = FALSE]
   figs <- list()
-  key <- paste(rest$layer, rest$poly, sep = "\r")
+  key <- .naSafeKey(rest$layer, rest$poly)
   for (k in unique(key)) {
     r <- rest[key == k, , drop = FALSE]
     own <- st[!is.na(st$poly) & st$poly %in% r$poly[1L], , drop = FALSE]
     figs[[length(figs) + 1L]] <- list(layer = r$layer[1L], unit = r$poly[1L], data = rbind(r, own), standOnly = FALSE)
   }
   alone <- st[is.na(st$poly) | !st$poly %in% rest$poly, , drop = FALSE]
-  key <- paste(alone$layer, alone$poly, sep = "\r")
+  key <- .naSafeKey(alone$layer, alone$poly)
   for (k in unique(key)) {
     r <- alone[key == k, , drop = FALSE]
     figs[[length(figs) + 1L]] <- list(layer = r$layer[1L], unit = r$poly[1L], data = r, standOnly = TRUE)
@@ -3690,7 +3732,8 @@ saveAnnualSeries <- function(sim) {
 ## - `effectiveSnapshots`: the snapshots `interval` apart over all reps, times (1 - r) / (1 + r);
 ## - `tauGeyer`: Geyer's initial positive sequence estimate, for comparison only (noisy for short series);
 ## - `lagBelow0.1`: first lag of the pooled ACF below 0.1.
-## `nSnapshotsPerRep`: the summary times in the NRV years of each rep (default: from `period` and `interval`).
+## `nSnapshotsPerRep`: the summary times in the NRV years of each rep, `length(.nrvYears())` (required: the summary
+## grid starts at `summaryPeriod[1]`, which `period` and `interval` do not give).
 ## `thin` is ceiling(max tau); `limiting` the series with that tau (both NA when no series has a tau); `absent`
 ## the series not in every replicate's table (left out) and `undefined` those with no tau: `constant`, or
 ## `tooFew` (fewer than 3 values in some replicate's NRV years). `acf` holds
@@ -3698,8 +3741,8 @@ saveAnnualSeries <- function(sim) {
 ## `fitted` the phi^lag curves. No lag reaches beyond the shortest rep's NRV years less one (there is no
 ## correlation to measure past that): with `nrvWindow` below 1 the NRV can be fewer years than `maxLag`. A lag
 ## that is cut away is NA (`r` when `interval` is cut), and the other columns use the lags that remain.
-.autocorrSummary <- function(tables, period, maxLag, interval,
-                             nSnapshotsPerRep = floor(diff(range(period)) / interval) + 1) {
+.autocorrSummary <- function(tables, period, maxLag, interval, nSnapshotsPerRep) {
+  force(nSnapshotsPerRep) ## no default: fail before the work
   series <- setdiff(Reduce(intersect, lapply(tables, names)), "time")
   absent <- setdiff(Reduce(union, lapply(tables, names)), c(series, "time"))
   inPeriod <- lapply(tables, function(d) d[d$time >= period[1L] & d$time <= period[2L], , drop = FALSE])

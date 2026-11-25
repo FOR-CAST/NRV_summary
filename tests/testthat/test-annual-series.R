@@ -210,7 +210,7 @@ test_that("no annualSeries.csv: a message, no error, and no stale csv left", {
 
 test_that("no series with a defined autocorrelation time: a message, no thinning, no -Inf", {
   const <- lapply(1:3, function(i) data.frame(time = 1:100, x = 1))
-  expect_no_warning(res <- moduleFn(".autocorrSummary", new.env())(const, c(1, 100), 50, 10))
+  expect_no_warning(res <- moduleFn(".autocorrSummary", new.env())(const, c(1, 100), 50, 10, nSnapshotsPerRep = 10))
   expect_true(is.na(res$thin))
   expect_length(res$limiting, 1L)
   expect_true(is.na(res$limiting))

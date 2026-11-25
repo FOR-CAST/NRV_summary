@@ -6,7 +6,12 @@
 .autocorrTime <- function(...) moduleFn(".autocorrTime", new.env())(...)
 .firstLagBelow <- function(...) moduleFn(".firstLagBelow", new.env())(...)
 .essAR1 <- function(...) moduleFn(".essAR1", new.env())(...)
-.autocorrSummary <- function(...) moduleFn(".autocorrSummary", new.env())(...)
+## the module's function needs `nSnapshotsPerRep`; these tests use series that start at `period[1]`, whose count is
+## the one from `period` and `interval`
+.autocorrSummary <- function(tables, period, maxLag, interval,
+                             nSnapshotsPerRep = floor(diff(range(period)) / interval) + 1) {
+  moduleFn(".autocorrSummary", new.env())(tables, period, maxLag, interval, nSnapshotsPerRep = nSnapshotsPerRep)
+}
 .annualSeriesRow <- function(...) moduleFn(".annualSeriesRow", new.env())(...)
 .bindAnnualRows <- function(...) moduleFn(".bindAnnualRows", new.env())(...)
 .annualSeriesLabel <- function(...) moduleFn(".annualSeriesLabel", new.env())(...)
@@ -241,4 +246,13 @@ test_that("tau is finite when the series is shorter than the maximum lag", {
   long <- .autocorrSummary(tables, c(1, 60), maxLag = 200, interval = 100)$fit
   expect_true(is.na(long$r))
   expect_true(is.finite(long$tau))
+})
+
+test_that(".autocorrSummary needs the number of snapshots per rep, which no default can give", {
+  ## the summary grid starts at summaryPeriod[1], not at the first NRV year, so `period` and `interval` do not say
+  set.seed(1)
+  tables <- lapply(1:3, function(i) data.frame(time = 1:100, x = stats::rnorm(100)))
+  fn <- moduleFn(".autocorrSummary", new.env())
+  expect_error(fn(tables, c(1, 100), 20, 10), "nSnapshotsPerRep")
+  expect_s3_class(fn(tables, c(1, 100), 20, 10, nSnapshotsPerRep = 10)$fit, "data.frame")
 })
