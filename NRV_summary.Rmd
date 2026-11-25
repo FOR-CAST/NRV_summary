@@ -252,7 +252,20 @@ The `"am"` event additionally writes the stand-age animation GIF (see *Events*).
 
 ### Saving
 
-Write what is saved.
+In `mode = "single"`, each replicate writes to its output folder what `mode = "multi"` summarises:
+`sppColorVect` and `sppEquiv` (`.qs2`) and `speciesLayers` at the start; `standAgeMap` and
+`vegTypeMap` at the start, at each summary year, at the end and at each `timeSeriesTimes` year;
+`pixelGroupMap` and `cohortData` at the start, at each summary year and at the end; and
+`flammableMap` at the end. The simulation year is in each file name (`_year<YYYY>`), except for the
+parquet `cohortData`, where it is in the folder name.
+
+With `cohortDataFormat = "parquet"` (the default), `cohortData` is an arrow dataset grouped by
+simulation year: `cohortData/year=<YYYY>/part-0.parquet`, one part file per year, written by
+`nrvtools::write_cohort_parquet()` (the file has no year column). With `cohortDataFormat = "qs2"`,
+it is `cohortData_year<YYYY>.qs2`, one file per year, as every run before version 2.0.0.9046 saved
+it. `mode = "multi"` reads both formats (`nrvtools::read_cohort_data()`), so the runs saved before
+this version are summarised as before; for a replicate and year with both files, it reads the
+parquet one.
 
 ### Module outputs
 
