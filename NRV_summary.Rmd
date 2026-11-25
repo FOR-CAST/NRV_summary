@@ -113,6 +113,42 @@ raising ImageMagick's `policy.xml` memory/disk limits (see
 [LandWeb #153](https://github.com/PredictiveEcology/LandWeb/issues/153)). With `gifski`
 **no such system configuration is required**.
 
+The autocorrelation check is opt-in in two parts. In `mode = "single"`,
+`recordAnnualSeries = TRUE` adds an `annual_series` event for every simulated year (about a
+thousand events per replicate) that writes `annualSeries.csv` beside the replicate's other
+outputs, one row per year with no rasters made, for the reporting area (`studyAreaReporting`):
+`time`; `propYoung`, the proportion of the forest younger than the first cut-off above the
+youngest (40 years with the default `ageClassCutOffs`, `c(0, 40, 80, 120)`); `propOld`, the
+proportion at or above the last cut-off (120 years); `meanStandAge`; `totalBiomassTg`, the total biomass in teragrams;
+and a `lead_<species>` column, the proportion of the forest led by each species (`lead_Mixed`
+for mixed stands). It is `FALSE` by default.
+In `mode = "multi"`, `"autocorr"` in `postprocessEvents` (not in the default) runs the
+`postprocess_autocorr` event, which reads the `annualSeries.csv` files found in the replicate
+folders (so a file left by an earlier run with `recordAnnualSeries = TRUE` is analysed if the
+folder was not cleared) and, over the NRV years, takes the autocorrelation of each series.
+The replicates are treated as realisations of one process: each series is centred on the mean
+of all replicates and NRV years, and the variance is pooled over the replicates.
+The autocorrelation time of a series is that of an exponential decay with the mean lag-1
+autocorrelation as its rate, `tau = (1 + phi) / (1 - phi)`; no curve is fitted, and `ar1Misfit`
+says how far the autocorrelation at lags 1 to 50 departs from that decay.
+The recommended thinning is the largest `tau`.
+If the replicates' means differ, the common mean counts that difference as autocorrelation,
+which errs toward more thinning.
+The estimates are lower bounds: a short series biases the sample autocorrelation toward 0,
+and the event says so when the NRV has fewer than 20 times the recommended thinning in years.
+The longest lag is the largest of `autocorrMaxLag` (200 years), `summaryInterval` and 50, cut to
+the number of NRV years less one when the series is shorter (the correlation at `summaryInterval`
+is then not estimated, and the message says so).
+A replicate whose file does not cover the NRV years is left out with a warning, and a series
+that is missing from a replicate's file is left out with a message.
+`csv/autocorrelation/autocorrelation.csv` has one row per series: `phi`, `tau`, `ar1Misfit`;
+`r`, `rMin`, `rMax`, the correlation at lag `summaryInterval` (pooled, and the lowest and highest
+of the replicates' own correlations); `effectiveSnapshots`; `tauGeyer`, Geyer's estimate, kept for comparison;
+`lagBelow0.1`, the first lag below 0.1; `label`; `recommendedThin`; `summaryInterval`;
+and `nSnapshots`, the summary times in the NRV years over all replicates.
+Without `annualSeries.csv` files the event says so, removes an earlier run's csv and figure, and
+writes nothing.
+
 ```{r eventFlowCheck-NRV-summary, include = FALSE, eval = TRUE, cache = FALSE}
 ## the generated figures need SpaDES.core 3.2.1.9068 or later; older versions skip them
 .efOK <- utils::packageVersion("SpaDES.core") >= "3.2.1.9068"
@@ -165,6 +201,10 @@ In `mode = "multi"`, `plotFun` writes these figures for each reporting-polygon l
   The verdicts are also in `csv/stability/all/stability.csv`. The check needs at least 3 summary times
   in the stability window (the last `stabilityWindow` of the NRV years); `init` warns when there are
   fewer, and the verdict then says that no series could be tested.
+- `autocorrelation/all/` (only with `"autocorr"` in `postprocessEvents`): the autocorrelation of each
+  annual series by lag (replicates thin, their mean in bold, the fitted decay dashed, and a line at
+  `summaryInterval`). The numbers are in `csv/autocorrelation/autocorrelation.csv`. The folder is
+  emptied when the event runs.
 
 When `nrvWindow` is below 1, the envelope figures still show every summary year, and shade the NRV
 years.
