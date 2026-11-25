@@ -91,13 +91,93 @@ test_that("age classes are ordered young to old, in the stand overview too", {
 test_that("unit names 'A B' and 'A_B' give two files, whatever the order they come in", {
   nm <- function(x) ccFn(".ccAllNames", x)
   a <- nm(c("A B", "A_B"))
-  expect_length(unique(tolower(a)), 2L)
-  expect_true(all(startsWith(a, "A_B"))) ## still readable
-  expect_identical(nm(c("A_B", "A B"))[c(2, 1)], a) ## the same file for each unit
+  expect_identical(unname(a), c("A_B-2", "A_B")) ## the name that is already a file name keeps it
+  expect_identical(nm(c("A_B", "A B"))[c(2, 1)], a) ## the same file for each unit, in either order
   expect_length(unique(tolower(nm(c("ab", "AB", "a/b", "a b")))), 4L) ## also on a case-insensitive disk
-  expect_length(unique(nm(c("A B", "A_B", "A_B-2"))), 3L) ## nor does a suffix collide with a unit
+  b <- nm(c("A B", "A_B", "A_B-2")) ## a unit named like a suffix keeps its own name
+  expect_identical(unname(b[c("A_B", "A_B-2")]), c("A_B", "A_B-2"))
+  expect_length(unique(b), 3L)
   expect_identical(unname(nm(c("ELF", "12.3", "a/b c"))), c("ELF", "12.3", "a_b_c")) ## others keep their name
+})
+
+test_that("an NA or empty name gets a fixed stem, and two of them do not collide", {
+  nm <- function(x) ccFn(".ccAllNames", x)
   expect_identical(unname(nm("")), "unit")
+  expect_identical(unname(nm(NA_character_)), "unit")
+  expect_identical(unname(nm(c(NA, "", "unit"))[c(3, 1, 2)]), c("unit", "unit-3", "unit-2")) ## sorted: the name itself, then "", then NA
+  expect_identical(unname(ccFn(".ccAllDirs", c(NA, ""))), c("unit-2", "unit"))
+})
+
+test_that("layer folders keep the layer name, and none can leave figures/all/", {
+  dirs <- ccFn(".ccAllDirs", c("AlPac ANSR", "..", ".", "a/b", "a\\b"))
+  expect_identical(unname(dirs[1:3]), c("AlPac ANSR", "_..", "_."))
+  expect_false(any(grepl("[/\\\\]", dirs)))
+  expect_length(unique(dirs), 5L)
+})
+
+test_that("a comparison with no rows is returned as it is", {
+  m <- new.env()
+  empty <- cmpRows()[0, c("poly", "metric", "lo", "hi", "mid", "current", "position")]
+  expect_no_error(r <- moduleFn(".recordComparison", m)("lm", empty, "L1"))
+  expect_identical(r, empty)
+  expect_length(m$nrvComparisons, 0L)
+})
+
+test_that("age classes come from the run's order when it is given, others after by name", {
+  rank <- function(m, ac = NULL) ccFn(".standRank", m, rep("stand", length(m)), ac)
+  m <- c("age_Zed", "age_Old", "age_Young", "age_Alpha", "age_Mid")
+  expect_identical(m[order(rank(m, c("Young", "Mid", "Old")), m)], c("age_Young", "age_Mid", "age_Old", "age_Alpha", "age_Zed"))
+  expect_identical(order(rank(c("age_Old", "age_Young"))), 2:1) ## the default classes without it
+})
+
+test_that("stand rows join the figure of the unit named like them, else they have a figure of their own", {
+  lm <- cmpRows("SA", "Layer one")[1:2, ]
+  lm$group <- "landscape"
+  other <- cmpRows("Other", "Layer one")[1:2, ]
+  other$group <- "landscape"
+  stand <- cmpRows("SA", "SA")[3:6, ]
+  figs <- ccFn(".ccAllFigures", rbind(lm, other, stand))
+  key <- vapply(figs, function(f) paste(f$layer, f$unit, sep = "/"), "")
+  expect_setequal(key, c("Layer one/SA", "Layer one/Other"))
+  merged <- figs[[which(key == "Layer one/SA")]]
+  expect_setequal(merged$data$group, c("landscape", "stand"))
+  expect_false(figs[[which(key == "Layer one/Other")]]$standOnly)
+  ## LandWeb's case: no landscape unit carries the study area's name
+  figs <- ccFn(".ccAllFigures", rbind(other, stand))
+  key <- vapply(figs, function(f) paste(f$layer, f$unit, sep = "/"), "")
+  expect_setequal(key, c("Layer one/Other", "SA/SA"))
+  expect_true(figs[[which(key == "SA/SA")]]$standOnly)
+  expect_setequal(figs[[which(key == "SA/SA")]]$data$group, "stand")
+  ## the same unit in two layers: the stand rows join both
+  lm2 <- lm
+  lm2$layer <- "Layer two"
+  figs <- ccFn(".ccAllFigures", rbind(lm, lm2, stand))
+  expect_length(figs, 2L)
+  expect_true(all(vapply(figs, function(f) "stand" %in% f$data$group, NA)))
+})
+
+test_that("each figure is titled with its layer and unit", {
+  d <- ccFn(".currentConditionAllData", cmpRows())
+  gg <- ccFn(".currentConditionAll", d, "L1: ELF - current condition relative to the NRV")
+  expect_identical(gg$labels$title, "L1: ELF - current condition relative to the NRV")
+})
+
+test_that("the figure's arrows come from ggplot2, not grid", {
+  src <- file.path(moduleRoot, paste0(moduleName, ".R"))
+  skip_if_not(file.exists(src), "module source not found")
+  txt <- paste(readLines(src, warn = FALSE), collapse = "\n")
+  expect_false(grepl("grid::", txt, fixed = TRUE))
+})
+
+test_that("the overview's tick label is the shared one", {
+  cc <- data.frame(poly = "ELF", metric = "ai", mean = 11)
+  env <- data.frame(time = c(100, 200), poly = "ELF", metric = "ai", mean = 10, min = 8, max = 12)
+  d <- ccFn(".ccOverviewData", env, cc, c(100, 200))
+  g1 <- ggplot2::ggplot_build(ccFn(".currentConditionOverview", d))
+  g2 <- ggplot2::ggplot_build(ccFn(".currentConditionAll", ccFn(".currentConditionAllData", cmpRows())))
+  lab <- ccFn(".nrvMidLabel")
+  expect_identical(g1$plot$scales$get_scales("shape")$get_labels(), lab)
+  expect_identical(g2$plot$scales$get_scales("shape")$get_labels(), lab)
 })
 
 ## the sim and the module's `P` for the event: outside an event there is no current module
@@ -127,7 +207,16 @@ test_that("same-named units in two layers give two figures, registered as output
                     normalizePath(SpaDES.core::outputs(sim)$file)))
 })
 
-test_that("the cc event empties figures/all/ before it draws, and the other events leave it alone", {
+test_that("an NA or empty layer or unit name is drawn, not an error; '..' stays inside figures/all/", {
+  e <- ccEvent(list(a = cmpRows("", NA), b = cmpRows("X", ".."), c = cmpRows(NA, "L3")))
+  expect_no_error(e$fn(e$sim))
+  expect_true(file.exists(file.path(e$dir, "unit", "unit.png")))
+  expect_true(file.exists(file.path(e$dir, "_..", "X.png")))
+  expect_true(file.exists(file.path(e$dir, "L3", "unit.png")))
+  expect_false(file.exists(file.path(dirname(e$dir), "X.png")))
+})
+
+test_that("the cc event empties figures/all/ before it draws", {
   e <- ccEvent(list(a = cmpRows("ELF", "L1")))
   dir.create(file.path(e$dir, "Gone"), recursive = TRUE)
   stale <- file.path(e$dir, "Gone", "old.png")
@@ -135,11 +224,21 @@ test_that("the cc event empties figures/all/ before it draws, and the other even
   e$fn(e$sim)
   expect_false(file.exists(stale))
   expect_true(file.exists(file.path(e$dir, "L1", "ELF.png")))
-  clear <- moduleFn(".clearFigDirs", new.env())
-  stale <- file.path(e$dir, "L1", "stale.png")
-  file.create(stale)
-  clear(e$sim, c("lm", "st"))
-  expect_true(file.exists(stale))
-  clear(e$sim, "cc")
-  expect_false(file.exists(stale))
+})
+
+test_that("the plot event leaves figures/all/ alone, though cc is among the events", {
+  e <- ccEvent(list(a = cmpRows("ELF", "L1")), events = c("lm", "st", "cc"))
+  dir.create(file.path(e$dir, "L1"), recursive = TRUE, showWarnings = FALSE)
+  kept <- file.path(e$dir, "L1", "kept.png")
+  file.create(kept)
+  m <- new.env()
+  m$rptPolyNames <- character(0) ## no figures to draw: only the clearing is looked at
+  plot <- moduleFn("plotFun", m)
+  environment(plot)$P <- function(sim) SpaDES.core::params(sim)$NRV_summary
+  environment(plot)$.nrvPeriod <- function(sim) c(700, 1000)
+  environment(plot)$.renderTasks <- function(sim, tasks) character(0)
+  plot(e$sim)
+  expect_true(file.exists(kept))
+  moduleFn(".clearFigDirs", new.env())(e$sim, "cc")
+  expect_false(file.exists(kept))
 })

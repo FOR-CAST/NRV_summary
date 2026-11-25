@@ -286,7 +286,7 @@ test_that("the st figures folder is cleared only when the st event runs", {
 
 ## two reps of a 4 x 4 landscape (two species, two stand ages) at years 0 and 1000 on disk, and the sim of
 ## the module over them with `events` as postprocessEvents; the reporting polygon is the whole landscape
-stDiskSim <- function(events, .env = parent.frame()) {
+stDiskSim <- function(events, subregion = "all", .env = parent.frame()) {
   root <- withr::local_tempdir(.local_envir = .env)
   crs <- "EPSG:3400"
   rtm <- terra::rast(nrows = 4, ncols = 4, xmin = 0, xmax = 1000, ymin = 0, ymax = 1000, crs = crs)
@@ -309,7 +309,7 @@ stDiskSim <- function(events, .env = parent.frame()) {
   se <- LandR::sppEquivalencies_CA
   se <- se[se[["LandR"]] %in% c("Pice_gla", "Popu_tre"), ]
   poly <- terra::as.polygons(terra::ext(rtm), crs = crs)
-  poly$Name <- "all"
+  poly$Name <- subregion
   list(root = root, sim = SpaDES.core::simInit(
     times = list(start = 0, end = 1000),
     params = list(NRV_summary = list(
@@ -431,12 +431,18 @@ test_that("cc is not drawn unless postprocessEvents asks", {
 
 test_that("cc runs after the events that record the comparisons and before the plot event", {
   withr::local_package("SpaDES.core")
-  sim <- suppressWarnings(SpaDES.core::spades(multiSimSt(events = c("lm", "st", "cc")),
-                                              events = list(NRV_summary = "init"), debug = FALSE))
+  sim <- suppressWarnings(SpaDES.core::spades(
+    multiSimSt(events = c("lm", "st", "autocorr", "cc", "stability")), events = list(NRV_summary = "init"), debug = FALSE
+  ))
   e <- as.data.frame(SpaDES.core::events(sim))
   e <- e[order(as.numeric(e$eventTime), as.numeric(e$eventPriority)), ]
-  ev <- e$eventType[e$eventType %in% c("postprocess_lm", "postprocess_st", "postprocess_cc", "plot")]
-  expect_identical(ev, c("postprocess_lm", "postprocess_st", "postprocess_cc", "plot"))
+  ev <- e$eventType[e$eventType %in% c("postprocess_lm", "postprocess_st", "postprocess_autocorr", "postprocess_cc",
+                                       "plot", "postprocess_stability")]
+  expect_true(all(c("postprocess_autocorr", "postprocess_stability") %in% ev))
+  expect_identical(ev[1:2], c("postprocess_lm", "postprocess_st"))
+  expect_lt(match("postprocess_st", ev), match("postprocess_cc", ev))
+  expect_lt(match("postprocess_cc", ev), match("plot", ev))
+  expect_lt(match("plot", ev), match("postprocess_stability", ev))
 })
 
 test_that("cc writes the comparison tables", {
@@ -461,4 +467,17 @@ test_that("a run of st and cc draws the figure in the study area's layer, and th
   f <- file.path(all, "SA", "SA.png") ## the unit is the study area, in its own layer
   expect_true(file.exists(f))
   expect_true(normalizePath(f) %in% normalizePath(SpaDES.core::outputs(done)$file))
+})
+
+test_that("a run of lm, st and cc puts the stand rows on the figure of the unit named like the study area", {
+  withr::local_package("SpaDES.core")
+  run <- function(subregion) {
+    fx <- stDiskSim(c("lm", "st", "cc"), subregion = subregion)
+    suppressWarnings(suppressMessages(SpaDES.core::spades(
+      fx$sim, debug = FALSE, events = list(NRV_summary = c("init", "postprocess_lm", "postprocess_st", "postprocess_cc"))
+    )))
+    list.files(file.path(fx$root, "postprocess", "figures", "all"), recursive = TRUE)
+  }
+  expect_identical(run("SA"), file.path("A", "SA.png")) ## one figure, the layer's unit with the stand rows
+  expect_identical(sort(run("all")), sort(c(file.path("A", "all.png"), file.path("SA", "SA.png")))) ## LandWeb's case
 })
