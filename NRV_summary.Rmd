@@ -265,7 +265,7 @@ simulation year: `cohortData/year=<YYYY>/part-0.parquet`, one part file per year
 it is `cohortData_year<YYYY>.qs2`, one file per year, as every run before version 2.0.0.9046 saved
 it. `mode = "multi"` reads both formats (`nrvtools::read_cohort_data()`), so the runs saved before
 this version are summarised as before; for a replicate and year with both files, it reads the
-parquet one.
+parquet one and warns. With an `outputsDF`, only the files it lists are read.
 
 ### Module outputs
 

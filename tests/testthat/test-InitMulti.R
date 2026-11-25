@@ -285,7 +285,7 @@ test_that("files listed out of order are paired by replicate and year", {
 })
 
 test_that("replicate folders stay unnamed when dirnamesFromSet() names them", {
-  ## SpaDES.core's PR #543 names the result by replicate id ("rep01" named "1"); the values are the same
+  ## PredictiveEcology/SpaDES.core#543 names the result by replicate id ("rep01" named "1"); the values are the same
   real <- SpaDES.core::dirnamesFromSet
   calls <- 0L
   testthat::local_mocked_bindings(
