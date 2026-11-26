@@ -2,6 +2,8 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+* **Mode 'multi' reads one copy of each map of a replicate-year (`2.1.0.9002`).** When a replicate folder held several copies of one year's `vegTypeMap`, `standAgeMap` or `pixelGroupMap` padded differently (left by an earlier run with another end year), the analyses read every copy, so each extra copy counted as one more map of that replicate-year. `InitMulti()` now keeps the copy padded to the digits of the last year of `simTimes`, else the first by name, as its check and the first replicate's files already did, and warns, naming the copies left out. Runs without copies are unchanged.
+
 * **The manual shows the module version as a badge (`2.1.0.9001`).** It is a shields.io image URL written at render time from the module's metadata, so the render still downloads nothing; PDF output leaves it out.
 
 # NRV_summary 2.1.0

@@ -681,6 +681,60 @@ test_that("LandWeb's four-digit years select the files they did, beside files of
   expect_identical(repYearFile(rep1, 700, "Map", "tif", found, 4L), file.path(rep1, "Map_year0700.tif"))
 })
 
+## copies of the summary-time maps of one folder and year, padded to `pads` digits
+copiesOf <- function(d, prefix, years, pads) {
+  file.path(d, unlist(lapply(pads, function(p) sprintf(paste0("%s_year%0", p, "d.tif"), prefix, years))))
+}
+
+test_that("the analyses read one copy of each map of a folder and year: the four-digit one", {
+  root <- withr::local_tempdir()
+  reps <- file.path(root, "mainSim", c("rep01", "rep02"))
+  maps <- c("pixelGroupMap", "standAgeMap", "vegTypeMap")
+  extra <- unlist(lapply(reps, function(d) unlist(lapply(maps, copiesOf, d = d, years = yrs, pads = c(3L, 5L)))))
+  touchFiles(c(unlist(lapply(reps, expectedRepFiles)), extra))
+  r <- initWithWarnings(initMultiSim(root, reps = 1:2))
+  m <- r$m
+  each <- function(prefix, ext = "tif") {
+    file.path(rep(reps, each = 2L), sprintf(paste0(prefix, "_year%04d.", ext), yrs))
+  }
+  expect_identical(m$pgm, each("pixelGroupMap"))
+  expect_identical(m$vtm, each("vegTypeMap"))
+  expect_identical(m$sam, each("standAgeMap"))
+  expect_identical(m$cd, each("cohortData", "qs2"))
+  expect_identical(m$allouts2, sort(c(each("standAgeMap"), each("vegTypeMap"))))
+  expect_length(m$layerName, length(m$allouts2))
+  ## one warning, naming dropped and kept files
+  w <- grep("copies of a map", r$warnings, value = TRUE)
+  expect_length(w, 1L)
+  expect_match(w, "_year(700|00700)\\.tif")
+  expect_match(w, "used:")
+})
+
+test_that("with no copy padded to the digits of the last year, the first by name is read", {
+  root <- withr::local_tempdir()
+  rep1 <- file.path(root, "mainSim", "rep01")
+  maps <- c("pixelGroupMap", "standAgeMap", "vegTypeMap")
+  base <- expectedRepFiles(rep1)
+  four <- base[grepl(paste(maps, collapse = "|"), base)]
+  other <- unlist(lapply(maps, copiesOf, d = rep1, years = yrs, pads = c(5L, 6L)))
+  touchFiles(c(setdiff(base, four), other))
+  m <- initWithWarnings(initMultiSim(root, reps = 1L))$m
+  first <- function(p) sapply(yrs, function(y) sort(copiesOf(rep1, p, y, c(5L, 6L)))[1])
+  expect_identical(m$pgm, unname(first("pixelGroupMap")))
+  expect_identical(m$vtm, unname(first("vegTypeMap")))
+  expect_identical(m$sam, unname(first("standAgeMap")))
+})
+
+test_that("without copies there is no warning and the lists are the files found", {
+  root <- withr::local_tempdir()
+  reps <- file.path(root, "mainSim", c("rep01", "rep02"))
+  touchFiles(unlist(lapply(reps, expectedRepFiles)))
+  r <- initWithWarnings(initMultiSim(root, reps = 1:2))
+  expect_length(grep("copies of a map", r$warnings), 0L)
+  expect_length(r$m$pgm, 4L)
+  expect_length(r$m$allouts2, 8L)
+})
+
 test_that("a missing file is reported, named as mode 'single' names it", {
   root <- withr::local_tempdir()
   reps <- file.path(root, "mainSim", c("rep01", "rep02"))
