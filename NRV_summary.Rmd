@@ -750,6 +750,7 @@ Each version was checked on LandWeb's outputs against the one before; `NEWS.md` 
 - **2.0.0.9100** (#17): the version skips to 9100 to stay clear of the PredictiveEcology fork's numbers; SpaDES.core 3.2.1.9077 is required; replicate folders are named by id inside the module; with `pm` or `bc` in the run, `init` stops if the first replicate's flammable map is not among the files found.
 - **2.0.0.9101**: this manual documents every event, parameter and output, and cites its methods.
 - **2.0.0.9102**: mode 'multi' finds each file by its year however padded, so runs that end before year 1000 or after year 9999 are read; the `bc` current condition leaves out urban land; the `autocorr` event's table comes from `nrvtools::autocorr_summary()` and gains `effectiveSnapshotsFinite`; nrvtools 0.5.2 is required, whose `patchStats()` (the `pm` event) masks the vegetation-type map by the flammable map; `sieveThresh` defaults to `NA`, no sieving, and a sieved seral map is named `seralStageMap-sieve<N>_year<YYYY>.tif`, which the patch metrics can read; the manual's formulas, methods and citations are corrected.
+- **2.1.0**: a release of 2.0.0.9040 to 2.0.0.9102, with no other changes.
 
 ## Getting help
 
