@@ -338,8 +338,8 @@ For each reporting layer and unit, the `pm` event computes, for each vegetation 
 - the area of each patch (`area`) and the median stand age of each patch (`sam_mdn`);
 - the class-level aggregation index (`lsm_c_ai`), mean, standard deviation and coefficient of variation of patch area (`lsm_c_area_mn`, `lsm_c_area_sd`, `lsm_c_area_cv`) and total class area (`lsm_c_ca`).
 
-It reads the vegetation-type and stand-age maps, and the first replicate's flammable map masks only the stand-age map: the patches, their areas and the class-level metrics include non-flammable pixels, and only the patch ages (`sam_mdn`) leave them out.
-Non-flammable pixels have no cohorts and so no vegetation type, so in practice the vegetation-type metrics are unaffected.
+It reads the vegetation-type and stand-age maps, and the first replicate's flammable map masks both (the vegetation-type map since nrvtools 0.5.2): non-flammable pixels are left out of the patches, their areas, the class-level metrics and the patch ages (`sam_mdn`).
+Non-flammable pixels have no cohorts and so no vegetation type, so in practice masking the vegetation-type map changes nothing.
 A patch-level metric enters the envelope as each replicate's mean over its patches, so the envelope spans the replicates, as for a class-level metric.
 A class absent from a map has no row in landscapemetrics' output; the event adds a class area of 0 ha (in `ca_zeros.parquet`) for each class that a unit shows in its current condition or in any replicate-year but lacks in a replicate-year, so the class-area envelopes count the replicate-years without the class.
 Class codes are labelled with the vegetation types' names.
@@ -727,7 +727,7 @@ Each version was checked on LandWeb's outputs against the one before; `NEWS.md` 
 - **2.0.0.9047** (#16): a cohort file is paired with its pixel-group map by folder and year however its year is padded; on the `cc` figures a unit named "NA" is kept apart from a missing unit.
 - **2.0.0.9100** (#17): the version skips to 9100 to stay clear of the PredictiveEcology fork's numbers; SpaDES.core 3.2.1.9077 is required; replicate folders are named by id inside the module; with `pm` or `bc` in the run, `init` stops if the first replicate's flammable map is not among the files found.
 - **2.0.0.9101**: this manual documents every event, parameter and output, and cites its methods.
-- **2.0.0.9102**: mode 'multi' finds each file by its year however padded, so runs that end before year 1000 or after year 9999 are read; the `bc` current condition leaves out urban land.
+- **2.0.0.9102**: mode 'multi' finds each file by its year however padded, so runs that end before year 1000 or after year 9999 are read; the `bc` current condition leaves out urban land; nrvtools 0.5.2 is required, whose `patchStats()` (the `pm` event) masks the vegetation-type map by the flammable map.
 
 ## Getting help
 

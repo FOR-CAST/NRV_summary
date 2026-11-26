@@ -78,3 +78,11 @@ test_that("every namespace the module calls is in reqdPkgs", {
   )
   expect_identical(sort(setdiff(called, declared)), character(0))
 })
+
+test_that("reqdPkgs asks for nrvtools 0.5.2, whose patchStats() masks the vegetation-type map by the flammable map", {
+  md <- SpaDES.core::moduleMetadata(module = moduleName, path = modulePath)
+  spec <- grep("/nrvtools\\b", unlist(md$reqdPkgs), value = TRUE)
+  expect_length(spec, 1L)
+  floor <- sub("^.*\\(>= *([0-9.-]+)\\).*$", "\\1", spec)
+  expect_true(package_version(floor) >= "0.5.2", label = spec)
+})

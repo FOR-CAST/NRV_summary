@@ -41,7 +41,9 @@ defineModule(sim, list(
     ## axes; the plot functions take captions.
     ## 0.4.0, not 0.3.4.9003: plot_nrv_envelope(type = "lines", reps_df =), for `envelopeStyle = "lines"`.
     ## 0.5.0, not 0.4.0: read_cohort_data() reads the cohortData of either format, .qs2 or parquet (#1).
-    "FOR-CAST/nrvtools (>= 0.5.0)",
+    ## 0.5.2, not 0.5.0: patchStats() (the pm event) masks the vegetation-type map by the flammable map, as it does the
+    ## stand-age map.
+    "FOR-CAST/nrvtools (>= 0.5.2)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9016)",
     ## 3.2.1.9077, not 3.2.1.9057: InitMulti keeps the names dirnamesFromSet() gives its result, the
     ## replicate ids ("rep01" is named "1"; PredictiveEcology/SpaDES.core#543), in mod$allReps and mod$rep1Dir,
