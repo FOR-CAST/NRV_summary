@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9101"),
+  version = list(NRV_summary = "2.0.0.9102"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -607,28 +607,30 @@ InitMulti <- function(sim) {
   mod$rep1Dir <- repDirs[1]
   ## simTimes unset (NA): take the run's start and end. A given simTimes is kept as is.
   P(sim)$simTimes <- SpaDES.core::resolveSimYears(P(sim)$simTimes, sim)
+  ## the year in a name built here has the digits of the last year, as mode 'single' pads it; a file found is chosen by
+  ## its folder and year, however its year is padded (see .repYearFile())
   padL <- ceiling(log10(P(sim)$simTimes[2] + 1))
-  padYearStart <- paddedFloatToChar(P(sim)$simTimes[1], padL = padL)
-  padYearEnd <- paddedFloatToChar(P(sim)$simTimes[2], padL = padL)
+  repYearFile <- function(d, year, prefix) .repYearFile(d, year, prefix, "tif", files, padL)
 
   ## all reps have same flammable map. Only the pm and bc events read it: when either will run, it is taken from the
   ## files found (repFiles() stops, naming it, when the first replicate's folder has none), else its path is built
   ## (repFiles() without files). Unnamed, as the other paths are.
   readsFlm <- any(c("pm", "bc") %in% tolower(P(sim)$postprocessEvents))
-  mod$flm <- unname(SpaDES.core::repFiles(mod$rep1Dir, paste0("flammableMap_year", padYearEnd, ".tif"),
-                                          if (readsFlm) files))
+  flmName <- basename(repYearFile(mod$rep1Dir, P(sim)$simTimes[2], "flammableMap"))
+  mod$flm <- unname(SpaDES.core::repFiles(mod$rep1Dir, flmName, if (readsFlm) files))
 
   ## current-conditions reference = the sim's saved year-0 state (the deterministic
   ## initial condition, identical across reps -- read from rep 1). Read directly so
   ## the CC snapshot needs no regeneration from speciesLayers / no "CC SAM" input,
   ## and no write-before-read ordering between the landscape + patch metric events.
-  ## These three are built, not taken from the files found as the flammable map is: the urban mask below (.maskCC())
-  ## and the per-class figures (.byClassFigTasks()) allow a missing one, and time since fire is optional (see below).
-  mod$fvtm0 <- file.path(mod$rep1Dir, paste0("vegTypeMap_year", padYearStart, ".tif"))
-  mod$fsam0 <- file.path(mod$rep1Dir, paste0("standAgeMap_year", padYearStart, ".tif"))
+  ## These three are chosen from the files found when they are among them, and are built otherwise, not required as
+  ## the flammable map is: the urban mask below (.maskCC()) and the per-class figures (.byClassFigTasks()) allow a
+  ## missing one, and time since fire is optional (see below).
+  mod$fvtm0 <- repYearFile(mod$rep1Dir, P(sim)$simTimes[1], "vegTypeMap")
+  mod$fsam0 <- repYearFile(mod$rep1Dir, P(sim)$simTimes[1], "standAgeMap")
   ## current-conditions time-since-fire (burnSummaries output, which an outputsDF need not list); age basis for the
   ## LandWeb summaries (the lw event).
-  mod$ftsf0 <- file.path(mod$rep1Dir, paste0("rstTimeSinceFire_year", padYearStart, ".tif"))
+  mod$ftsf0 <- repYearFile(mod$rep1Dir, P(sim)$simTimes[1], "rstTimeSinceFire")
 
   ## The year-0 rasters are the SIMULATION's initial state, in which urban has been imputed to its
   ## nearest forest type so the run approximates a pre-industrial landscape. Reporting current
@@ -673,13 +675,14 @@ InitMulti <- function(sim) {
             "read and the .qs2 left as it is:\n", paste(utils::head(mod$cohortFiles[both], 3L), collapse = "\n"),
             if (sum(both) > 3L) "\n...", call. = FALSE)
   }
-  ## several .qs2 files of one folder and year (padded differently): .cohortFile() takes the one named
-  ## `cohortData_year<YYYY>.qs2` if there is one, else the first by name
+  ## several .qs2 files of one folder and year (padded differently): .cohortFile() takes the one padded as mode
+  ## 'single' pads it (`padL` digits) if there is one, else the first by name
   qsFiles <- mod$cohortFiles[!isPart]
   dupQs <- qsFiles[repYear(qsFiles) %in% repYear(qsFiles)[duplicated(repYear(qsFiles))]]
   if (length(dupQs)) {
     yr <- .fileYear(dupQs)
-    used <- unique(.cohortFile(.repFolder(dupQs), yr, sprintf("cohortData_year%04d.qs2", yr), files = mod$cohortFiles))
+    used <- unique(.cohortFile(.repFolder(dupQs), yr, .yearFileName("cohortData", yr, "qs2", padL),
+                               files = mod$cohortFiles))
     warning("NRV_summary: ", length(used), " replicate-year(s) with several .qs2 cohortData files:\n",
             paste(utils::head(dupQs, 6L), collapse = "\n"), if (length(dupQs) > 6L) "\n...",
             "\nused:\n", paste(utils::head(used, 3L), collapse = "\n"), if (length(used) > 3L) "\n...", call. = FALSE)
@@ -697,14 +700,16 @@ InitMulti <- function(sim) {
   filesUserHas <- c(cdpgm, mod$allouts2)
 
   dirsExpected <- repDirs
+  ## each the file found of the folder and year, however its year is padded, else (missing) the name mode 'single' gives
+  ## it (see .repYearFile())
   filesExpected <- as.character(sapply(dirsExpected, function(d) {
+    yrs <- mod$analysesOutputsTimes
     c(
       ## either format: the part file when one was found, else the .qs2 (see .cohortFile())
-      .cohortFile(d, mod$analysesOutputsTimes, sprintf("cohortData_year%04d.qs2", mod$analysesOutputsTimes),
-                  files = mod$cohortFiles),
-      file.path(d, sprintf("pixelGroupMap_year%04d.tif", mod$analysesOutputsTimes)),
-      file.path(d, sprintf("standAgeMap_year%04d.tif", mod$analysesOutputsTimes)),
-      file.path(d, sprintf("vegTypeMap_year%04d.tif", mod$analysesOutputsTimes))
+      .cohortFile(d, yrs, .yearFileName("cohortData", yrs, "qs2", padL), files = mod$cohortFiles),
+      repYearFile(d, yrs, "pixelGroupMap"),
+      repYearFile(d, yrs, "standAgeMap"),
+      repYearFile(d, yrs, "vegTypeMap")
     )
   }))
 
@@ -1118,33 +1123,61 @@ InitMulti <- function(sim) {
 ## the .qs2 is `<repDir>/<qs2>`, named as the caller names it. With `files` (mod$cohortFiles, the cohort files
 ## InitMulti() found), the .qs2 is the one of `files` in the same replicate folder and of the same year, however the
 ## year is padded (`cohortData_year700.qs2` goes with `pixelGroupMap_year0700.tif`): the one named as the caller
-## names it if it is among them, else the first by name (InitMulti() warns when there are several). Only .qs2 files
-## are matched this way; a part file is always the exact `year=<YYYY>` path, and counts only if it is one of `files`:
-## given an outputsDF, only a part file it lists. Where `files` has no .qs2 of that folder and year,
-## the answer is `<repDir>/<qs2>`. Every caller in mode 'multi' passes `files`, so all choose the same file of a
-## replicate-year.
+## names it if it is among them, else the first by name (InitMulti() warns when there are several; see
+## .pickRepYearFile()). Only .qs2 files are matched this way; a part file is always the exact `year=<YYYY>` path, and
+## counts only if it is one of `files`: given an outputsDF, only a part file it lists. Where `files` has no .qs2 of
+## that folder and year, the answer is `<repDir>/<qs2>`. Every caller in mode 'multi' passes `files`, so all choose
+## the same file of a replicate-year.
 .cohortFile <- function(repDir, year, qs2, files = NULL) {
   pq <- .cohortPartPath(repDir, year)
   found <- file.exists(pq) & (is.null(files) | pq %in% files)
   out <- file.path(repDir, qs2)
   if (!is.null(files) && length(files)) {
-    qs2Files <- files[.isCohortQs2(files)]
-    fRep <- .repFolder(qs2Files)
-    fYear <- .fileYear(qs2Files)
-    n <- max(length(repDir), length(year), length(qs2))
-    repDir <- rep_len(repDir, n)
-    year <- rep_len(as.integer(year), n)
-    out <- rep_len(out, n)
-    for (i in seq_len(n)) {
-      hit <- qs2Files[fRep == repDir[i] & fYear %in% year[i]]
-      if (length(hit) && !out[i] %in% hit) {
-        out[i] <- sort(hit)[1]
-      }
-    }
-    found <- rep_len(found, n)
-    pq <- rep_len(pq, n)
+    out <- .pickRepYearFile(out, repDir, year, files[.isCohortQs2(files)])
+    found <- rep_len(found, length(out))
+    pq <- rep_len(pq, length(out))
   }
   as.character(ifelse(found, pq, out)) ## character(0) for no files, not logical(0)
+}
+
+## For each path `built[i]`, of replicate folder `repDir[i]` and year `year[i]`, the one of `candidates` in that
+## folder and of that year (see .repFolder() and .fileYear()), however the year is padded: `built[i]` itself if it
+## is among them, else the first by name; `built[i]` where there is none. The rule by which .cohortFile() and
+## .repYearFile() choose the file of a replicate-year.
+.pickRepYearFile <- function(built, repDir, year, candidates) {
+  n <- max(length(built), length(repDir), length(year))
+  out <- rep_len(built, n)
+  repDir <- rep_len(repDir, n)
+  year <- rep_len(as.integer(year), n)
+  cRep <- .repFolder(candidates)
+  cYear <- .fileYear(candidates)
+  for (i in seq_len(n)) {
+    hit <- candidates[cRep == repDir[i] & cYear %in% year[i]]
+    if (length(hit) && !out[i] %in% hit) {
+      out[i] <- sort(hit)[1]
+    }
+  }
+  out
+}
+
+## `<prefix>_year<YYYY>.<ext>`, the year padded to `padL` digits, as mode 'single' names its files (`padL` is the
+## number of digits of the run's last year)
+.yearFileName <- function(prefix, year, ext, padL) {
+  paste0(prefix, "_year", SpaDES.core::paddedFloatToChar(year, padL = padL), ".", ext)
+}
+
+## The file `<prefix>_year<digits>.<ext>` of replicate folder `repDir` and year `year`, chosen from `files` (the files
+## InitMulti() found) by its folder and year, however the year is padded: of several, the one padded to `padL`
+## digits, else the first by name (see .pickRepYearFile()). Where `files` has none,
+## `<repDir>/<prefix>_year<YYYY>.<ext>` with the year padded to `padL` digits (see .yearFileName()), so that a
+## message about a missing file names it as mode 'single' would have.
+.repYearFile <- function(repDir, year, prefix, ext, files = NULL, padL = 4L) {
+  built <- file.path(repDir, .yearFileName(prefix, year, ext, padL))
+  if (!length(files)) {
+    return(built)
+  }
+  isType <- grepl(paste0("^", prefix, "_year[0-9]+\\.", ext, "$"), basename(files))
+  .pickRepYearFile(built, repDir, year, files[isType])
 }
 
 ## `files`, each .qs2 cohort path followed by the part file that would also do ("<qs2> or <part file>"): what a
@@ -1198,13 +1231,21 @@ InitMulti <- function(sim) {
 }
 
 ## the year-0 cohortData and pixelGroupMap paths in the first replicate's folder. The cohort file (either format) is
-## chosen from `cohortFiles`, the cohort files InitMulti() found (see .cohortFile()). The pixelGroupMap path is built,
-## not taken from the files found: InitMulti() keeps the cohort files, not the whole listing.
-.repYear0Files <- function(rep1Dir, cohortFiles = NULL) {
+## chosen from `cohortFiles`, the cohort files InitMulti() found (see .cohortFile()), and the pixelGroupMap from
+## `files`, the files found (.discoverOutputFiles(), as InitMulti() keeps the cohort files only), each by its year
+## however padded. Names built for files not among them have the year padded to `padL` digits (see .repYearFile()).
+.repYear0Files <- function(rep1Dir, cohortFiles = NULL, files = NULL, padL = 4L) {
   list(
-    cohortData = .cohortFile(rep1Dir, 0, "cohortData_year0000.qs2", files = cohortFiles),
-    pixelGroupMap = file.path(rep1Dir, "pixelGroupMap_year0000.tif")
+    cohortData = .cohortFile(rep1Dir, 0, .yearFileName("cohortData", 0, "qs2", padL), files = cohortFiles),
+    pixelGroupMap = .repYearFile(rep1Dir, 0, "pixelGroupMap", "tif", files, padL)
   )
+}
+
+## The bc event's seral maps, made from the year-0 pixel-group map of the first replicate followed by mod$pgm, in that
+## order (`pgm`): `cc`, the current condition's (the first), and `reps`, the replicates', less those of year 0, which
+## the envelope leaves out. The years are those of the pixel-group maps, as a seral map's name may end in `-sieve<N>`.
+.splitSeralMaps <- function(ssmFiles, pgm) {
+  list(cc = ssmFiles[1L], reps = ssmFiles[-1L][!.fileYear(pgm[-1L]) %in% 0])
 }
 
 ## split a per-replicate map-file vector (`.../rep<NN>/<map>_year<YYYY>.tif`) into a named list by rep.
@@ -1751,7 +1792,8 @@ makeSeralStageMapsBC <- function(sim) {
   sf::st_write(NDTBEC, fNDTBEC, append = FALSE, quiet = TRUE)
   rm(studyAreaReporting, NDTBEC)
 
-  year0 <- .repYear0Files(mod$rep1Dir, mod$cohortFiles)
+  year0 <- .repYear0Files(mod$rep1Dir, mod$cohortFiles, .discoverOutputFiles(sim),
+                          padL = ceiling(log10(P(sim)$simTimes[2] + 1)))
   fcd0 <- .checkCohortFile(year0$cohortData, "cannot make the year-0 seral stage map")
   fpgm0 <- year0$pixelGroupMap
 
@@ -1781,8 +1823,9 @@ makeSeralStageMapsBC <- function(sim) {
     )
   }
 
-  mod$ssm0 <- grep("/seralStageMap_year0000.*[.]tif$", ssmFiles, value = TRUE)
-  mod$ssm <- grep("/seralStageMap_year0000.*[.]tif$", ssmFiles, invert = TRUE, value = TRUE)
+  ssm <- .splitSeralMaps(ssmFiles, fpgm)
+  mod$ssm0 <- ssm$cc
+  mod$ssm <- ssm$reps
 
   return(invisible(sim))
 }
@@ -3452,11 +3495,12 @@ standMetrics <- function(sim) {
   .clearFigDirs(sim, "st")
   sa <- .studyAreaLabel(sim)
   padL <- ceiling(log10(P(sim)$simTimes[2] + 1))
-  padStart <- paddedFloatToChar(P(sim)$simTimes[1], padL = padL)
+  ccYear <- P(sim)$simTimes[1]
   snaps <- .snapshotTable(mod$sam, mod$vtm, mod$pgm, mod$cd)
-  cc <- data.frame(rep = "CC", time = P(sim)$simTimes[1], sam = mod$fsam0, vtm = mod$fvtm0,
-                   pgm = file.path(mod$rep1Dir, paste0("pixelGroupMap_year", padStart, ".tif")),
-                   cd = .cohortFile(mod$rep1Dir, P(sim)$simTimes[1], paste0("cohortData_year", padStart, ".qs2"),
+  ## the first replicate's maps and cohort file of the first year, each by its year however padded (see .repYearFile())
+  cc <- data.frame(rep = "CC", time = ccYear, sam = mod$fsam0, vtm = mod$fvtm0,
+                   pgm = .repYearFile(mod$rep1Dir, ccYear, "pixelGroupMap", "tif", .discoverOutputFiles(sim), padL),
+                   cd = .cohortFile(mod$rep1Dir, ccYear, .yearFileName("cohortData", ccYear, "qs2", padL),
                                     files = mod$cohortFiles))
   .checkCohortFile(cc$cd, "cannot take the stand-level measures of the current condition")
   cells <- NULL
