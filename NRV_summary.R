@@ -44,7 +44,8 @@ defineModule(sim, list(
     "FOR-CAST/nrvtools (>= 0.5.0)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9016)",
     ## 3.2.1.9077, not 3.2.1.9057: InitMulti keeps the names dirnamesFromSet() gives its result, the
-    ## replicate ids ("rep01" is named "1"; PredictiveEcology/SpaDES.core#543), in mod$allReps and mod$rep1Dir.
+    ## replicate ids ("rep01" is named "1"; PredictiveEcology/SpaDES.core#543), in mod$allReps and mod$rep1Dir,
+    ## and takes the first replicate's flammable map from the files found with repFiles().
     ## It also calls dirnamesFromSet(..., leafOnly = FALSE) and resolveSimYears() (3.2.1.9057), and relies on
     ## dirnamesFromSet() keeping zero-padded folders (rep01) as found (from 3.2.1.9038) and on its bare-number
     ## folder fallback (1/, 2/; PredictiveEcology/NRV_summary#20).
@@ -604,16 +605,23 @@ InitMulti <- function(sim) {
   padYearStart <- paddedFloatToChar(P(sim)$simTimes[1], padL = padL)
   padYearEnd <- paddedFloatToChar(P(sim)$simTimes[2], padL = padL)
 
-  ## all reps have same flammable map
-  mod$flm <- file.path(mod$rep1Dir, paste0("flammableMap_year", padYearEnd, ".tif"))
+  ## all reps have same flammable map. Only the pm and bc events read it: when either will run, it is taken from the
+  ## files found (repFiles() stops, naming it, when the first replicate's folder has none), else its path is built
+  ## (repFiles() without files). Unnamed, as the other paths are.
+  readsFlm <- any(c("pm", "bc") %in% tolower(P(sim)$postprocessEvents))
+  mod$flm <- unname(SpaDES.core::repFiles(mod$rep1Dir, paste0("flammableMap_year", padYearEnd, ".tif"),
+                                          if (readsFlm) files))
 
   ## current-conditions reference = the sim's saved year-0 state (the deterministic
   ## initial condition, identical across reps -- read from rep 1). Read directly so
   ## the CC snapshot needs no regeneration from speciesLayers / no "CC SAM" input,
   ## and no write-before-read ordering between the landscape + patch metric events.
+  ## These three are built, not taken from the files found as the flammable map is: the urban mask below (.maskCC())
+  ## and the per-class figures (.byClassFigTasks()) allow a missing one, and time since fire is optional (see below).
   mod$fvtm0 <- file.path(mod$rep1Dir, paste0("vegTypeMap_year", padYearStart, ".tif"))
   mod$fsam0 <- file.path(mod$rep1Dir, paste0("standAgeMap_year", padYearStart, ".tif"))
-  ## current-conditions time-since-fire (burnSummaries output); age basis for the LandWeb summaries.
+  ## current-conditions time-since-fire (burnSummaries output, which an outputsDF need not list); age basis for the
+  ## LandWeb summaries (the lw event).
   mod$ftsf0 <- file.path(mod$rep1Dir, paste0("rstTimeSinceFire_year", padYearStart, ".tif"))
 
   ## The year-0 rasters are the SIMULATION's initial state, in which urban has been imputed to its
@@ -1184,7 +1192,7 @@ InitMulti <- function(sim) {
 }
 
 ## the year-0 cohortData (either format, from `cohortFiles`; see .cohortFile()) and pixelGroupMap paths in the first
-## replicate's folder.
+## replicate's folder. The pixelGroupMap path is built: the bc event calls this without the files InitMulti() found.
 .repYear0Files <- function(rep1Dir, cohortFiles = NULL) {
   list(
     cohortData = .cohortFile(rep1Dir, 0, "cohortData_year0000.qs2", files = cohortFiles),

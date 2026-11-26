@@ -12,14 +12,15 @@ cohortFiles <- function(d, years = yrs, format = "qs2") {
          parquet = file.path(d, "cohortData", sprintf("year=%04d", years), "part-0.parquet"))
 }
 
-## the files InitMulti() expects of each replicate, as paths under `d`; `cohorts` the format(s) of its cohortData
+## the files InitMulti() expects of each replicate, as paths under `d`; `cohorts` the format(s) of its cohortData. The
+## flammable map is of the last year, as mode 'single' saves it at the end of the run.
 repFiles <- function(d, years = yrs, cohorts = "qs2") {
   c(
     unlist(lapply(cohorts, function(x) cohortFiles(d, years, x))),
     file.path(d, sprintf("pixelGroupMap_year%04d.tif", years)),
     file.path(d, sprintf("standAgeMap_year%04d.tif", years)),
     file.path(d, sprintf("vegTypeMap_year%04d.tif", years)),
-    file.path(d, "flammableMap_year1000.tif")
+    file.path(d, sprintf("flammableMap_year%04d.tif", max(years)))
   )
 }
 
@@ -309,6 +310,33 @@ test_that("the replicate folders are named by replicate id, and the files found 
   for (x in unnamed) expect_null(names(m2[[x]]), label = paste0("names(mod$", x, ")"))
 })
 
+test_that("a first replicate without its flammable map stops InitMulti, naming it, if pm or bc runs", {
+  ## the pm and bc events read it; it is taken from the files found (SpaDES.core::repFiles()), so its absence stops
+  ## init rather than the event that reads it
+  root <- withr::local_tempdir()
+  files <- unlist(lapply(file.path(root, c("rep1", "rep2")), repFiles))
+  touchFiles(files)
+  flm1 <- file.path(root, "rep1", "flammableMap_year1000.tif")
+  listed <- setdiff(files, flm1)
+  err <- expect_error(runInit(initMultiSim(root, reps = 1:2, outputsFiles = listed)))
+  expect_match(conditionMessage(err), "flammableMap_year1000.tif", fixed = TRUE)
+  expect_match(conditionMessage(err), file.path(root, "rep1"), fixed = TRUE)
+  ## a run of the other events does not need it: its path is built, as before
+  m <- modOf(runInit(initMultiSim(root, reps = 1:2, outputsFiles = listed, events = c("lm", "lw", "am"))))
+  expect_identical(m$flm, flm1)
+  err3 <- expect_error(runInit(initMultiSim(root, reps = 1:2, outputsFiles = listed, events = c("lm", "BC"))))
+  expect_match(conditionMessage(err3), "flammableMap_year1000.tif", fixed = TRUE)
+
+  ## on disk, as LandWeb's runs are read
+  root2 <- withr::local_tempdir()
+  out <- file.path(root2, "mainSim")
+  files2 <- unlist(lapply(file.path(out, c("rep01", "rep02")), repFiles))
+  touchFiles(setdiff(files2, file.path(out, "rep01", "flammableMap_year1000.tif")))
+  err2 <- expect_error(runInit(initMultiSim(root2, reps = 1:2)))
+  expect_match(conditionMessage(err2), "flammableMap_year1000.tif", fixed = TRUE)
+  expect_match(conditionMessage(err2), file.path(out, "rep01"), fixed = TRUE)
+})
+
 test_that("bare-number replicate folders (1/, 2/) are found through outputsDF", {
   root <- withr::local_tempdir()
   files <- unlist(lapply(file.path(root, c("1", "2")), repFiles))
@@ -429,6 +457,10 @@ test_that(".discoverOutputFiles adds the cohort part files to a LandWeb-like lis
   touchFiles(c(parts, file.path(reps[1], "cohortData", c("year=0700/part-1.parquet", "year=07x0/part-0.parquet",
                                                         "part-0.parquet"))))
   expect_identical(discover(sim), c(before, parts))
+  ## and InitMulti() takes the first replicate's flammable map from that listing
+  m <- modOf(runInit(sim))
+  expect_identical(m$flm, file.path(reps[1], "flammableMap_year1000.tif"))
+  expect_identical(m$rep1Dir, c("1" = reps[1]))
 })
 
 test_that("reps = 1:2 ignores rep10-rep12 parquet cohorts on disk", {
