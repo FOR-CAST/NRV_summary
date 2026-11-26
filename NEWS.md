@@ -1,5 +1,7 @@
 Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
+# NRV_summary (development version)
+
 # NRV_summary 2.1.0
 
 * **Manual: formulas, methods and citations corrected after a review (`2.0.0.9102`).** `mixedType` 2 and `vegLeadingProportion` (manual and parameter descriptions) now say a pixel is mixed when broadleaves hold between `1 - vegLeadingProportion` and `vegLeadingProportion` of its biomass, not when deciduous exceed conifer; the autocorrelation, effective-snapshot, stability and `SeralTable.csv` descriptions state what the code computes (`tau`, the `phi^lag` decay, the lags of `ar1Misfit`, the bias of the sample autocorrelation, `changePctRange`, the pairs the Theil-Sen slope uses, the denominator of `SeralTable.csv` and the summary times it covers, `propYoung`, the seral groups of Natural Disturbance Type 4); the urban-only masking is described as a property of LandWeb's preamble, whose remap sends every urban pixel to class 99; the citations of the integrated autocorrelation time, the effective number of snapshots and the Theil-Sen slope are narrowed to the works that state them, Keane et al. are cited for the late summary period and the spacing of snapshots, nrvtools and R for the autocorrelation, and R for the quartiles and the Mann-Kendall test. The `autocorr` event's message on a short NRV now says the estimates tend to be low, as the manual does, not that they are lower bounds. No other code changes.
