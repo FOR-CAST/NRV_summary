@@ -1,6 +1,6 @@
 ---
 title: "NRV_summary Manual"
-subtitle: "v.2.1.0.9001"
+subtitle: "v.2.1.0.9002"
 date: "Last updated: 2026-11-26"
 output:
   bookdown::html_document2:
@@ -31,7 +31,7 @@ always_allow_html: true
 
 [![made-with-Markdown](figures/markdownBadge.png)](http://commonmark.org)
 
-[![module-version-Badge](https://img.shields.io/badge/NRV__summary-v.%202.1.0.9001-blue)](https://github.com/FOR-CAST/NRV_summary/releases)
+[![module-version-Badge](https://img.shields.io/badge/NRV__summary-v.%202.1.0.9002-blue)](https://github.com/FOR-CAST/NRV_summary/releases)
 
 <!-- if knitting to pdf remember to add the pandoc_args: ["--extract-media", "."] option to yml in order to get the badge images -->
 
@@ -1043,7 +1043,7 @@ A year is read from the `_year<YYYY>.` in a file name (or the `year=<YYYY>` fold
 `init` stops if it finds fewer replicates than `reps` holds, and lists every missing file when a replicate lacks the cohort file, pixel-group map, stand-age map or vegetation-type map of a summary time.
 Each of these files, and each single file of the first replicate (its year-0 maps and its flammable map), is the one found in its folder for its year, however the year is padded: `vegTypeMap_year300.tif` of a run that ends at year 500 is found as `vegTypeMap_year0300.tif` is.
 Of several files of one folder and year (padded differently), `init`'s check and each single file of the first replicate take the one padded to the digits of the last year of `simTimes`, as mode 'single' pads it, else the first by name; a missing file is named with that padding.
-The analyses, however, read every copy of a summary-time vegetation-type, stand-age or pixel-group map, so each extra copy counts as one more map of that replicate and year: remove copies left by an earlier run before running mode 'multi'.
+The analyses read the same one: of several copies of a summary-time vegetation-type, stand-age or pixel-group map in one folder and year, they use the one padded to the digits of the last year of `simTimes`, else the first by name, and `init` warns, naming the copies it left out.
 Since version 2.0.0.9100, the folders found are named by replicate id inside the module (`rep01` is named "1"); file paths, figures and messages are unchanged.
 
 The first replicate found supplies the current condition (its year-0 maps and cohort file), the flammable map that the `pm` and `bc` events read (its last-year `flammableMap`), and the animation frames.
