@@ -1191,8 +1191,9 @@ InitMulti <- function(sim) {
   files[startsWith(files, paste0(sub("/+$", "", rep1Dir), "/"))]
 }
 
-## the year-0 cohortData (either format, from `cohortFiles`; see .cohortFile()) and pixelGroupMap paths in the first
-## replicate's folder. The pixelGroupMap path is built: the bc event calls this without the files InitMulti() found.
+## the year-0 cohortData and pixelGroupMap paths in the first replicate's folder. The cohort file (either format) is
+## chosen from `cohortFiles`, the cohort files InitMulti() found (see .cohortFile()). The pixelGroupMap path is built,
+## not taken from the files found: InitMulti() keeps the cohort files, not the whole listing.
 .repYear0Files <- function(rep1Dir, cohortFiles = NULL) {
   list(
     cohortData = .cohortFile(rep1Dir, 0, "cohortData_year0000.qs2", files = cohortFiles),
