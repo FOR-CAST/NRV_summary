@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.1.0.9001"),
+  version = list(NRV_summary = "2.1.0.9002"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -699,6 +699,18 @@ InitMulti <- function(sim) {
   allouts <- files[grepl("vegType|standAge", basename(files))]
   allouts <- allouts[.inReps(allouts, allReps)]
   mod$allouts <- allouts[!grepl("gri|png|txt|xml", basename(allouts))]
+  ## one copy of each map of a folder and year, as the check above and the first replicate's files take, so that a
+  ## copy padded otherwise (left by an earlier run) is not read as one more map of that replicate-year
+  dupMaps <- .dropRepYearCopies(c(mod$allouts, cdpgm[grepl("pixelGroupMap", basename(cdpgm))]), padL)
+  if (length(dupMaps$dropped)) {
+    warning("NRV_summary: ", length(dupMaps$dropped), " copies of a map of a replicate-year (padded differently) ",
+            "left out; of several copies the one padded to ", padL, " digits is read, else the first by name:\n",
+            paste(utils::head(dupMaps$dropped, 6L), collapse = "\n"), if (length(dupMaps$dropped) > 6L) "\n...",
+            "\nused:\n", paste(utils::head(dupMaps$kept, 3L), collapse = "\n"),
+            if (length(dupMaps$kept) > 3L) "\n...", call. = FALSE)
+    mod$allouts <- mod$allouts[!mod$allouts %in% dupMaps$dropped]
+    cdpgm <- cdpgm[!cdpgm %in% dupMaps$dropped]
+  }
   ## drop the files of the years only the time series needs (not analysed)
   seriesOnlyYears <- setdiff(c(0, P(sim)$timeSeriesTimes), mod$analysesOutputsTimes)
   mod$allouts2 <- mod$allouts[!.inYears(mod$allouts, seriesOnlyYears)]
@@ -1158,6 +1170,24 @@ InitMulti <- function(sim) {
     pq <- rep_len(pq, length(out))
   }
   as.character(ifelse(found, pq, out)) ## character(0) for no files, not logical(0)
+}
+
+## Of `files`, those that are another copy of a map of a folder and year (the same map name and extension, the year
+## padded differently): list(dropped =, kept = the copies read in their place). The copy read is the one
+## .pickRepYearFile() takes: the one padded to `padL` digits, else the first by name. A file without a year is kept.
+.dropRepYearCopies <- function(files, padL) {
+  files <- unique(as.character(files))
+  yr <- .fileYear(files)
+  name <- sub("_year[0-9]+(\\.[^.]*)$", "\\1", basename(files))
+  key <- paste(.repFolder(files), yr, name, sep = "\r")
+  multi <- !is.na(yr) & key %in% key[duplicated(key)]
+  chosen <- vapply(split(files[multi], key[multi]), function(f) {
+    prefix <- sub("_year[0-9]+\\.[^.]*$", "", basename(f[1]))
+    ext <- sub("^.*\\.", "", f[1])
+    .pickRepYearFile(file.path(.repFolder(f[1]), .yearFileName(prefix, .fileYear(f[1]), ext, padL)),
+                     .repFolder(f[1]), .fileYear(f[1]), f)
+  }, character(1))
+  list(dropped = files[multi & !files %in% chosen], kept = unname(chosen))
 }
 
 ## For each path `built[i]`, of replicate folder `repDir[i]` and year `year[i]`, the one of `candidates` in that
