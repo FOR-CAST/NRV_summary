@@ -188,7 +188,7 @@ knitr::kable(df_params, format = "html", caption = "List of (ref:NRV-summary) pa
 - `timeSeriesTimes` (start + 601:650 when the run is at least 650 years long, otherwise the last 50 years of the run): the years whose stand-age and vegetation-type maps mode 'single' also saves, and the frames of the `am` animation.
   `NA` takes the default; `init` stops if a year lies outside the run.
 - `reps` (`1:10`, mode 'multi'): the ids of the replicates to summarise, e.g. `c(2, 5)` for folders `rep2` and `rep5` (or `rep02` and `rep05`).
-  The metadata calls it the "number of replicates", but it is a vector of ids, and `init` stops if fewer replicates are found than it holds.
+  It is a vector of ids, not a count, and `init` stops if fewer replicates are found than it holds.
   Set it to the replicates you ran.
 - `simTimes` (`c(NA, NA)`, mode 'multi'): the start and end years of the replicate runs.
   They name the year-0 files (e.g. `_year0000`) and the last year's flammable map.
@@ -222,7 +222,7 @@ knitr::kable(df_params, format = "html", caption = "List of (ref:NRV-summary) pa
 
 - `postprocessEvents` (`c("lm", "pm")`): the analyses to run, any of `"am"`, `"autocorr"`, `"bc"`, `"cc"`, `"lm"`, `"lw"`, `"on"`, `"pm"`, `"st"` and `"stability"` (upper or lower case).
   Any other value stops `init` before any work.
-  The parameter's own text calls `"on"` "ON patch metrics", but that event only prints a message.
+  `"on"` (Ontario NRV metrics) is a stub that only prints a message.
 - `patchDirections` (4): the connectivity of the large patches of the `lw` summaries: 4 joins cells that share an edge (rook), as LandWeb's v2 summaries did; 8 also joins cells that touch at a corner (queen).
   It does not apply to the `lm` and `pm` metrics, which use landscapemetrics' default of 8 (see [Methods](#methods)).
 - `sieveThresh` (1): in the `bc` event, seral-stage patches of fewer pixels than this are merged into a neighbouring patch with `terra::sieve()` before the patch metrics are taken.
