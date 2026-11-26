@@ -230,6 +230,13 @@ test_that("BC seral and animation read the first replicate folder found", {
   rep1st <- file.path(withr::local_tempdir(), "rep1")
   touchFiles(c(cohortFiles(rep1st, 0, "qs2"), cohortFiles(rep1st, 0, "parquet")))
   expect_identical(year0(rep1st, cohortFiles(rep1st, 0, "qs2"))$cohortData, cohortFiles(rep1st, 0, "qs2"))
+  ## the first replicate folder named by replicate id, as InitMulti() gives it: the same paths, unnamed
+  named <- year0(c("1" = rep1))
+  expect_identical(named, year0(rep1))
+  expect_null(names(named$cohortData))
+  expect_null(names(named$pixelGroupMap))
+  expect_identical(year0(c("1" = rep1pq)), year0(rep1pq))
+  expect_identical(year0(c("1" = rep1st), cohortFiles(rep1st, 0, "qs2")), year0(rep1st, cohortFiles(rep1st, 0, "qs2")))
 
   sel <- moduleFn(".firstRepFiles", new.env())
   sam <- file.path("out", c("rep1", "rep2", "rep10"), "standAgeMap_year0701.tif")
@@ -245,6 +252,10 @@ test_that("BC seral and animation read the first replicate folder found", {
   expect_identical(sel(file.path("rep1x", "a_year0701.tif"), file.path("out", "rep1")), character(0))
   ## LandWeb-style folders still work
   expect_identical(sel(file.path("o", c("rep01", "rep02"), "a.tif"), file.path("o", "rep01")),
+                   file.path("o", "rep01", "a.tif"))
+  ## the first replicate folder named by replicate id: the same files, unnamed
+  expect_identical(sel(c(NA, sam), c("1" = file.path("out", "rep1"))), sam[1])
+  expect_identical(sel(file.path("o", c("rep01", "rep02"), "a.tif"), c("1" = file.path("o", "rep01"))),
                    file.path("o", "rep01", "a.tif"))
 })
 
@@ -335,6 +346,9 @@ test_that("a first replicate without its flammable map stops InitMulti, naming i
   err2 <- expect_error(runInit(initMultiSim(root2, reps = 1:2)))
   expect_match(conditionMessage(err2), "flammableMap_year1000.tif", fixed = TRUE)
   expect_match(conditionMessage(err2), file.path(out, "rep01"), fixed = TRUE)
+  ## and without pm or bc, no stop: the path is built
+  m2 <- modOf(runInit(initMultiSim(root2, reps = 1:2, events = c("lm", "lw", "am"))))
+  expect_identical(m2$flm, file.path(out, "rep01", "flammableMap_year1000.tif"))
 })
 
 test_that("bare-number replicate folders (1/, 2/) are found through outputsDF", {
