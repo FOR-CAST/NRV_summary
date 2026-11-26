@@ -100,9 +100,10 @@ Year 0 is taken after every module's initialisation but before any time-0 growth
 
 In mode 'multi', NRV_summary runs in a simulation of its own after the replicates have finished.
 Its `init` event finds the replicates' files (see [Finding the replicates' files](#finding-the-replicates-files)) and checks that every summary year is there.
-All analyses are then scheduled at the end of that simulation, so a mode 'multi' simList needs the same start and end times as the replicate runs.
-Each analysis reads the snapshots of every replicate and summary time, computes its metrics for each unit of each reporting-polygon layer, and writes one parquet partition per replicate.
-It then summarises the partitions across replicates (the envelope) and sets the year-0 values (the current condition) beside them.
+All analyses are then scheduled at the end of that simulation, whose start and end must span `summaryPeriod` and `timeSeriesTimes` (`init` stops otherwise); `simTimes` takes them by default.
+The `lm`, `pm`, `lw` and `bc` analyses read the snapshots of every replicate and summary time, compute their metrics for each unit of each reporting-polygon layer, and write one parquet partition per replicate.
+They then summarise the partitions (the envelope) and set the year-0 values (the current condition) beside them.
+The other analyses work from the snapshots, the annual series or those results.
 
 ### Summary times, the NRV years and year 0
 
@@ -142,7 +143,7 @@ A study area whose `sppEquiv` has no rows has no tree species to summarise: the 
 - `reportingPolygons` (required) is a named list of polygon layers, e.g. administrative units or ecoregions, such as `LandWebUtils::buildReportingPolygons()` makes.
   The `lm`, `pm` and `lw` events name each unit by its `Name` column and drop units without one.
   Every layer is cut to the geometry of `studyAreaReporting` (not its bounding box).
-  The `bc` event reads the layer named `ecoregionLayer` (Natural Disturbance Type by biogeoclimatic zone polygons) and takes each layer's label column from its `field` attribute.
+  The `bc` event reads the layer named `ecoregionLayer` (Natural Disturbance Type by biogeoclimatic zone polygons), which must have an `NDTBEC` attribute, the zone the seral-stage rules are looked up by; it takes each layer's label column from its `field` attribute.
 - `studyAreaReporting` is the reporting area; the reporting polygons are cut to it, and the `st` event counts its pixels.
 - `sppEquiv` names the vegetation types and defines the reporting groups (`sppEquivColReporting`).
 - `LandTypeCC_reporting`, a current land-cover map with urban areas kept, removes urban land from the current condition (see [The current condition](#the-current-condition)).
@@ -154,7 +155,8 @@ A study area whose `sppEquiv` has no rows has no tree species to summarise: the 
 
 Besides the snapshots the replicates saved, mode 'multi' reads two kinds of files written by the burnSummaries module, which are not module inputs:
 
-- `rstTimeSinceFire_year<YYYY>.tif` in each replicate folder, which burnSummaries saves in mode 'single' at the start, at each summary time and at the end of the run.
+- `rstTimeSinceFire_year<YYYY>.tif` in each replicate folder, which burnSummaries saves in mode 'single' at the start, at each of its own summary times and at the end of the run.
+  The maps exist only at burnSummaries' summary times, so its `summaryPeriod` and `summaryInterval` must match NRV_summary's.
   Time since fire is the age basis of the `lw` summaries, and its year-0 map is their current condition.
   `init` does not check these files; without them the `lw` event cannot run.
 - `burnSummaries_fireBlocks.csv`, burnSummaries' table of the area burned in each replicate and block of years, which it writes in mode 'multi'.
@@ -192,7 +194,7 @@ knitr::kable(df_params, format = "html", caption = "List of (ref:NRV-summary) pa
   Set it to the replicates you ran.
 - `simTimes` (`c(NA, NA)`, mode 'multi'): the start and end years of the replicate runs.
   They name the year-0 files (e.g. `_year0000`) and the last year's flammable map.
-  `NA` takes the start and end of the mode 'multi' simulation (`SpaDES.core::resolveSimYears()`); set it only when that simulation's times differ from the replicates'.
+  `NA` takes the start and end of the mode 'multi' simulation (`SpaDES.core::resolveSimYears()`); set it when those differ from the replicate runs' start and end.
 
 ### Vegetation types
 
@@ -244,7 +246,9 @@ knitr::kable(df_params, format = "html", caption = "List of (ref:NRV-summary) pa
 
 ### Parameters the code does not read
 
-`ageClassMaxAge`, `.plots`, `.plotInitialTime`, `.plotInterval`, `.seed` and `.useCache` are declared but never read.
+The module's own code does not read `ageClassMaxAge`, `.plots`, `.plotInitialTime`, `.plotInterval`, `.seed` or `.useCache`, and nothing reads the first four.
+SpaDES.core reads the other two when it runs an event: `.seed`, a list named by event type, seeds the random-number generator for those events, and `.useCache` caches the `init` event (`TRUE`) or the events it names.
+Keep `.useCache = FALSE`: an event taken from the cache is not run, so a cached mode 'multi' event can skip writing its files.
 The figures are always written as PNG files.
 The metric calculations of `lm`, `pm`, `lw` and `bc` are wrapped in `reproducible::Cache()`, keyed on their arguments and on the size and modification time of the maps they read; reproducible's own option `reproducible.useCache` controls that cache, not `.useCache`.
 
@@ -312,9 +316,18 @@ The year-0 row is taken at the end of year 0 from the cohorts, so its ages are t
 
 ### postprocess_lm: landscape metrics (default)
 
-For each reporting layer and unit, the `lm` event computes ten landscape-level metrics of the vegetation-type map of every replicate and summary time, with landscapemetrics [@Hesselbarth:2019; @R-landscapemetrics] through `nrvtools::nrv_metrics_landscape()`: mean and standard deviation of patch area (`lsm_l_area_mn`, `lsm_l_area_sd`), aggregation index (`lsm_l_ai`), patch cohesion index (`lsm_l_cohesion`) [@Schumaker:1996], conditional entropy (`lsm_l_condent`), mean, standard deviation and coefficient of variation of core area (`lsm_l_core_mn`, `lsm_l_core_sd`, `lsm_l_core_cv`), edge density (`lsm_l_ed`) and interspersion and juxtaposition index (`lsm_l_iji`).
+For each reporting layer and unit, the `lm` event computes ten landscape-level metrics of the vegetation-type map of every replicate and summary time, with landscapemetrics [@Hesselbarth:2019; @R-landscapemetrics] through `nrvtools::nrv_metrics_landscape()`:
+
+- mean and standard deviation of patch area (`lsm_l_area_mn`, `lsm_l_area_sd`);
+- aggregation index (`lsm_l_ai`);
+- patch cohesion index (`lsm_l_cohesion`) [@Schumaker:1996];
+- conditional entropy (`lsm_l_condent`);
+- mean, standard deviation and coefficient of variation of core area (`lsm_l_core_mn`, `lsm_l_core_sd`, `lsm_l_core_cv`);
+- edge density (`lsm_l_ed`);
+- interspersion and juxtaposition index (`lsm_l_iji`).
+
 It computes the same for the current condition.
-The envelope at each summary time is the replicates' distribution (see [Methods](#methods)).
+The envelope at each summary time is the distribution of one value per replicate, so `n_reps` counts the replicates with a value (see [Methods](#methods)).
 The tables are `csv/lm/<layer>/lm.csv` (and one file per metric, `lm_<metric>.csv`) for the replicates and `lm_CC.csv` for the current condition.
 With `"st"` or `"cc"` in the same run, it also writes `lm_nrvComparison.csv`: for each unit and metric, the NRV range and whether the current condition is inside, above or below it.
 
@@ -325,7 +338,8 @@ For each reporting layer and unit, the `pm` event computes, for each vegetation 
 - the area of each patch (`area`) and the median stand age of each patch (`sam_mdn`);
 - the class-level aggregation index (`lsm_c_ai`), mean, standard deviation and coefficient of variation of patch area (`lsm_c_area_mn`, `lsm_c_area_sd`, `lsm_c_area_cv`) and total class area (`lsm_c_ca`).
 
-It reads the vegetation-type and stand-age maps, and masks out the pixels that the first replicate's flammable map marks as not flammable.
+It reads the vegetation-type and stand-age maps, and the first replicate's flammable map masks only the stand-age map: the patches, their areas and the class-level metrics include non-flammable pixels, and only the patch ages (`sam_mdn`) leave them out.
+Non-flammable pixels have no cohorts and so no vegetation type, so in practice the vegetation-type metrics are unaffected.
 A patch-level metric enters the envelope as each replicate's mean over its patches, so the envelope spans the replicates, as for a class-level metric.
 A class absent from a map has no row in landscapemetrics' output; the event adds a class area of 0 ha (in `ca_zeros.parquet`) for each class that a unit shows in its current condition or in any replicate-year but lacks in a replicate-year, so the class-area envelopes count the replicate-years without the class.
 Class codes are labelled with the vegetation types' names.
@@ -339,9 +353,9 @@ Both bin the time-since-fire map of each replicate and NRV year into the age cla
 - `leadingVegByAgeClass`: for each vegetation type, the proportion of its forest in each age class (`leadingProp`, with an `All species` row over every type), and each type and age class as a share of all forest (`leadingShare`).
 - `largePatchCounts`: patches of one vegetation type and age class (and, for `All species`, of one age class), joined with `patchDirections` connectivity; patches under 100 ha are dropped, and for each threshold of 100, 500, 1,000 and 5,000 ha the event counts the patches at least that large (`Npatch_ge<size>ha`) and their total area (`totalArea_ge<size>ha`).
 
-The NRV distribution pools the replicates and the NRV years.
+The NRV distribution pools the replicates and the NRV years, so `n_reps` in its tables counts replicate-years.
 Pixels are not masked by the flammable map.
-A vegetation type that a unit shows but lacks in a replicate-year gets 0 in every area metric there (`lw_zeros.parquet`); its `leadingProp` stays undefined, since it has no forest to divide.
+A vegetation type that a unit shows but lacks in a replicate-year gets 0 in `leadingShare` and the large-patch counts and areas there (`lw_zeros.parquet`); its `leadingProp` stays undefined, since it has no forest to divide.
 The tables are `csv/boxplots/<layer>/leading.csv` (and `leading_<metric>.csv`, `leading_CC.csv`) and `csv/histograms/<layer>/largePatches.csv` (and the same variants).
 The NRV years the aggregates were built from are recorded in `_aggregates/lw_<layer>/nrvYears.txt`.
 
@@ -352,6 +366,9 @@ The seral-stage recipe was ported from a BC Government ArcPy script given to the
 From each cohort table and pixel-group map (year 0 of the first replicate, and every replicate's summary times), `nrvtools::writeSeralStageMapBC()` assigns each pixel a seral stage (early, mid, mature or old; in Natural Disturbance Type 4 also by leading Fir, Pine or other species) from the age of its cohorts and its Natural Disturbance Type and biogeoclimatic zone, read from the `ecoregionLayer` reporting polygons.
 The maps are written as `seralStageMap_year<YYYY>.tif` in each replicate folder, and sieved with `sieveThresh` (`seralStageMap_year<YYYY>-sieve<N>.tif`).
 For each reporting layer and unit, the event then takes the area of each seral-stage patch, masked by the flammable map, through `nrvtools::calculatePatchMetricsSeral()`; the tables are in `csv/sspm/<layer>/`.
+Its envelope pools every patch of every replicate at each summary time, so `n_reps` in those tables counts patches, not replicates, and the figures carry no caption.
+The year-0 files are always those named `_year0000` in the first replicate's folder, whatever `simTimes` says.
+The current condition's seral map is built from the first replicate's year-0 cohorts and pixel-group map, which the urban mask does not reach, so it still counts urban land as forest (a known limitation).
 For a reporting layer named `NDTBEC`, it also writes `SeralTable.csv` in `outputPath(sim)`: the smallest, mean and largest percentage of each polygon's area in each seral stage over the summary times.
 The cropped polygons are written as `NDTBEC.shp` in `outputPath(sim)`.
 
@@ -418,7 +435,7 @@ It runs after `plot`, which empties its folder.
 
 The `am` event animates the first replicate's stand-age maps of the `timeSeriesTimes` years.
 Each frame is binned into the age classes (a class starts at its cut-off; the last runs on to any age), coloured from young to old with the RdYlGn palette, and the GIF is written as `standAge_animation.gif` in the module's figure folder, `figurePath(sim)`.
-It is encoded with gifski [@R-gifski], which needs no external program; LandWeb's earlier animation, through ImageMagick, failed with "cache resources exhausted" unless ImageMagick's memory limits were raised ([LandWeb #153](https://github.com/PredictiveEcology/LandWeb/issues/153)).
+It is encoded with gifski [@R-gifski], which needs no external program.
 Without frames the event warns and writes nothing.
 
 ### postprocess_on
@@ -452,7 +469,8 @@ Of the summaries, the year-0 stand-age map enters the current condition of the `
 **Urban land.**
 The simulation imputes urban pixels to their nearest forest type, so the replicates approximate a landscape without urban land.
 Reported unchanged, year 0 would count that imputed forest as forest today.
-In mode 'multi', when `LandTypeCC_reporting` is supplied, `init` masks the urban pixels (class 17) of the 2020 Land Cover of Canada [@NRCan:2022landcover] out of the year-0 vegetation-type, stand-age and time-since-fire maps, and writes the masked copies to `<outputPath>/_cc/<rep>/`; every analysis reads those.
+In mode 'multi', when `LandTypeCC_reporting` is supplied, `init` masks the urban pixels (class 17) of the 2020 Land Cover of Canada [@NRCan:2022landcover] out of the year-0 vegetation-type, stand-age and time-since-fire maps, and writes the masked copies to `<outputPath>/_cc/<rep>/`; the `lm`, `pm`, `lw` and `st` events read those.
+The `bc` event does not: its year-0 seral map is built from the first replicate's unmasked year-0 cohorts and pixel-group map, so its current condition still counts urban land as forest (a known limitation).
 Urban is the only class that differs between the simulation's land cover and the reporting copy: water, barren land and snow and ice are missing in both.
 The envelopes are not masked: they describe the landscape without urban land, the current condition describes today's, and the difference is the land-conversion part of the departure.
 A map whose grid differs from `LandTypeCC_reporting` is left unmasked, with a warning.
@@ -482,9 +500,9 @@ Spacing them by the autocorrelation time, as the output of a Markov chain Monte 
 Maps saved every year would measure that at the cost of far too much data, so a few landscape scalars are recorded every year instead (see [annual_series](#annual_series-mode-single-opt-in)).
 The replicates are treated as realisations of one process: each series is centred on the mean of all replicates and NRV years, and the variance is pooled over the replicates.
 A replicate's own mean would pull the sample autocorrelation toward 0, the more so the longer the autocorrelation time is against the series.
-The autocorrelation time is the integrated autocorrelation time [@Sokal:1997; @Geyer:1992], taken here as 1 plus twice the sum of the autocorrelations at all lags.
+The autocorrelation time is the integrated autocorrelation time [@Sokal:1997; @Geyer:1992], taken here as 1 plus twice the sum of the autocorrelations at all lags; that is twice Sokal's `tau_int`, which he defines as 1/2 plus the sum.
 The module computes it for an exponential decay with the pooled lag-1 autocorrelation `phi` as its rate (a first-order autoregressive series), which gives `tau = (1 + phi) / (1 - phi)`; no curve is fitted, and `ar1Misfit` says how far the measured autocorrelation departs from that decay.
-Geyer's initial positive sequence estimate [@Geyer:1992], which sums the measured autocorrelations instead, is given as `tauGeyer` for comparison; it is noisy for short series.
+Geyer's initial monotone sequence estimate [@Geyer:1992], which sums the measured autocorrelations in pairs, made non-increasing, up to the first pair sum that is not positive, is given as `tauGeyer` for comparison; it is noisy for short series.
 The effective number of independent snapshots is the number of snapshots times `(1 - r) / (1 + r)`, where `r` is the correlation of snapshots `summaryInterval` years apart [@Bayley:1946; @Thiebaux:1984].
 The recommended thinning is the largest `tau`, rounded up; set `summaryInterval` at or above it.
 If the replicates' means differ, the common mean counts that difference as autocorrelation, which errs toward more thinning.
@@ -516,7 +534,7 @@ Each replicate writes to its `outputPath(sim)`:
 ### Mode 'multi': summaries
 
 Mode 'multi' writes most of its files to `postprocess/`, beside its own `outputPath(sim)` (in LandWeb, `outputs/<studyArea>/postprocess/` beside `outputs/<studyArea>/mainSim/`).
-`<layer>` is a reporting-polygon layer's name, `<rep>` a replicate folder, `<refCode>` the analysis and layer (`<kind>_` and a short form of the layer name, from `LandWebUtils::refCodeFor()`), and `_CC` marks the current condition.
+`<layer>` is a reporting-polygon layer's name, `<rep>` a replicate folder, `<refCode>` the analysis and layer (`<kind>_` and the layer name with each run of characters other than letters and digits replaced by `_`, from `LandWebUtils::refCodeFor()`), and `_CC` marks the current condition.
 
 ```text
 <outputPath>/                          the replicate folders' parent
@@ -557,7 +575,8 @@ postprocess/                           beside <outputPath>
 
 The year in the `_cc` names is the first year of `simTimes`, padded as in the replicate folders.
 
-Each envelope table has, per unit (`poly`), class, metric and summary time (for `lw`, pooled over the NRV years), `n_reps` (the replicates with a value), `mean`, `sd`, `min`, `q25`, `median`, `q75`, `max` and `se`.
+Each envelope table has, per unit (`poly`), class, metric and summary time (for `lw`, pooled over the NRV years), `n_reps`, `mean`, `sd`, `min`, `q25`, `median`, `q75`, `max`, `se` (`sd / sqrt(n_reps)`) and `ci` (the half-width of a 95% confidence interval of the mean, `se` times Student's t).
+What `n_reps` counts differs: for `lm` and `pm`, the replicates with a value (a patch-level metric enters as each replicate's mean over its patches); for `lw`, the replicate-years; for `bc`, every patch of every replicate.
 The `_aggregates` datasets hold each replicate's raw metric values; open one with `nrvtools::open_nrv_dataset()` or `arrow::open_dataset()` to analyse the replicates yourself.
 
 ### Figures
@@ -580,7 +599,7 @@ The figures are written under `postprocess/figures/`, for each reporting layer:
 - `st/<studyArea>/` (`st`): `stand_age.png`, `stand_leading.png` (only when some type leads at least 0.5% of the area, in the replicates or today) and `stand_biomass.png` (the replicates over time, their median and the current condition), `species/lead_<code>.png` for each leading type, and `current_condition_overview_p<N>.png` (where each measure's current condition lies against its NRV range).
 - `all/<layer>/<unit>.png` (`cc`), `stability/all/` (`stability`) and `autocorrelation/all/` (`autocorr`): see [Events](#events).
 
-The y axes name each metric and its unit, and each envelope and per-class figure has a caption saying what its marks show, with the numbers of replicates and simulation years drawn.
+The y axes name each metric and its unit, and each `lm` and `pm` envelope and per-class figure has a caption saying what its marks show, with the numbers of replicates and simulation years drawn; the `bc` envelopes have none, since they pool patches rather than replicates.
 When `nrvWindow` is below 1, the envelope figures shade the NRV years.
 
 Before drawing, a run empties the figure folders of the events it runs (`lm`, `pm`, `boxplots` and `histograms` for `lw`, `sspm`, `st`, `all`, `stability`, `autocorrelation`), so that the figures of a type, unit or layer renamed or dropped since an earlier run are not left beside the new ones.
@@ -592,7 +611,7 @@ In mode 'multi', `init` (through `InitMulti()`) finds the files the replicates s
 
 - **Without `outputsDF`** (LandWeb's case), it lists the files in `outputPath(sim)` and in each folder one level below it, and the cohort part files in each folder's `cohortData/` subfolder.
 - **With `outputsDF`**, a data.frame with a `file` column such as the replicates' `outputs(sim)` tables row-bound together, it uses the files listed there.
-  A listed file must also exist; a file on disk that is not listed is not used.
+  A listed file must also exist; a file on disk that is not listed is not used, except these, which are read whether or not the `outputsDF` lists them: the first replicate's year-0 vegetation-type, stand-age and time-since-fire maps, its year-0 pixel-group map (read by `bc` and `st`), and every `rstTimeSinceFire` map, taken from the folder of its vegetation-type map.
   The replicate folders may then lie outside `outputPath(sim)`.
 
 The replicate folders are those named `rep<id>` for each id in `reps`, spelled as they are on disk (`rep1` or `rep01`), found by `SpaDES.core::dirnamesFromSet()`; when there are none, folders named by the bare number (`1/`, `2/`) are used.
@@ -611,7 +630,7 @@ Mode 'multi' reads both formats with `nrvtools::read_cohort_data()`:
 
 - a cohort file counts when it was found (listed in `outputsDF`, or on disk without one) and exists;
 - for a replicate and year with both formats, the parquet file is read, with a warning that gives the number of such replicate-years and names up to three of them; neither file is removed;
-- a `.qs2` file is paired with its pixel-group map by folder and year compared as a number, so `cohortData_year700.qs2` goes with `pixelGroupMap_year0700.tif`; when one folder and year has several `.qs2` files (padded differently), the one with a four-digit year is used if there is one, else the first by name, with a warning;
+- a `.qs2` file is paired with its pixel-group map by folder and year compared as a number, so `cohortData_year700.qs2` goes with `pixelGroupMap_year0700.tif`; when one folder and year has several `.qs2` files (padded differently), `init`'s check of the files prefers the one with a four-digit year, and the other readers the one padded like the map it is paired with, else the first by name; `init` warns;
 - when `bc` or `st` will run, a pixel-group map without a cohort file stops `init`, naming it, and a missing year-0 cohort file stops those events, naming both formats' paths.
 
 Choosing a format: keep `.qs2` unless the cohorts are to be read by other software or queried across years.
@@ -642,10 +661,11 @@ The large-patch and age-class summaries of `lw` are the module's own definitions
 The leading vegetation type and the biomass-weighted stand age of each pixel are those of LandR's `vegTypeMapGenerator()` and `standAgeMapGenerator()` [@R-LandR; @Barros2023].
 
 **Envelopes.**
-For each unit, metric and summary time, the envelope is the distribution of the replicates' values: their mean, standard deviation, minimum, quartiles, median and maximum, computed by `nrvtools::summarize_nrv()` [@R-nrvtools] from each replicate's parquet partition.
+For each unit, metric and summary time, the envelope summarises the values in the aggregates, their mean, standard deviation, minimum, quartiles, median and maximum, with `nrvtools::summarize_nrv()` [@R-nrvtools].
+For `lm` and `pm` there is one value per replicate, so the envelope spans the replicates; the `lw` summaries pool the replicates and the NRV years, and the `bc` envelopes pool every patch of every replicate.
 The quartiles are type 7 quantiles, the default of R's `stats::quantile()`; that choice is the module's.
-A patch-level metric enters as each replicate's mean over its patches.
-The envelope boxplots draw whiskers from minimum to maximum, so they span every replicate; the per-class pages draw them to the furthest value within 1.5 times the interquartile range.
+In `pm`, a patch-level metric enters as each replicate's mean over its patches.
+The envelope boxplots draw whiskers from minimum to maximum, so they span every value summarised; the `pm` per-class pages and the `lw` boxplots draw them to the furthest value within 1.5 times the interquartile range.
 The NRV range of a measure and the inside/above/below rule are described in [The current condition](#the-current-condition).
 
 **Trend and autocorrelation.**
