@@ -12,8 +12,8 @@ output:
     keep_md: yes
 editor_options:
   chunk_output_type: console
-  bibliography: citations/references_NRV_summary.bib
-citation-style: citations/ecology-letters.csl
+bibliography: citations/references_NRV_summary.bib
+csl: citations/ecology-letters.csl
 link-citations: true
 always_allow_html: true
 ---
@@ -24,24 +24,10 @@ always_allow_html: true
 (ref:NRV-summary) *NRV_summary*
 
 ```{r setup-NRV-summary, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, eval = FALSE, results = "hold") ## change to eval = TRUE if all chunks are to be evaluated
-
-## get citation style
-if (!file.exists("citations/ecology-letters.csl")) {
-  dir.create("citations", showWarnings = FALSE)
-  download.file("https://www.zotero.org/styles/ecology-letters", destfile = "citations/ecology-letters.csl")
-}
-
-if (!require(dplyr)) {
-  install.packages("dplyr")
-  library(dplyr)
-}
-
-dir.create("figures", showWarnings = FALSE)
-
-download.file(url = "https://img.shields.io/badge/Made%20with-Markdown-1f425f.png",
-              destfile = "figures/markdownBadge.png",
-              mode = "wb")
+## Chunks are not run unless they say so. Rendering downloads and installs nothing: the citation
+## style (citations/ecology-letters.csl) and the badge (figures/markdownBadge.png) are in the
+## repository, and the tables use the base pipe, not dplyr's.
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE, results = "hold")
 ```
 
 [![made-with-Markdown](figures/markdownBadge.png)](http://commonmark.org)
@@ -67,7 +53,7 @@ Table \@ref(tab:moduleInputs-NRV-summary) shows the full list of module inputs.
 ```{r moduleInputs-NRV-summary, echo = FALSE, eval = TRUE, message = FALSE, warning = FALSE}
 df_inputs <- SpaDES.core::moduleInputs("NRV_summary", "..")
 knitr::kable(df_inputs,
-             caption = "List of (ref:NRV-summary) input objects and their description.") %>%
+             caption = "List of (ref:NRV-summary) input objects and their description.") |>
   kableExtra::kable_styling(latex_options = "scale_down", full_width = TRUE)
 ```
 
@@ -76,7 +62,7 @@ Summary of user-visible parameters (Table \@ref(tab:moduleParams-NRV-summary)).
 
 ```{r moduleParams-NRV-summary, echo = FALSE, eval = TRUE, message = FALSE, warning = FALSE}
 df_params <- SpaDES.core::moduleParams("NRV_summary", "..")
-knitr::kable(df_params, caption = "List of (ref:NRV-summary) parameters and their description.") %>%
+knitr::kable(df_params, caption = "List of (ref:NRV-summary) parameters and their description.") |>
   kableExtra::kable_styling(latex_options = "scale_down", full_width = TRUE)
 ```
 
@@ -287,7 +273,7 @@ Description of the module outputs (Table \@ref(tab:moduleOutputs-NRV-summary)).
 
 ```{r moduleOutputs-NRV-summary, echo = FALSE, eval = TRUE, message = FALSE, warning = FALSE}
 df_outputs <- SpaDES.core::moduleOutputs("NRV_summary", "..")
-knitr::kable(df_outputs, caption = "List of (ref:NRV-summary) outputs and their description.") %>%
+knitr::kable(df_outputs, caption = "List of (ref:NRV-summary) outputs and their description.") |>
   kableExtra::kable_styling(latex_options = "scale_down", full_width = TRUE)
 ```
 
