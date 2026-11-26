@@ -247,7 +247,7 @@ knitr::kable(df_params, format = "html", caption = "List of (ref:NRV-summary) pa
 ### Parameters the code does not read
 
 The module's own code does not read `ageClassMaxAge`, `.plots`, `.plotInitialTime`, `.plotInterval`, `.seed` or `.useCache`, and nothing reads the first four.
-SpaDES.core reads the other two when it runs an event: `.seed`, a list named by event type, seeds the random-number generator for those events, and `.useCache` caches the `init` event (`TRUE`) or the events it names.
+SpaDES.core reads the other two when it runs an event: `.seed`, a list named by event type, seeds the random-number generator for those events, and `.useCache` caches all of the module's events (`TRUE`) or the events it names.
 Keep `.useCache = FALSE`: an event taken from the cache is not run, so a cached mode 'multi' event can skip writing its files.
 The figures are always written as PNG files.
 The metric calculations of `lm`, `pm`, `lw` and `bc` are wrapped in `reproducible::Cache()`, keyed on their arguments and on the size and modification time of the maps they read; reproducible's own option `reproducible.useCache` controls that cache, not `.useCache`.
@@ -534,7 +534,7 @@ Each replicate writes to its `outputPath(sim)`:
 ### Mode 'multi': summaries
 
 Mode 'multi' writes most of its files to `postprocess/`, beside its own `outputPath(sim)` (in LandWeb, `outputs/<studyArea>/postprocess/` beside `outputs/<studyArea>/mainSim/`).
-`<layer>` is a reporting-polygon layer's name, `<rep>` a replicate folder, `<refCode>` the analysis and layer (`<kind>_` and the layer name with each run of characters other than letters and digits replaced by `_`, from `LandWebUtils::refCodeFor()`), and `_CC` marks the current condition.
+`<layer>` is a reporting-polygon layer's name, `<rep>` a replicate folder, `<refCode>` the analysis and layer (`<kind>_` and the layer name with each run of characters other than letters and digits replaced by `_`, and any leading or trailing `_` removed, from `LandWebUtils::refCodeFor()`), and `_CC` marks the current condition.
 
 ```text
 <outputPath>/                          the replicate folders' parent
