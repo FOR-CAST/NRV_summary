@@ -179,7 +179,7 @@ knitr::kable(df_params, format = "html", caption = "List of (ref:NRV-summary) pa
   Each mode needs its own simulation.
 - `summaryPeriod` (start + `c(700, 1000)`): the first and last summary times.
   `init` stops if either lies outside the run.
-  The summaries describe the landscape under its disturbance regime, not its drift away from the starting (current) landscape, so the period lies late in the run; the `stability` event checks whether metrics still trend there.
+  The summaries describe the landscape under its disturbance regime, not its drift away from the starting (current) landscape, so the period lies late in the run [@Keane:2009; @Keane:2018]; the `stability` event checks whether metrics still trend there.
 - `summaryInterval` (100): years between summary times.
   The snapshots are meant to be nearly independent samples of the landscape, so set it no shorter than the recommended thinning that the `autocorr` event gives.
   A shorter interval gives more snapshots, more files and longer summaries.
@@ -200,16 +200,18 @@ knitr::kable(df_params, format = "html", caption = "List of (ref:NRV-summary) pa
 
 - `sppEquivCol` (`"LandR"`): the column of `sppEquiv` that names the simulated species.
 - `sppEquivColReporting` (`NA`, mode 'multi'): a column of `sppEquiv` that groups the simulated species for reporting (see [Reporting by groups](#reporting-by-groups-of-the-simulated-species)).
-- `vegLeadingProportion` (`LandR::leadingSpeciesProp()`, 0.75 unless the option `LandR.leadingSpeciesProp` or `LandR.mixedwoodProp` is set): the share of a pixel's biomass a species needs to lead it; `mixedType` sets how a pixel without such a species is classed.
+- `vegLeadingProportion` (`LandR::leadingSpeciesProp()`, 0.75 unless the option `LandR.leadingSpeciesProp` or `LandR.mixedwoodProp` is set): what makes a pixel mixed, which depends on `mixedType`.
+  With `mixedType = 2`, the default, a pixel is mixed when broadleaves hold more than 1 - `vegLeadingProportion` and less than `vegLeadingProportion` of its biomass (25-75% at 0.75), and otherwise is led by its largest species, whatever that species' share.
+  With `mixedType = 1` it is the share of a pixel's biomass a species needs to lead it.
   Setting the LandR option moves this module and the Biomass modules together.
   The default was 0.8 before version 2.0.0.9028.
-- `mixedType` (2): how mixed stands are defined, passed to `LandR::vegTypeMapGenerator()`: 0 for none, 1 for any species admixture, 2 for deciduous above conifer.
+- `mixedType` (2): how mixed stands are defined, passed to `LandR::vegTypeMapGenerator()`: 0, no mixed class (the largest species leads); 1, mixed when no species holds `vegLeadingProportion` of the biomass; 2, mixed when broadleaves hold more than 1 - `vegLeadingProportion` and less than `vegLeadingProportion` of it.
 
 ### Age classes
 
 - `ageClasses` (`"Young"`, `"Immature"`, `"Mature"`, `"Old"`) and `ageClassCutOffs` (0, 40, 80, 120): the labels and the lower age bounds of the age classes; give as many cut-offs as labels.
   They bin time since fire in the `lw` summaries (an age equal to a cut-off falls in the class below: 40 years is Young), and stand age in the `st` measures and the `am` animation (a class starts at its cut-off: 40 years is Immature).
-  In the annual series, `propYoung` is the forest younger than the first cut-off above 0 and `propOld` the forest at or above the last cut-off.
+  In the annual series, `propYoung` is the forest younger than the second cut-off (the first above the smallest) and `propOld` the forest at or above the last cut-off.
 - `ccStandAgeSource` (`"standAgeMap"`, mode 'single'): where the year-0 stand-age map comes from (see [The current condition](#the-current-condition)): `"standAgeMap"`, the stand-age layer `sim$standAgeMap`, or `"cohortData"`, the year-0 cohorts.
   Any other value stops `init`.
 
@@ -363,13 +365,14 @@ The NRV years the aggregates were built from are recorded in `_aggregates/lw_<la
 
 The `bc` event maps seral stages for British Columbia and then takes their patch areas.
 The seral-stage recipe was ported from a BC Government ArcPy script given to the module's author.
-From each cohort table and pixel-group map (year 0 of the first replicate, and every replicate's summary times), `nrvtools::writeSeralStageMapBC()` assigns each pixel a seral stage (early, mid, mature or old; in Natural Disturbance Type 4 also by leading Fir, Pine or other species) from the age of its cohorts and its Natural Disturbance Type and biogeoclimatic zone, read from the `ecoregionLayer` reporting polygons.
+From each cohort table and pixel-group map (year 0 of the first replicate, and every replicate's summary times), `nrvtools::writeSeralStageMapBC()` assigns each pixel a seral stage (early, mid, mature or old) from the biomass-weighted age of its cohorts, floored to the decade, and its Natural Disturbance Type and biogeoclimatic zone, read from the `ecoregionLayer` reporting polygons.
+In Natural Disturbance Type 4 the age limits also depend on whether a pixel is in the Fir group (Douglas-fir or ponderosa pine with at least half the biomass, or stands led by lodgepole pine or aspen with more than 15% of either) or the Pine group (every other pixel).
 The maps are written as `seralStageMap_year<YYYY>.tif` in each replicate folder, and sieved when `sieveThresh` is 2 or more (`seralStageMap_year<YYYY>-sieve<N>.tif`).
 For each reporting layer and unit, the event then takes the area of each seral-stage patch, masked by the flammable map, through `nrvtools::calculatePatchMetricsSeral()`; the tables are in `csv/sspm/<layer>/`.
 Its envelope pools every patch of every replicate at each summary time, so `n_reps` in those tables counts patches, not replicates, and the figures carry no caption.
 The year-0 files are always those of year 0 in the first replicate's folder (`_year0000`, or however the year is padded), whatever `simTimes` says.
 The current condition's seral map is built from the first replicate's year-0 cohorts and pixel-group map; with `LandTypeCC_reporting`, its urban pixels are then masked out, as in the other year-0 maps (see [The current condition](#the-current-condition)).
-For a reporting layer named `NDTBEC`, it also writes `SeralTable.csv` in `outputPath(sim)`: the smallest, mean and largest percentage of each polygon's area in each seral stage over the summary times.
+For a reporting layer named `NDTBEC`, it also writes `SeralTable.csv` in `outputPath(sim)`: for each polygon and seral stage, the smallest, mean and largest, over the summary times, of the stage's share of the polygon's seral-classed (flammable) area, with the replicates' patch areas added together.
 The cropped polygons are written as `NDTBEC.shp` in `outputPath(sim)`.
 
 ### postprocess_st: stand-level measures (opt-in)
@@ -397,7 +400,7 @@ A replicate whose file does not cover the NRV years is left out with a warning, 
 It has one row per series:
 
 - `phi`, the pooled lag-1 autocorrelation over the NRV years (cut to between 0 and 0.999), and `tau`, the autocorrelation time it implies, `(1 + phi) / (1 - phi)`;
-- `ar1Misfit`, the largest difference between the pooled autocorrelation at lags 1 to 50 and the exponential decay `phi^lag` (near 0 when the decay is exponential);
+- `ar1Misfit`, the largest difference between the pooled autocorrelation at lags 1 to 50 (fewer when the NRV years number 51 or fewer) and the exponential decay `phi^lag` (near 0 when the decay is exponential);
 - `r`, `rMin`, `rMax`: the correlation at lag `summaryInterval`, pooled and the lowest and highest of the replicates' own;
 - `effectiveSnapshots`, the effective number of independent snapshots in the NRV years of all replicates, by the large-sample formula;
 - `effectiveSnapshotsFinite`, the same by the finite-sample formula, which holds for a few snapshots per replicate (both in [Is the run long enough?](#is-the-run-long-enough));
@@ -427,7 +430,7 @@ The figures are drawn in parallel by up to `plotWorkers` R processes (`future` m
 
 The `stability` event tests each series for a trend over the last `stabilityWindow` of the NRV years (see [Is the run long enough?](#is-the-run-long-enough)).
 The series are the landscape- and class-level metrics of the `lm` and `pm` events in the run (each replicate and summary time), the `st` measures when `st` ran, and the area burned per block of years from burnSummaries' `burnSummaries_fireBlocks.csv` (only the blocks wholly inside the window).
-It writes `csv/stability/all/stability.csv`, with the columns `kind`, `layer`, `poly`, `level`, `class`, `metric`, `nTimes` (the summary times in the window), `slope` (per year), `p`, `changePctRange` (the fitted change over the window as a percentage of the series' range in the window) and `flag` (`"still changing"`, `"stable"` or `"insufficient"`).
+It writes `csv/stability/all/stability.csv`, with the columns `kind`, `layer`, `poly`, `level`, `class`, `metric`, `nTimes` (the summary times in the window), `slope` (per year), `p`, `changePctRange` (the slope times the years from the first to the last summary time in the window, as a percentage of the series' range in the window) and `flag` (`"still changing"`, `"stable"` or `"insufficient"`).
 Its figures, in `figures/stability/all/`, are pages of series over time (`stability_<kind>_p<N>.png`: replicates as thin lines, their median in bold, the window shaded, the verdict in each panel's title) and a summary of the verdicts (`stability_summary.png`).
 A message gives the overall verdict, e.g. "3 of 40 series still changing; consider a longer run".
 With `"lm"` in the same run, it also draws, for each lm layer, where each metric's current condition lies against its NRV range on the metric's own scale (`current_condition/current_condition_<layer>_p<N>.png`, up to 24 panels a page).
@@ -449,7 +452,7 @@ A stub for Ontario's NRV metrics: it prints "Ontario NRV metrics are not yet ful
 When species are simulated separately but reported by groups of them, set `sppEquivColReporting` to the column of `sim$sppEquiv` that holds the groups (LandWeb uses `"LandWebReport"`, its reporting groups).
 In `mode = "multi"`, the vegetation-type maps that the `lm`, `lw` and `pm` analyses read, for the simulated years and for current conditions, are then rebuilt from the saved `cohortData` and `pixelGroupMap` with each species recoded to its group, and written under `postprocess/_reportingMaps/`.
 Biomass is summed within a group before the leading type is decided.
-`LandR::vegTypeMapGenerator()` sums biomass only within a species code, so relabelling the species-level maps would not give the same result: a stand of 40% black spruce, 40% tamarack and 20% aspen is led by the group holding both conifers.
+`LandR::vegTypeMapGenerator()` sums biomass only within a species code, so relabelling the species-level maps would not give the same result: a stand of 35% white spruce, 30% black spruce, 25% tamarack and 10% aspen is led by white spruce, but by the group when black spruce and tamarack form one.
 The stand-age and time-since-fire maps are those of the replicate folders.
 
 A simulated code in two groups, or a group holding both conifers and broadleaves, stops the run.
@@ -473,7 +476,9 @@ The simulation imputes urban pixels to their nearest forest type, so the replica
 Reported unchanged, year 0 would count that imputed forest as forest today.
 In mode 'multi', when `LandTypeCC_reporting` is supplied, `init` masks the urban pixels (class 17) of the 2020 Land Cover of Canada [@NRCan:2022landcover] out of the year-0 vegetation-type, stand-age and time-since-fire maps, and writes the masked copies to `<outputPath>/_cc/<rep>/`; the `lm`, `pm`, `lw` and `st` events read those.
 The `bc` event masks its year-0 seral map the same way, after building it from the first replicate's year-0 cohorts and pixel-group map, and writes it to the same folder.
-Urban is the only class that differs between the simulation's land cover and the reporting copy: water, barren land and snow and ice are missing in both.
+This is how LandWeb's preamble builds the two land-cover layers, both from the 2020 Land Cover of Canada; the module does not control it.
+The preamble's remap sends only urban to class 99, which the simulation imputes to the nearest forest type.
+Urban is therefore the only class the simulation turns into forest, so it is the only one that needs masking; water, barren land and snow and ice keep their codes in the reporting copy and carry no cohorts in the year-0 maps.
 The envelopes are not masked: they describe the landscape without urban land, the current condition describes today's, and the difference is the land-conversion part of the departure.
 A map whose grid differs from `LandTypeCC_reporting` is left unmasked, with a warning.
 
@@ -489,29 +494,33 @@ The summaries assume that over the NRV years the landscape varies about a steady
 Two opt-in checks test that assumption from different sides.
 
 **Stability** (`"stability"` in `postprocessEvents`) asks whether a series still trends over the last `stabilityWindow` of the NRV years.
-For each series, the values of all replicates are pooled, and the trend is tested with the Mann-Kendall test, Kendall's rank correlation of value with time [@Mann:1945; @Kendall:1938], and sized with the Theil-Sen slope, the median of the slopes between all pairs of points [@Theil:1992; @Sen:1968].
+For each series, the values of all replicates are pooled, and the trend is tested with the Mann-Kendall test, Kendall's rank correlation of value with time [@Mann:1945; @Kendall:1938], and sized with the Theil-Sen slope, the median of the slopes between all pairs of points at different times (pairs from different replicates at the same time are left out) [@Theil:1992; @Sen:1968].
 Both use ranks and medians, so one odd replicate or a skewed metric does not decide the verdict, and pooling the replicates keeps their spread in the test, so a noisy series needs a larger trend to be significant.
-A series is "still changing" when its trend is significant (p below `stabilityAlpha`) and its fitted change over the window is more than `stabilityMinChange` of its range there (largest minus smallest value of all replicates in the window).
+A series is "still changing" when its trend is significant (p below `stabilityAlpha`) and its fitted change, the slope times the years from the first to the last summary time in the window, is more than `stabilityMinChange` of its range there (largest minus smallest value of all replicates in the window).
 A significant but small trend is flagged "stable".
 A series with fewer than 3 summary times in the window is "insufficient", and so is every series with the defaults (`summaryInterval = 100` puts 2 summary times in the window): lower `summaryInterval` or raise `stabilityWindow`.
 The thresholds (alpha 0.05, a change of 10% of the range, the last half of the NRV years, at least 3 times) are design choices of the module, not values from the literature.
 The window is not the NRV: it only sets where the check looks.
 
 **Autocorrelation** (`recordAnnualSeries = TRUE` in the replicates, and `"autocorr"` in `postprocessEvents`) asks how far apart the snapshots must be to be nearly independent.
+Spacing the snapshots so that they are nearly independent follows @Keane:2009.
 Spacing them by the autocorrelation time, as the output of a Markov chain Monte Carlo sampler is thinned, is a design choice of the module.
 Maps saved every year would measure that at the cost of far too much data, so a few landscape scalars are recorded every year instead (see [annual_series](#annual_series-mode-single-opt-in)).
 The replicates are treated as realisations of one process: each series is centred on the mean of all replicates and NRV years, and the variance is pooled over the replicates.
 A replicate's own mean would pull the sample autocorrelation toward 0, the more so the longer the autocorrelation time is against the series.
-The autocorrelation time is the integrated autocorrelation time [@Sokal:1997; @Geyer:1992], taken here as 1 plus twice the sum of the autocorrelations at all lags; that is twice Sokal's `tau_int`, which he defines as 1/2 plus the sum.
-The module computes it for an exponential decay with the pooled lag-1 autocorrelation `phi` as its rate (a first-order autoregressive series), which gives `tau = (1 + phi) / (1 - phi)`; no curve is fitted, and `ar1Misfit` says how far the measured autocorrelation departs from that decay.
+The autocorrelation time is the integrated autocorrelation time [@Sokal:1997], taken here as 1 plus twice the sum of the autocorrelations at lags 1 and above; that is twice Sokal's `tau_int`, which he defines as 1/2 plus that sum.
+The module computes it for the exponential decay `phi^lag` of a first-order autoregressive series whose lag-1 autocorrelation is the pooled `phi`, which gives `tau = (1 + phi) / (1 - phi)`; no curve is fitted, and `ar1Misfit` says how far the measured autocorrelation departs from that decay.
 Geyer's initial monotone sequence estimate [@Geyer:1992], which sums the measured autocorrelations in pairs, made non-increasing, up to the first pair sum that is not positive, is given as `tauGeyer` for comparison; it is noisy for short series.
-The effective number of independent snapshots (`effectiveSnapshots`) is the number of snapshots times `(1 - r) / (1 + r)`, where `r` is the correlation of snapshots `summaryInterval` years apart [@Bayley:1946; @Thiebaux:1984].
+The effective number of independent snapshots (`effectiveSnapshots`) is the number of snapshots times `(1 - r) / (1 + r)`, where `r` is the correlation of snapshots `summaryInterval` years apart, cut to between 0 and 0.999.
+This is the large-sample form for a first-order autoregressive series of snapshots [@Bayley:1946].
 That large-sample formula is too low when a replicate has few snapshots against the autocorrelation time: for `n` snapshots per replicate it gives fewer than 1 per replicate once `r` is above `(n - 1) / (n + 1)`, which is 0.75 at 7 snapshots per replicate (LandWeb's summary times, every 50 years from 700 to 1000).
-`effectiveSnapshotsFinite` gives, per replicate, `n / (1 + 2 * sum((1 - k / n) * r^k))`, the sum over lags `k = 1, ..., n - 1`, added up over the replicates.
+`effectiveSnapshotsFinite` gives, per replicate, `n / (1 + 2 * sum((1 - k / n) * r^k))` [@Bayley:1946; @Thiebaux:1984], the sum over lags `k = 1, ..., n - 1`, added up over the replicates.
 It is exact for the mean of `n` consecutive values of a stationary AR(1) series, and lies between 1 and `n` per replicate.
 The recommended thinning is the largest `tau`, rounded up; set `summaryInterval` at or above it.
 If the replicates' means differ, the common mean counts that difference as autocorrelation, which errs toward more thinning.
-The estimates are lower bounds: a short series biases the sample autocorrelation toward 0.
+The estimates tend to be low.
+The sample autocorrelation divides the sum of the `n - k` lagged products by the sum of all `n` squares, which scales the correlation at lag `k` by about `(n - k) / n`: two thirds for `r` at lag 100 in 301 NRV years.
+A short series also biases it toward 0.
 The event says so when the NRV years number fewer than 20 times the recommended thinning; that factor of 20 is the module's rule of thumb.
 
 ## Outputs
@@ -581,7 +590,8 @@ postprocess/                           beside <outputPath>
 
 The year in the `_cc` names is the first year of `simTimes`, padded as in the replicate folders.
 
-Each envelope table has, per unit (`poly`), class, metric and summary time (for `lw`, pooled over the NRV years), `n_reps`, `mean`, `sd`, `min`, `q25`, `median`, `q75`, `max`, `se` (`sd / sqrt(n_reps)`) and `ci` (the half-width of a 95% confidence interval of the mean, `se` times Student's t).
+Each envelope table has, per unit (`poly`), class, metric and summary time (for `lw`, pooled over the NRV years), `n_reps`, `mean`, `sd`, `min`, `q25`, `median`, `q75`, `max`, `se` (`sd / sqrt(n_reps)`) and `ci` (the half-width of a 95% confidence interval of the mean, `se` times Student's t with `n_reps - 1` degrees of freedom).
+It assumes independent values, which the replicates are; the replicate-years of `lw` and the patches of `bc` are not, so read their `ci` as a rough guide only.
 What `n_reps` counts differs: for `lm` and `pm`, the replicates with a value (a patch-level metric enters as each replicate's mean over its patches); for `lw`, the replicate-years; for `bc`, every patch of every replicate.
 The `_aggregates` datasets hold each replicate's raw metric values; open one with `nrvtools::open_nrv_dataset()` or `arrow::open_dataset()` to analyse the replicates yourself.
 
@@ -659,14 +669,14 @@ Table: (\#tab:cohortFormats-NRV-summary) Size and speed of the two cohortData fo
 ## Methods
 
 **Landscape and patch metrics.**
-The `lm`, `pm` and `bc` metrics are computed with landscapemetrics [@Hesselbarth:2019; @R-landscapemetrics], which reimplements the metrics of FRAGSTATS [@McGarigal:1995] in R.
-The aggregation index is that of @He:2000, the patch cohesion index that of @Schumaker:1996, and conditional entropy is from the information-theory framework of @Nowosad:2019.
+The `lm`, `pm` and `bc` metrics are computed with landscapemetrics [@Hesselbarth:2019; @R-landscapemetrics], which reimplements the metrics of FRAGSTATS [@McGarigal:1995] in R and adds others.
+The aggregation index, the patch cohesion index and conditional entropy are not among the 1995 FRAGSTATS metrics: the aggregation index is that of @He:2000, the patch cohesion index that of @Schumaker:1996, and conditional entropy is from the information-theory framework of @Nowosad:2019.
 Each metric is taken on the map cut and masked to one reporting unit, with landscapemetrics' defaults: patches join cells that share an edge or a corner (8 directions), core area excludes a one-cell edge, and conditional entropy uses the 4 cells that share an edge.
 The `lw` large patches use the connectivity of `patchDirections` instead, 4 directions by default, as LandWeb's v2 summaries did.
 The large-patch and age-class summaries of `lw` are the module's own definitions.
 
 **Vegetation type and stand age.**
-The leading vegetation type and the biomass-weighted stand age of each pixel are those of LandR's `vegTypeMapGenerator()` and `standAgeMapGenerator()` [@R-LandR; @Barros2023].
+The leading vegetation type and the biomass-weighted stand age of each pixel are those of LandR's `vegTypeMapGenerator()` and `standAgeMapGenerator()` [@R-LandR].
 
 **Envelopes.**
 For each unit, metric and summary time, the envelope summarises the values in the aggregates, their mean, standard deviation, minimum, quartiles, median and maximum, with `nrvtools::summarize_nrv()` [@R-nrvtools].
@@ -677,7 +687,7 @@ The envelope boxplots draw whiskers from minimum to maximum, so they span every 
 The NRV range of a measure and the inside/above/below rule are described in [The current condition](#the-current-condition).
 
 **Trend and autocorrelation.**
-The stability check uses the Mann-Kendall test [@Mann:1945; @Kendall:1938] and the Theil-Sen slope [@Theil:1992; @Sen:1968]; the autocorrelation check uses the integrated autocorrelation time [@Sokal:1997; @Geyer:1992] and the effective number of independent samples of an autocorrelated series [@Bayley:1946; @Thiebaux:1984].
+The stability check uses the Mann-Kendall test [@Mann:1945; @Kendall:1938] and the Theil-Sen slope [@Theil:1992; @Sen:1968]; the autocorrelation check uses the integrated autocorrelation time [@Sokal:1997], with Geyer's initial monotone sequence estimate [@Geyer:1992], and the effective number of independent samples of an autocorrelated series [@Bayley:1946; @Thiebaux:1984].
 [Is the run long enough?](#is-the-run-long-enough) gives the details and the module's thresholds.
 
 **Software.**
@@ -732,7 +742,7 @@ Each version was checked on LandWeb's outputs against the one before; `NEWS.md` 
 - **2.0.0.9047** (#16): a cohort file is paired with its pixel-group map by folder and year however its year is padded; on the `cc` figures a unit named "NA" is kept apart from a missing unit.
 - **2.0.0.9100** (#17): the version skips to 9100 to stay clear of the PredictiveEcology fork's numbers; SpaDES.core 3.2.1.9077 is required; replicate folders are named by id inside the module; with `pm` or `bc` in the run, `init` stops if the first replicate's flammable map is not among the files found.
 - **2.0.0.9101**: this manual documents every event, parameter and output, and cites its methods.
-- **2.0.0.9102**: mode 'multi' finds each file by its year however padded, so runs that end before year 1000 or after year 9999 are read; the `bc` current condition leaves out urban land; the `autocorr` event's table comes from `nrvtools::autocorr_summary()` and gains `effectiveSnapshotsFinite`; nrvtools 0.5.2 is required, whose `patchStats()` (the `pm` event) masks the vegetation-type map by the flammable map; `sieveThresh` defaults to `NA`, no sieving.
+- **2.0.0.9102**: mode 'multi' finds each file by its year however padded, so runs that end before year 1000 or after year 9999 are read; the `bc` current condition leaves out urban land; the `autocorr` event's table comes from `nrvtools::autocorr_summary()` and gains `effectiveSnapshotsFinite`; nrvtools 0.5.2 is required, whose `patchStats()` (the `pm` event) masks the vegetation-type map by the flammable map; `sieveThresh` defaults to `NA`, no sieving; the manual's formulas, methods and citations are corrected.
 
 ## Getting help
 
