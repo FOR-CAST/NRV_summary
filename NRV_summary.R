@@ -182,7 +182,9 @@ defineModule(sim, list(
                     paste("threshold patch size (number of pixels) to use with `terra::sieve`",
                           "when creating seral stage maps")),
     defineParameter("simTimes", "numeric", c(NA, NA), NA, NA,
-                    "Simulation start and end times when running in 'multi' mode."),
+                    paste("(mode = 'multi') the start and end years of the replicate runs, which name their year-0 and",
+                          "last-year files. NA (the default) takes the start and end of this simulation",
+                          "(`SpaDES.core::resolveSimYears()`).")),
     defineParameter("sppEquivCol", "character", "LandR", NA, NA,
                     "The column in `sim$sppEquiv` data.table to use as a naming convention"),
     defineParameter("sppEquivColReporting", "character", NA_character_, NA, NA,
@@ -233,7 +235,7 @@ defineModule(sim, list(
                               "forest. Only urban differs between the sim and reporting layers --",
                               "water/barren/snow are already NA on both sides.")),
     expectsInput("flammableMap", "SpatRaster",
-                 desc = "binary flammability map (required with `type = 'single'`)"),
+                 desc = "binary flammability map (required with `mode = 'single'`)"),
     expectsInput("outputsDF", "data.frame",
                  desc = paste("(mode = 'multi', optional) the files the replicate simulations saved, with at least a",
                               "`file` column (e.g. their `outputs(sim)` row-bound). When absent, the replicate",
@@ -241,7 +243,7 @@ defineModule(sim, list(
     expectsInput("pixelGroupMap", "SpatRaster",
                  desc = "Required in single mode."),
     expectsInput("reportingPolygons", "list",
-                 desc = "reporting polygons for post-processing (required with `type = 'multi'`)"),
+                 desc = "reporting polygons for post-processing (required with `mode = 'multi'`)"),
     expectsInput("speciesLayers", "SpatRaster",
                  desc = "initial percent cover raster layers used for simulation."),
     expectsInput("sppColorVect", "character",
@@ -260,7 +262,9 @@ defineModule(sim, list(
                               "larger grid aligned with it. The year-0 stand-age map, with",
                               "`ccStandAgeSource = 'standAgeMap'`.")),
     expectsInput("studyAreaReporting", "SpatVector",
-                 desc = "Required in single mode.")
+                 desc = paste("the reporting area, required in both modes: in mode 'single' the stand-age maps are",
+                              "masked to it and the annual series counts its pixels; in mode 'multi' the reporting",
+                              "polygons are cut to it and the `st` event counts its pixels."))
   ),
   outputObjects = SpaDES.core:::._outputObjectsDF()
 ))
