@@ -80,8 +80,8 @@ test_that("rep01 folders, no outputsDF: all reps found", {
   touchFiles(unlist(lapply(file.path(out, sprintf("rep%02d", 1:3)), repFiles)))
 
   m <- modOf(runInit(initMultiSim(root, reps = 1:3)))
-  expect_identical(m$allReps, c("rep01", "rep02", "rep03"))
-  expect_identical(m$rep1Dir, file.path(out, "rep01"))
+  expect_identical(m$allReps, c("1" = "rep01", "2" = "rep02", "3" = "rep03"))
+  expect_identical(m$rep1Dir, c("1" = file.path(out, "rep01")))
   expect_identical(m$flm, file.path(out, "rep01", "flammableMap_year1000.tif"))
   expect_length(m$vtm, 3L * length(yrs))
   expect_length(m$cd, 3L * length(yrs))
@@ -95,8 +95,8 @@ test_that("rep1 folders listed in outputsDF", {
   touchFiles(files)
 
   m <- modOf(runInit(initMultiSim(root, reps = 1:2, outputsFiles = files)))
-  expect_identical(m$allReps, c("rep1", "rep2"))
-  expect_identical(m$rep1Dir, file.path(root, "rep1"))
+  expect_identical(m$allReps, c("1" = "rep1", "2" = "rep2"))
+  expect_identical(m$rep1Dir, c("1" = file.path(root, "rep1")))
   expect_identical(m$fvtm0, file.path(root, "rep1", "vegTypeMap_year0000.tif"))
   expect_identical(m$flm, file.path(root, "rep1", "flammableMap_year1000.tif"))
   for (x in c("vtm", "sam", "cd", "pgm")) {
@@ -156,7 +156,7 @@ test_that("reps = 1:2 ignores rep10-rep12 on disk", {
   touchFiles(unlist(lapply(file.path(out, sprintf("rep%02d", c(1:2, 10:12))), repFiles)))
 
   m <- modOf(runInit(initMultiSim(root, reps = 1:2)))
-  expect_identical(m$allReps, c("rep01", "rep02"))
+  expect_identical(m$allReps, c("1" = "rep01", "2" = "rep02"))
   expect_false(any(grepl("rep1[0-2]", c(m$vtm, m$sam, m$cd, m$pgm))))
   expect_length(m$vtm, 2L * length(yrs))
 })
@@ -286,32 +286,27 @@ test_that("files listed out of order are paired by replicate and year", {
   expect_identical(yearsByRep(m$cd), yearsByRep(m$pgm))
 })
 
-test_that("replicate folders stay unnamed when dirnamesFromSet() names them", {
-  ## PredictiveEcology/SpaDES.core#543 names the result by replicate id ("rep01" named "1"); the values are the same
-  real <- SpaDES.core::dirnamesFromSet
-  calls <- 0L
-  testthat::local_mocked_bindings(
-    dirnamesFromSet = function(...) {
-      calls <<- calls + 1L
-      out <- real(...)
-      stats::setNames(out, seq_along(out))
-    },
-    .package = "SpaDES.core"
-  )
+test_that("the replicate folders are named by replicate id, and the files found are not named", {
+  ## dirnamesFromSet() names its result by replicate id (PredictiveEcology/SpaDES.core#543), not by position: reps
+  ## 2 and 5 are named "2" and "5", on disk and with outputsDF
+  unnamed <- c("flm", "fvtm0", "fsam0", "ftsf0", "vtm", "sam", "tsf", "cd", "pgm", "allouts", "layerName")
   root <- withr::local_tempdir()
   out <- file.path(root, "mainSim")
-  touchFiles(unlist(lapply(file.path(out, sprintf("rep%02d", 1:2)), repFiles)))
-  m <- modOf(runInit(initMultiSim(root, reps = 1:2)))
-  expect_identical(m$allReps, c("rep01", "rep02"))
-  expect_identical(m$rep1Dir, file.path(out, "rep01"))
+  touchFiles(unlist(lapply(file.path(out, c("rep02", "rep05")), repFiles)))
+  m <- modOf(runInit(initMultiSim(root, reps = c(2L, 5L))))
+  expect_identical(m$allReps, c("2" = "rep02", "5" = "rep05"))
+  expect_identical(m$rep1Dir, c("2" = file.path(out, "rep02")))
+  expect_identical(m$flm, file.path(out, "rep02", "flammableMap_year1000.tif"))
+  for (x in unnamed) expect_null(names(m[[x]]), label = paste0("names(mod$", x, ")"))
 
   root2 <- withr::local_tempdir()
-  files <- unlist(lapply(file.path(root2, c("rep1", "rep2")), repFiles))
+  files <- unlist(lapply(file.path(root2, c("rep2", "rep5")), repFiles))
   touchFiles(files)
-  m2 <- modOf(runInit(initMultiSim(root2, reps = 1:2, outputsFiles = files)))
-  expect_identical(m2$allReps, c("rep1", "rep2"))
-  expect_identical(m2$rep1Dir, file.path(root2, "rep1"))
-  expect_identical(calls, 3L) ## the mock was used: once on disk, twice with outputsDF
+  m2 <- modOf(runInit(initMultiSim(root2, reps = c(2L, 5L), outputsFiles = files)))
+  expect_identical(m2$allReps, c("2" = "rep2", "5" = "rep5"))
+  expect_identical(m2$rep1Dir, c("2" = file.path(root2, "rep2")))
+  expect_identical(m2$flm, file.path(root2, "rep2", "flammableMap_year1000.tif"))
+  for (x in unnamed) expect_null(names(m2[[x]]), label = paste0("names(mod$", x, ")"))
 })
 
 test_that("bare-number replicate folders (1/, 2/) are found through outputsDF", {
@@ -320,8 +315,8 @@ test_that("bare-number replicate folders (1/, 2/) are found through outputsDF", 
   touchFiles(files)
 
   m <- modOf(runInit(initMultiSim(root, reps = 1:2, outputsFiles = files)))
-  expect_identical(m$allReps, c("1", "2"))
-  expect_identical(m$rep1Dir, file.path(root, "1"))
+  expect_identical(m$allReps, c("1" = "1", "2" = "2"))
+  expect_identical(m$rep1Dir, c("1" = file.path(root, "1")))
   expect_length(m$vtm, 2L * length(yrs))
   expect_length(m$cd, 2L * length(yrs))
 })
@@ -381,8 +376,8 @@ test_that("InitMulti finds parquet cohorts on disk and in outputsDF, one per rep
   m2 <- r2$m
   expect_identical(cdOf(m2), sub("^rep0", "rep", want))
   expect_identical(sub(" [a-z0-9]+$", "", cdOf(m2)), pgmOf(m2))
-  expect_identical(m2$allReps, c("rep1", "rep2", "rep3"))
-  expect_identical(m2$rep1Dir, file.path(root2, "rep1"))
+  expect_identical(m2$allReps, c("1" = "rep1", "2" = "rep2", "3" = "rep3"))
+  expect_identical(m2$rep1Dir, c("1" = file.path(root2, "rep1")))
   expect_match(grep("both formats", r2$warnings, value = TRUE), "2 replicate-year(s)", fixed = TRUE)
 })
 
@@ -442,7 +437,7 @@ test_that("reps = 1:2 ignores rep10-rep12 parquet cohorts on disk", {
   touchFiles(unlist(lapply(file.path(out, sprintf("rep%02d", c(1:2, 10:12))), repFiles, cohorts = "parquet")))
 
   m <- modOf(runInit(initMultiSim(root, reps = 1:2)))
-  expect_identical(m$allReps, c("rep01", "rep02"))
+  expect_identical(m$allReps, c("1" = "rep01", "2" = "rep02"))
   rep12 <- file.path(out, c("rep01", "rep02"))
   expect_identical(m$cd, unlist(lapply(rep12, cohortFiles, format = "parquet")))
   expect_setequal(m$cohortFiles, unlist(lapply(rep12, cohortFiles, format = "parquet")))

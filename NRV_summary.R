@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9047"),
+  version = list(NRV_summary = "2.0.0.9100"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -43,10 +43,12 @@ defineModule(sim, list(
     ## 0.5.0, not 0.4.0: read_cohort_data() reads the cohortData of either format, .qs2 or parquet (#1).
     "FOR-CAST/nrvtools (>= 0.5.0)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9016)",
-    ## 3.2.1.9057: InitMulti calls dirnamesFromSet(..., leafOnly = FALSE) and resolveSimYears();
-    ## it relies on dirnamesFromSet() keeping zero-padded folders (rep01) as found (from 3.2.1.9038)
-    ## and on its bare-number folder fallback (1/, 2/; PredictiveEcology/NRV_summary#20).
-    "PredictiveEcology/SpaDES.core@development (>= 3.2.1.9057)"
+    ## 3.2.1.9077, not 3.2.1.9057: InitMulti keeps the names dirnamesFromSet() gives its result, the
+    ## replicate ids ("rep01" is named "1"; PredictiveEcology/SpaDES.core#543), in mod$allReps and mod$rep1Dir.
+    ## It also calls dirnamesFromSet(..., leafOnly = FALSE) and resolveSimYears() (3.2.1.9057), and relies on
+    ## dirnamesFromSet() keeping zero-padded folders (rep01) as found (from 3.2.1.9038) and on its bare-number
+    ## folder fallback (1/, 2/; PredictiveEcology/NRV_summary#20).
+    "PredictiveEcology/SpaDES.core@development (>= 3.2.1.9077)"
   ),
   parameters = bindrows(
     defineParameter("autocorrMaxLag", "integer", 200L, 1L, NA,
@@ -576,9 +578,9 @@ InitMulti <- function(sim) {
   useOutputs <- .hasOutputsDF(sim)
   files <- .discoverOutputFiles(sim)
   ## dirnamesFromSet() answers `rep<reps>` for no files at all; with none, no replicate was found.
-  ## unname(): SpaDES.core may name the folders by replicate id (PredictiveEcology/SpaDES.core#543); the values
-  ## are the same
-  mod$allReps <- if (length(files) > 0L) unname(dirnamesFromSet(files, P(sim)$reps)) else character(0)
+  ## The folders are named by replicate id ("rep01" is named "1"), and so are repDirs and mod$rep1Dir. No name
+  ## reaches a file or a message: the paths built from them (file.path(), paste0()) drop it.
+  mod$allReps <- if (length(files) > 0L) dirnamesFromSet(files, P(sim)$reps) else character(0)
   if (length(mod$allReps) < length(P(sim)$reps)) {
     stop(
       "found the files of ", length(mod$allReps), " replicate(s) ",
@@ -591,9 +593,9 @@ InitMulti <- function(sim) {
   ## where the replicates' folders are: wherever they were saved when listed in `outputsDF`
   ## (in multi mode `outputPath(sim)` is the summary folder, not a replicate's), else under `outputPath(sim)`
   repDirs <- if (useOutputs) {
-    unname(dirnamesFromSet(files, P(sim)$reps, leafOnly = FALSE))
+    dirnamesFromSet(files, P(sim)$reps, leafOnly = FALSE)
   } else {
-    file.path(outputPath(sim), allReps)
+    stats::setNames(file.path(outputPath(sim), allReps), names(allReps))
   }
   mod$rep1Dir <- repDirs[1]
   ## simTimes unset (NA): take the run's start and end. A given simTimes is kept as is.

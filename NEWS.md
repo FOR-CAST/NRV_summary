@@ -2,6 +2,12 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+* **The version jumps from 2.0.0.9047 to 2.0.0.9100 (`2.0.0.9100`).** PredictiveEcology/NRV_summary, a fork with different code, is at 2.0.0.9046. FOR-CAST's numbers now stay clear of its, so that a version string names the code of one fork only.
+
+* **SpaDES.core 3.2.1.9077 or later is required (`2.0.0.9100`).** From that version, `dirnamesFromSet()` names the replicate folders it returns by replicate id (PredictiveEcology/SpaDES.core#543), and `InitMulti()` keeps those names.
+
+* **`InitMulti()` names the replicate folders by replicate id (`2.0.0.9100`).** `allReps` and the first replicate's folder carry the ids as names, not positions: `rep01` is named "1", and with `reps = c(2, 5)` the folders are named "2" and "5", on disk and with an `outputsDF`. This replaces the `unname()` of `2.0.0.9046`. The folders are the same, and no name reaches a file, figure or message: the paths built from the folders drop it.
+
 * **On the `cc` figures, a unit named "NA" is no longer the missing unit (`2.0.0.9047`).** Rows were grouped into figures by `paste(layer, poly)`, which writes a missing unit and a unit named "NA" alike, so their rows shared one figure. The grouping key now keeps them apart; nothing is written differently otherwise.
 
 * **`.autocorrSummary()` no longer guesses the number of snapshots per replicate (`2.0.0.9047`).** The default, from the length of the NRV period and `summaryInterval`, ignored that the summary grid starts at `summaryPeriod[1]`. `nSnapshotsPerRep` is now required; the `autocorr` event already passed the exact count, so its results are unchanged.
