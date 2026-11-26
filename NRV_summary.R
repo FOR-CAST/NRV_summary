@@ -180,9 +180,10 @@ defineModule(sim, list(
                     paste("(mode = 'multi') the ids of the replicates to summarise, not their number: e.g. `1:15`",
                           "for folders `rep01` to `rep15` (or `rep1` to `rep15`). `init` stops if fewer replicates",
                           "are found than it lists.")),
-    defineParameter("sieveThresh", "integer", 1L, NA_integer_, NA_integer_,
+    defineParameter("sieveThresh", "integer", NA_integer_, NA_integer_, NA_integer_,
                     paste("threshold patch size (number of pixels) to use with `terra::sieve`",
-                          "when creating seral stage maps")),
+                          "when creating seral stage maps. NA (the default) or a value below 2 skips sieving:",
+                          "a threshold of 1 merges nothing, and terra stops on it")),
     defineParameter("simTimes", "numeric", c(NA, NA), NA, NA,
                     paste("(mode = 'multi') the start and end years of the replicate runs, which name their year-0 and",
                           "last-year files. NA (the default) takes the start and end of this simulation",
@@ -1819,9 +1820,10 @@ makeSeralStageMapsBC <- function(sim) {
 
   ssmFiles <- writeSeralStageMapBC(cd = fcd, pgm = fpgm, ndtbec = fNDTBEC)
 
-  if (!is.na(P(sim)$sieveThresh)) {
+  thr <- P(sim)$sieveThresh
+  if (!is.na(thr) && thr >= 2) {
     ## pass ssm through terra::sieve to merge singletons with neighbouring large patches?
-    ## <https://rspatial.github.io/terra/reference/sieve.html>
+    ## <https://rspatial.github.io/terra/reference/sieve.html>; a threshold below 2 merges nothing (terra stops on it)
     ssmFiles <- vapply(
       ssmFiles,
       function(f) {

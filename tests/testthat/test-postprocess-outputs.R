@@ -69,11 +69,12 @@ test_that("the masked current-condition maps keep the <rep>/<prefix>_year<YYYY>.
   expect_identical(same, src)
 })
 
-## makeSeralStageMapsBC() on a first replicate with the year-0 and year-1000 files, `LandTypeCC_reporting` `ccrep`. The
+## makeSeralStageMapsBC() on a first replicate with the year-0 and year-1000 files, `LandTypeCC_reporting` `ccrep`
+## and the parameter `sieveThresh`. The
 ## event needs BC's inputs (ecoregionLayer polygons with Natural Disturbance Types, BC species) and a callr plan, so
 ## nrvtools::writeSeralStageMapBC() is replaced by a stub that writes a seral map of four classes on the grid of each
 ## pixel-group map, and P() and plan() by stubs too. Returns the module state and the root folder.
-bcSeralRun <- function(ccrep, .env = parent.frame()) {
+bcSeralRun <- function(ccrep, sieveThresh = 2L, .env = parent.frame()) {
   root <- withr::local_tempdir(.local_envir = .env)
   out <- file.path(root, "mainSim")
   rep1 <- file.path(out, "rep01")
@@ -99,7 +100,7 @@ bcSeralRun <- function(ccrep, .env = parent.frame()) {
   mod$pgm <- file.path(rep1, "pixelGroupMap_year1000.tif")
   bc <- moduleFn("makeSeralStageMapsBC", mod)
   e <- environment(bc)
-  e$P <- function(sim, ...) list(simTimes = c(0, 1000), sieveThresh = 2L)
+  e$P <- function(sim, ...) list(simTimes = c(0, 1000), sieveThresh = sieveThresh)
   e$plan <- function(...) NULL
   e$rast <- terra::rast ## attached in the module's environment
   e$writeSeralStageMapBC <- function(cd, pgm, ndtbec, ssm = sub("pixelGroupMap", "seralStageMap", pgm)) {
@@ -130,4 +131,21 @@ test_that("bc's current-condition seral map leaves out the urban pixels of LandT
   r0 <- bcSeralRun(NULL)
   expect_identical(unname(r0$mod$ssm0), file.path(r0$rep1, "seralStageMap_year0000-sieve2.tif"))
   expect_false(anyNA(terra::values(terra::rast(r0$mod$ssm0), mat = FALSE)))
+})
+
+test_that("bc sieves only with a sieveThresh of 2 or more, and its default does not", {
+  ## terra::sieve() stops on a threshold below 2; a threshold of 1 merges nothing
+  withr::local_package("SpaDES.core")
+  md <- SpaDES.core::moduleMetadata(module = moduleName, path = modulePath)
+  default <- md$parameters$default[[which(md$parameters$paramName == "sieveThresh")]]
+  unsieved <- function(r) file.path(r$rep1, c("seralStageMap_year0000.tif", "seralStageMap_year1000.tif"))
+  for (thr in list(default, 1L, NA_integer_)) {
+    r <- bcSeralRun(NULL, sieveThresh = thr)
+    expect_identical(unname(c(r$mod$ssm0, r$mod$ssm)), unsieved(r), info = paste("sieveThresh", thr))
+    expect_identical(list.files(r$rep1, "sieve"), character(0), info = paste("sieveThresh", thr))
+  }
+  r2 <- bcSeralRun(NULL, sieveThresh = 2L)
+  sieved <- file.path(r2$rep1, c("seralStageMap_year0000-sieve2.tif", "seralStageMap_year1000-sieve2.tif"))
+  expect_identical(unname(c(r2$mod$ssm0, r2$mod$ssm)), sieved)
+  expect_true(all(file.exists(sieved)))
 })

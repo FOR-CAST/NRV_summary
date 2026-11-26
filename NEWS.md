@@ -2,6 +2,8 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+* **The `bc` event runs with its default parameters again: `sieveThresh` defaults to `NA`, no sieving (`2.0.0.9102`).** The default of 1 merged nothing, and terra 1.9-50 stops on a threshold below 2 ("a threshold < 2 is not meaningful"), so the event stopped at its sieve step. `NA` or a value below 2 now skips sieving, and the seral maps keep their unsuffixed names; 2 or more sieves them as before, into `-sieve<N>` maps.
+
 * **nrvtools 0.5.2 or later is required (`2.0.0.9102`).** Its `patchStats()`, which the `pm` event calls, masks the vegetation-type map by the flammable map, as it did the stand-age map. Non-flammable pixels have no cohorts and so no vegetation type, so in practice the `pm` results do not change.
 
 * **The `bc` event's current condition leaves out urban land (`2.0.0.9102`).** Its year-0 seral map was built from the first replicate's unmasked year-0 cohorts, so it counted urban land, imputed to forest in the simulation, as forest. With `LandTypeCC_reporting`, the map's urban pixels (class 17) are now set to NA, as `InitMulti()` does for the other year-0 maps, and the masked copy is written to `<outputPath>/_cc/<rep>/`. Without the layer, the map is not masked and `InitMulti()` warns, as before. The replicates' seral maps are not masked.
