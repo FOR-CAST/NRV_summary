@@ -366,13 +366,14 @@ The NRV years the aggregates were built from are recorded in `_aggregates/lw_<la
 The `bc` event maps seral stages for British Columbia and then takes their patch areas.
 The seral-stage recipe was ported from a BC Government ArcPy script given to the module's author.
 From each cohort table and pixel-group map (year 0 of the first replicate, and every replicate's summary times), `nrvtools::writeSeralStageMapBC()` assigns each pixel a seral stage (early, mid, mature or old) from the biomass-weighted age of its cohorts, floored to the decade, and its Natural Disturbance Type and biogeoclimatic zone, read from the `ecoregionLayer` reporting polygons.
-In Natural Disturbance Type 4 the age limits also depend on whether a pixel is in the Fir group (Douglas-fir or ponderosa pine with at least half the biomass, or stands led by lodgepole pine or aspen with more than 15% of either) or the Pine group (every other pixel).
+In Natural Disturbance Type 4 the age limits also depend on whether a pixel is in the Fir group (Douglas-fir or ponderosa pine with at least half the biomass, or lodgepole pine or aspen with at least half and Douglas-fir or ponderosa pine with more than 15%) or the Pine group (every other pixel), and its stages are named for the group (`mature_Fir`, `mature_Pine`).
 The maps are written as `seralStageMap_year<YYYY>.tif` in each replicate folder, and sieved when `sieveThresh` is 2 or more (`seralStageMap-sieve<N>_year<YYYY>.tif`).
 For each reporting layer and unit, the event then takes the area of each seral-stage patch, masked by the flammable map, through `nrvtools::calculatePatchMetricsSeral()`; the tables are in `csv/sspm/<layer>/`.
 Its envelope pools every patch of every replicate at each summary time, so `n_reps` in those tables counts patches, not replicates, and the figures carry no caption.
 The year-0 files are always those of year 0 in the first replicate's folder (`_year0000`, or however the year is padded), whatever `simTimes` says.
 The current condition's seral map is built from the first replicate's year-0 cohorts and pixel-group map; with `LandTypeCC_reporting`, its urban pixels are then masked out, as in the other year-0 maps (see [The current condition](#the-current-condition)).
-For a reporting layer named `NDTBEC`, it also writes `SeralTable.csv` in `outputPath(sim)`: for each polygon and seral stage, the smallest, mean and largest, over the summary times, of the stage's share of the polygon's seral-classed (flammable) area, with the replicates' patch areas added together.
+For a reporting layer named `NDTBEC`, it also writes `SeralTable.csv` in `outputPath(sim)`: for each polygon and seral stage, the smallest, mean and largest, over the summary times at which the stage is present, of the stage's share of the polygon's seral-classed (flammable) area, as a percentage, with the replicates' patch areas added together.
+A summary time at which a stage is absent from a polygon is left out, not counted as 0%.
 The cropped polygons are written as `NDTBEC.shp` in `outputPath(sim)`.
 
 ### postprocess_st: stand-level measures (opt-in)
@@ -400,7 +401,7 @@ A replicate whose file does not cover the NRV years is left out with a warning, 
 It has one row per series:
 
 - `phi`, the pooled lag-1 autocorrelation over the NRV years (cut to between 0 and 0.999), and `tau`, the autocorrelation time it implies, `(1 + phi) / (1 - phi)`;
-- `ar1Misfit`, the largest difference between the pooled autocorrelation at lags 1 to 50 (fewer when the NRV years number 51 or fewer) and the exponential decay `phi^lag` (near 0 when the decay is exponential);
+- `ar1Misfit`, the largest difference between the pooled autocorrelation at lags 1 to 50 (fewer when the NRV years number 50 or fewer) and the exponential decay `phi^lag` (near 0 when the decay is exponential);
 - `r`, `rMin`, `rMax`: the correlation at lag `summaryInterval`, pooled and the lowest and highest of the replicates' own;
 - `effectiveSnapshots`, the effective number of independent snapshots in the NRV years of all replicates, by the large-sample formula;
 - `effectiveSnapshotsFinite`, the same by the finite-sample formula, which holds for a few snapshots per replicate (both in [Is the run long enough?](#is-the-run-long-enough));
@@ -477,8 +478,9 @@ Reported unchanged, year 0 would count that imputed forest as forest today.
 In mode 'multi', when `LandTypeCC_reporting` is supplied, `init` masks the urban pixels (class 17) of the 2020 Land Cover of Canada [@NRCan:2022landcover] out of the year-0 vegetation-type, stand-age and time-since-fire maps, and writes the masked copies to `<outputPath>/_cc/<rep>/`; the `lm`, `pm`, `lw` and `st` events read those.
 The `bc` event masks its year-0 seral map the same way, after building it from the first replicate's year-0 cohorts and pixel-group map, and writes it to the same folder.
 This is how LandWeb's preamble builds the two land-cover layers, both from the 2020 Land Cover of Canada; the module does not control it.
-The preamble's remap sends only urban to class 99, which the simulation imputes to the nearest forest type.
-Urban is therefore the only class the simulation turns into forest, so it is the only one that needs masking; water, barren land and snow and ice keep their codes in the reporting copy and carry no cohorts in the year-0 maps.
+The preamble's remap sends every urban pixel to class 99, which the simulation imputes to the nearest forest type, whatever the simulation's own land cover says there.
+It also sends to class 99 pixels that one of the two layers calls forest: those with no class in the simulation's land cover where the 2020 map has forest, and the simulation's classes of forest land without trees.
+Urban is therefore the only class the simulation turns into forest against both layers, and the only one that needs masking; water, barren land and snow and ice keep their codes in the reporting copy and carry no cohorts in the year-0 maps.
 The envelopes are not masked: they describe the landscape without urban land, the current condition describes today's, and the difference is the land-conversion part of the departure.
 A map whose grid differs from `LandTypeCC_reporting` is left unmasked, with a warning.
 
@@ -634,7 +636,8 @@ The replicate folders are those named `rep<id>` for each id in `reps`, spelled a
 A year is read from the `_year<YYYY>.` in a file name (or the `year=<YYYY>` folder of a cohort part file) and compared as a number, and a replicate is matched on a whole folder name, so `rep1` does not match the files of `rep10`, and `.aux.xml` files are ignored.
 `init` stops if it finds fewer replicates than `reps` holds, and lists every missing file when a replicate lacks the cohort file, pixel-group map, stand-age map or vegetation-type map of a summary time.
 Each of these files, and each single file of the first replicate (its year-0 maps and its flammable map), is the one found in its folder for its year, however the year is padded: `vegTypeMap_year300.tif` of a run that ends at year 500 is found as `vegTypeMap_year0300.tif` is.
-Of several files of one folder and year, the one padded to the digits of the last year of `simTimes` is taken, as mode 'single' pads it, else the first by name; a missing file is named with that padding.
+Of several files of one folder and year (padded differently), `init`'s check and each single file of the first replicate take the one padded to the digits of the last year of `simTimes`, as mode 'single' pads it, else the first by name; a missing file is named with that padding.
+The analyses, however, read every copy of a summary-time vegetation-type, stand-age or pixel-group map, so each extra copy counts as one more map of that replicate and year: remove copies left by an earlier run before running mode 'multi'.
 Since version 2.0.0.9100, the folders found are named by replicate id inside the module (`rep01` is named "1"); file paths, figures and messages are unchanged.
 
 The first replicate found supplies the current condition (its year-0 maps and cohort file), the flammable map that the `pm` and `bc` events read (its last-year `flammableMap`), and the animation frames.

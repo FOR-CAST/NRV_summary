@@ -645,8 +645,10 @@ InitMulti <- function(sim) {
   ## nearest forest type so the run approximates a pre-industrial landscape. Reporting current
   ## condition from them unchanged would count that imputed forest as real forest today. Re-remove
   ## urban here, using the reporting copy of the current-conditions land cover.
-  ## Urban is the ONLY class that differs between the sim and reporting layers: water/barren/
-  ## snow-ice are sent to NA by `remapDT` on both sides, so nothing else needs correcting.
+  ## Urban is the only class the sim turns into forest against both layers: LandWeb's remap
+  ## (LandWebUtils::lcc2020_remap_table()) sends every urban pixel to 99, imputed to forest; its other 99s
+  ## are pixels one of the layers calls forest. Water/barren/snow-ice are NA in the sim's layer, keep
+  ## their codes in the reporting copy and carry no cohorts, so nothing else needs correcting.
   ## The NRV envelope (built from the replicates) is deliberately NOT masked -- the envelope is the
   ## pre-industrial landscape, the marker is today's, and that difference IS the land-conversion
   ## component of the departure.
@@ -3882,8 +3884,8 @@ autocorrSummary <- function(sim) {
           lim$label, "); recommended thinning ", res$thin, " years")
   if (res$nYears < 20 * res$thin) {
     message("NRV_summary autocorrelation: the NRV has ", res$nYears, " years, fewer than 20 times the recommended ",
-            "thinning (", res$thin, "); a short series biases the estimates toward no correlation, so they are lower ",
-            "bounds and the thinning may need to be longer")
+            "thinning (", res$thin, "); a short series biases the estimates toward no correlation, so they tend ",
+            "to be low and the thinning may need to be longer")
   }
 
   f_png <- file.path(.ppFigDir(sim, "autocorrelation", "all"), "autocorrelation.png")

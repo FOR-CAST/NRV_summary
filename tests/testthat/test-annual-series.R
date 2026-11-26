@@ -303,10 +303,10 @@ test_that("the event says when the NRV is too short for the autocorrelation time
   withr::local_package("SpaDES.core")
   ## tau about 99 over 601 years: fewer than 20 taus
   slow <- multiRun(arTables(3, 601, 0.98))
-  expect_match(slow$msgs, "lower bounds")
+  expect_match(slow$msgs, "tend to be low")
   ## tau about 2 over 601 years
   fast <- multiRun(arTables(3, 601, 0.3))
-  expect_false(grepl("lower bounds", fast$msgs))
+  expect_false(grepl("tend to be low", fast$msgs))
 })
 
 test_that(".reportingCells keeps the pixels inside a reporting area smaller than the map", {
