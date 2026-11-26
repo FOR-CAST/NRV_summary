@@ -30,8 +30,9 @@ always_allow_html: true
 ```{r setup-NRV-summary, include=FALSE}
 ## Chunks are not run unless they say so. Rendering downloads and installs nothing: the citation
 ## style (citations/ecology-letters.csl) and the badge (figures/markdownBadge.png) are in the
-## repository, and the tables use the base pipe, not dplyr's. The kable() tables set
-## format = "html": without it, kableExtra adds a second table label and the numbering skips.
+## repository, and the tables use the base pipe, not dplyr's. The kable() tables set their format
+## per output: left to kableExtra, the HTML gets a second table label and the numbering skips,
+## and a format = "html" table is dropped from a PDF (a manual that includes this chapter).
 knitr::opts_chunk$set(echo = TRUE, eval = FALSE, results = "hold")
 ```
 
@@ -77,7 +78,8 @@ df_reqd <- data.frame(
   minimum = sub("^.*\\(>=\\s*([^)]+)\\).*$", "\\1", reqd[hasMin])
 )
 otherPkgs <- sort(pkgName[!hasMin])
-knitr::kable(df_reqd, format = "html", row.names = FALSE,
+knitr::kable(df_reqd, format = if (knitr::is_latex_output()) "latex" else "html", booktabs = TRUE,
+             row.names = FALSE,
              caption = "Packages (ref:NRV-summary) needs at a minimum version, as its reqdPkgs state them.") |>
   kableExtra::kable_styling(full_width = FALSE)
 ```
@@ -123,7 +125,7 @@ Table \@ref(tab:moduleInputs-NRV-summary) lists the module's input objects.
 
 ```{r moduleInputs-NRV-summary, echo = FALSE, eval = TRUE, message = FALSE, warning = FALSE}
 df_inputs <- SpaDES.core::moduleInputs("NRV_summary", "..")
-knitr::kable(df_inputs, format = "html",
+knitr::kable(df_inputs, format = if (knitr::is_latex_output()) "latex" else "html", booktabs = TRUE,
              caption = "List of (ref:NRV-summary) input objects and their description.") |>
   kableExtra::kable_styling(latex_options = "scale_down", full_width = TRUE)
 ```
@@ -169,7 +171,8 @@ The subsections below say what each does and when to change it.
 
 ```{r moduleParams-NRV-summary, echo = FALSE, eval = TRUE, message = FALSE, warning = FALSE}
 df_params <- SpaDES.core::moduleParams("NRV_summary", "..")
-knitr::kable(df_params, format = "html", caption = "List of (ref:NRV-summary) parameters and their description.") |>
+knitr::kable(df_params, format = if (knitr::is_latex_output()) "latex" else "html", booktabs = TRUE,
+             caption = "List of (ref:NRV-summary) parameters and their description.") |>
   kableExtra::kable_styling(latex_options = "scale_down", full_width = TRUE)
 ```
 
@@ -249,7 +252,7 @@ knitr::kable(df_params, format = "html", caption = "List of (ref:NRV-summary) pa
 ### Parameters the code does not read
 
 The module's own code does not read `ageClassMaxAge`, `.plots`, `.plotInitialTime`, `.plotInterval`, `.seed` or `.useCache`, and nothing reads the first four.
-SpaDES.core reads the other two when it runs an event: `.seed`, a list named by event type, seeds the random-number generator for those events, and `.useCache` caches the `init` event (`TRUE`) or the events it names.
+SpaDES.core reads the other two when it runs an event: `.seed`, a list named by event type, seeds the random-number generator for those events, and `.useCache` caches all of the module's events (`TRUE`) or the events it names.
 Keep `.useCache = FALSE`: an event taken from the cache is not run, so a cached mode 'multi' event can skip writing its files.
 The figures are always written as PNG files.
 The metric calculations of `lm`, `pm`, `lw` and `bc` are wrapped in `reproducible::Cache()`, keyed on their arguments and on the size and modification time of the maps they read; reproducible's own option `reproducible.useCache` controls that cache, not `.useCache`.
@@ -551,7 +554,7 @@ Each replicate writes to its `outputPath(sim)`:
 ### Mode 'multi': summaries
 
 Mode 'multi' writes most of its files to `postprocess/`, beside its own `outputPath(sim)` (in LandWeb, `outputs/<studyArea>/postprocess/` beside `outputs/<studyArea>/mainSim/`).
-`<layer>` is a reporting-polygon layer's name, `<rep>` a replicate folder, `<refCode>` the analysis and layer (`<kind>_` and the layer name with each run of characters other than letters and digits replaced by `_`, from `LandWebUtils::refCodeFor()`), and `_CC` marks the current condition.
+`<layer>` is a reporting-polygon layer's name, `<rep>` a replicate folder, `<refCode>` the analysis and layer (`<kind>_` and the layer name with each run of characters other than letters and digits replaced by `_`, and any leading or trailing `_` removed, from `LandWebUtils::refCodeFor()`), and `_CC` marks the current condition.
 
 ```text
 <outputPath>/                          the replicate folders' parent
