@@ -312,7 +312,7 @@ The year-0 row is taken at the end of year 0 from the cohorts, so its ages are t
 
 ### postprocess_lm: landscape metrics (default)
 
-For each reporting layer and unit, the `lm` event computes ten landscape-level metrics of the vegetation-type map of every replicate and summary time, with landscapemetrics [@Hesselbarth:2019; @R-landscapemetrics] through `nrvtools::nrv_metrics_landscape()`: mean and standard deviation of patch area (`lsm_l_area_mn`, `lsm_l_area_sd`), aggregation index (`lsm_l_ai`), patch cohesion index (`lsm_l_cohesion`), conditional entropy (`lsm_l_condent`), mean, standard deviation and coefficient of variation of core area (`lsm_l_core_mn`, `lsm_l_core_sd`, `lsm_l_core_cv`), edge density (`lsm_l_ed`) and interspersion and juxtaposition index (`lsm_l_iji`).
+For each reporting layer and unit, the `lm` event computes ten landscape-level metrics of the vegetation-type map of every replicate and summary time, with landscapemetrics [@Hesselbarth:2019; @R-landscapemetrics] through `nrvtools::nrv_metrics_landscape()`: mean and standard deviation of patch area (`lsm_l_area_mn`, `lsm_l_area_sd`), aggregation index (`lsm_l_ai`), patch cohesion index (`lsm_l_cohesion`) [@Schumaker:1996], conditional entropy (`lsm_l_condent`), mean, standard deviation and coefficient of variation of core area (`lsm_l_core_mn`, `lsm_l_core_sd`, `lsm_l_core_cv`), edge density (`lsm_l_ed`) and interspersion and juxtaposition index (`lsm_l_iji`).
 It computes the same for the current condition.
 The envelope at each summary time is the replicates' distribution (see [Methods](#methods)).
 The tables are `csv/lm/<layer>/lm.csv` (and one file per metric, `lm_<metric>.csv`) for the replicates and `lm_CC.csv` for the current condition.
@@ -477,7 +477,8 @@ A series with fewer than 3 summary times in the window is "insufficient", and so
 The thresholds (alpha 0.05, a change of 10% of the range, the last half of the NRV years, at least 3 times) are design choices of the module, not values from the literature.
 The window is not the NRV: it only sets where the check looks.
 
-**Autocorrelation** (`recordAnnualSeries = TRUE` in the replicates, and `"autocorr"` in `postprocessEvents`) asks how far apart the snapshots must be to be nearly independent, as thinning does for the output of a Markov chain Monte Carlo sampler.
+**Autocorrelation** (`recordAnnualSeries = TRUE` in the replicates, and `"autocorr"` in `postprocessEvents`) asks how far apart the snapshots must be to be nearly independent.
+Spacing them by the autocorrelation time, as the output of a Markov chain Monte Carlo sampler is thinned, is a design choice of the module.
 Maps saved every year would measure that at the cost of far too much data, so a few landscape scalars are recorded every year instead (see [annual_series](#annual_series-mode-single-opt-in)).
 The replicates are treated as realisations of one process: each series is centred on the mean of all replicates and NRV years, and the variance is pooled over the replicates.
 A replicate's own mean would pull the sample autocorrelation toward 0, the more so the longer the autocorrelation time is against the series.
@@ -632,7 +633,7 @@ Table: (\#tab:cohortFormats-NRV-summary) Size and speed of the two cohortData fo
 
 **Landscape and patch metrics.**
 The `lm`, `pm` and `bc` metrics are computed with landscapemetrics [@Hesselbarth:2019; @R-landscapemetrics], which reimplements the metrics of FRAGSTATS [@McGarigal:1995] in R.
-The aggregation index is that of @He:2000, and conditional entropy is from the information-theory framework of @Nowosad:2019.
+The aggregation index is that of @He:2000, the patch cohesion index that of @Schumaker:1996, and conditional entropy is from the information-theory framework of @Nowosad:2019.
 Each metric is taken on the map cut and masked to one reporting unit, with landscapemetrics' defaults: patches join cells that share an edge or a corner (8 directions), core area excludes a one-cell edge, and conditional entropy uses the 4 cells that share an edge.
 The `lw` large patches use the connectivity of `patchDirections` instead, 4 directions by default, as LandWeb's v2 summaries did.
 The large-patch and age-class summaries of `lw` are the module's own definitions.
