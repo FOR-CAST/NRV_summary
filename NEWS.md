@@ -2,6 +2,8 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+* **The manual documents every event, parameter and output, and cites its methods (`2.0.0.9101`).** `NRV_summary.Rmd` says what each event computes and when it runs, what each parameter does and when to change it, which files a run writes, how the replicate and cohort files are found, and the methods behind the numbers, cited from `citations/references_NRV_summary.bib`. The bibliography and citation style now load, and rendering downloads and installs nothing. The module's behaviour is unchanged.
+
 * **The version jumps from 2.0.0.9047 to 2.0.0.9100 (`2.0.0.9100`).** PredictiveEcology/NRV_summary's `modsForFireSense` branch, a fork with different code, is at 2.0.0.9046. FOR-CAST's numbers now stay clear of its, so that a version string names the code of one fork only.
 
 * **SpaDES.core 3.2.1.9077 or later is required (`2.0.0.9100`).** From that version, `dirnamesFromSet()` names the replicate folders it returns by replicate id (PredictiveEcology/SpaDES.core#543), and `InitMulti()` keeps those names.
