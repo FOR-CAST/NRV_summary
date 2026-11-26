@@ -1,6 +1,6 @@
 ---
 title: "NRV_summary Manual"
-subtitle: "v.2.1.0"
+subtitle: "v.2.1.0.9001"
 date: "Last updated: 2026-11-26"
 output:
   bookdown::html_document2:
@@ -30,6 +30,8 @@ always_allow_html: true
 
 
 [![made-with-Markdown](figures/markdownBadge.png)](http://commonmark.org)
+
+[![module-version-Badge](https://img.shields.io/badge/NRV__summary-v.%202.1.0.9001-blue)](https://github.com/FOR-CAST/NRV_summary/releases)
 
 <!-- if knitting to pdf remember to add the pandoc_args: ["--extract-media", "."] option to yml in order to get the badge images -->
 
