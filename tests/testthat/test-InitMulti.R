@@ -12,14 +12,15 @@ cohortFiles <- function(d, years = yrs, format = "qs2") {
          parquet = file.path(d, "cohortData", sprintf("year=%04d", years), "part-0.parquet"))
 }
 
-## the files InitMulti() expects of each replicate, as paths under `d`; `cohorts` the format(s) of its cohortData
-repFiles <- function(d, years = yrs, cohorts = "qs2") {
+## the files InitMulti() expects of each replicate, as paths under `d`; `cohorts` the format(s) of its cohortData. The
+## flammable map is of the last year, as mode 'single' saves it at the end of the run.
+expectedRepFiles <- function(d, years = yrs, cohorts = "qs2") {
   c(
     unlist(lapply(cohorts, function(x) cohortFiles(d, years, x))),
     file.path(d, sprintf("pixelGroupMap_year%04d.tif", years)),
     file.path(d, sprintf("standAgeMap_year%04d.tif", years)),
     file.path(d, sprintf("vegTypeMap_year%04d.tif", years)),
-    file.path(d, "flammableMap_year1000.tif")
+    file.path(d, sprintf("flammableMap_year%04d.tif", max(years)))
   )
 }
 
@@ -77,11 +78,11 @@ initWithWarnings <- function(sim) {
 test_that("rep01 folders, no outputsDF: all reps found", {
   root <- withr::local_tempdir()
   out <- file.path(root, "mainSim")
-  touchFiles(unlist(lapply(file.path(out, sprintf("rep%02d", 1:3)), repFiles)))
+  touchFiles(unlist(lapply(file.path(out, sprintf("rep%02d", 1:3)), expectedRepFiles)))
 
   m <- modOf(runInit(initMultiSim(root, reps = 1:3)))
-  expect_identical(m$allReps, c("rep01", "rep02", "rep03"))
-  expect_identical(m$rep1Dir, file.path(out, "rep01"))
+  expect_identical(m$allReps, c("1" = "rep01", "2" = "rep02", "3" = "rep03"))
+  expect_identical(m$rep1Dir, c("1" = file.path(out, "rep01")))
   expect_identical(m$flm, file.path(out, "rep01", "flammableMap_year1000.tif"))
   expect_length(m$vtm, 3L * length(yrs))
   expect_length(m$cd, 3L * length(yrs))
@@ -90,13 +91,13 @@ test_that("rep01 folders, no outputsDF: all reps found", {
 test_that("rep1 folders listed in outputsDF", {
   root <- withr::local_tempdir()
   ## the replicates are outside outputPath(), and the last year is registered twice
-  files <- unlist(lapply(file.path(root, c("rep1", "rep2")), repFiles))
+  files <- unlist(lapply(file.path(root, c("rep1", "rep2")), expectedRepFiles))
   files <- c(files, grep("year1000", files, value = TRUE))
   touchFiles(files)
 
   m <- modOf(runInit(initMultiSim(root, reps = 1:2, outputsFiles = files)))
-  expect_identical(m$allReps, c("rep1", "rep2"))
-  expect_identical(m$rep1Dir, file.path(root, "rep1"))
+  expect_identical(m$allReps, c("1" = "rep1", "2" = "rep2"))
+  expect_identical(m$rep1Dir, c("1" = file.path(root, "rep1")))
   expect_identical(m$fvtm0, file.path(root, "rep1", "vegTypeMap_year0000.tif"))
   expect_identical(m$flm, file.path(root, "rep1", "flammableMap_year1000.tif"))
   for (x in c("vtm", "sam", "cd", "pgm")) {
@@ -108,13 +109,13 @@ test_that("rep1 folders listed in outputsDF", {
 test_that("a missing file stops InitMulti with or without outputsDF", {
   root <- withr::local_tempdir()
   out <- file.path(root, "mainSim")
-  files <- unlist(lapply(file.path(out, sprintf("rep%02d", 1:3)), repFiles))
+  files <- unlist(lapply(file.path(out, sprintf("rep%02d", 1:3)), expectedRepFiles))
   gone <- file.path(out, "rep02", "vegTypeMap_year1000.tif")
   touchFiles(setdiff(files, gone))
   expect_error(runInit(initMultiSim(root, reps = 1:3)), "1 simulation files appear to be missing")
 
   root2 <- withr::local_tempdir()
-  files2 <- unlist(lapply(file.path(root2, c("rep1", "rep2", "rep3")), repFiles))
+  files2 <- unlist(lapply(file.path(root2, c("rep1", "rep2", "rep3")), expectedRepFiles))
   gone2 <- file.path(root2, "rep2", "vegTypeMap_year1000.tif")
   touchFiles(setdiff(files2, gone2))
   expect_error(
@@ -125,7 +126,7 @@ test_that("a missing file stops InitMulti with or without outputsDF", {
 
 test_that("a file listed in outputsDF but absent on disk is reported missing", {
   root <- withr::local_tempdir()
-  files <- unlist(lapply(file.path(root, c("rep1", "rep2")), repFiles))
+  files <- unlist(lapply(file.path(root, c("rep1", "rep2")), expectedRepFiles))
   gone <- file.path(root, "rep2", "vegTypeMap_year1000.tif")
   touchFiles(setdiff(files, gone)) ## `gone` is listed in outputsDF, but never created
   expect_error(
@@ -137,7 +138,7 @@ test_that("a file listed in outputsDF but absent on disk is reported missing", {
 test_that("simTimes unset: year-0 and flammable rasters follow the run's start and end", {
   root <- withr::local_tempdir()
   yrs2 <- c(2720, 3020)
-  files <- unlist(lapply(file.path(root, c("rep1", "rep2")), repFiles, years = yrs2))
+  files <- unlist(lapply(file.path(root, c("rep1", "rep2")), expectedRepFiles, years = yrs2))
   touchFiles(files)
 
   m <- modOf(runInit(initMultiSim(root, reps = 1:2, outputsFiles = files, times = c(2020, 3020),
@@ -153,10 +154,10 @@ test_that("simTimes unset: year-0 and flammable rasters follow the run's start a
 test_that("reps = 1:2 ignores rep10-rep12 on disk", {
   root <- withr::local_tempdir()
   out <- file.path(root, "mainSim")
-  touchFiles(unlist(lapply(file.path(out, sprintf("rep%02d", c(1:2, 10:12))), repFiles)))
+  touchFiles(unlist(lapply(file.path(out, sprintf("rep%02d", c(1:2, 10:12))), expectedRepFiles)))
 
   m <- modOf(runInit(initMultiSim(root, reps = 1:2)))
-  expect_identical(m$allReps, c("rep01", "rep02"))
+  expect_identical(m$allReps, c("1" = "rep01", "2" = "rep02"))
   expect_false(any(grepl("rep1[0-2]", c(m$vtm, m$sam, m$cd, m$pgm))))
   expect_length(m$vtm, 2L * length(yrs))
 })
@@ -164,7 +165,7 @@ test_that("reps = 1:2 ignores rep10-rep12 on disk", {
 test_that("fewer reps found than asked stops", {
   root <- withr::local_tempdir()
   out <- file.path(root, "mainSim")
-  touchFiles(unlist(lapply(file.path(out, sprintf("rep%02d", 1:2)), repFiles)))
+  touchFiles(unlist(lapply(file.path(out, sprintf("rep%02d", 1:2)), expectedRepFiles)))
   expect_error(runInit(initMultiSim(root, reps = 1:3)),
                "found the files of 2 replicate\\(s\\) under .* but reps asks for 3")
 
@@ -178,7 +179,7 @@ test_that("file-type filters read the file name, not the folder names", {
   ## a folder named with `png` or `txt` neither drops files, and a sidecar `.xml` is still left out
   root <- withr::local_tempdir(pattern = "png_txt_")
   out <- file.path(root, "mainSim")
-  files <- unlist(lapply(file.path(out, sprintf("rep%02d", 1:2)), repFiles))
+  files <- unlist(lapply(file.path(out, sprintf("rep%02d", 1:2)), expectedRepFiles))
   touchFiles(c(files, file.path(out, "rep01", "vegTypeMap_year0700.tif.aux.xml")))
 
   m <- modOf(runInit(initMultiSim(root, reps = 1:2)))
@@ -190,7 +191,7 @@ test_that("file-type filters read the file name, not the folder names", {
 test_that("aux.xml sidecars are not taken as cohort or pixelGroup files", {
   root <- withr::local_tempdir()
   out <- file.path(root, "mainSim")
-  files <- unlist(lapply(file.path(out, sprintf("rep%02d", 1:2)), repFiles))
+  files <- unlist(lapply(file.path(out, sprintf("rep%02d", 1:2)), expectedRepFiles))
   touchFiles(c(files, file.path(out, "rep01", c("pixelGroupMap_year0700.tif.aux.xml",
                                                 "cohortData_year0700.qs2.aux.xml"))))
 
@@ -229,6 +230,13 @@ test_that("BC seral and animation read the first replicate folder found", {
   rep1st <- file.path(withr::local_tempdir(), "rep1")
   touchFiles(c(cohortFiles(rep1st, 0, "qs2"), cohortFiles(rep1st, 0, "parquet")))
   expect_identical(year0(rep1st, cohortFiles(rep1st, 0, "qs2"))$cohortData, cohortFiles(rep1st, 0, "qs2"))
+  ## the first replicate folder named by replicate id, as InitMulti() gives it: the same paths, unnamed
+  named <- year0(c("1" = rep1))
+  expect_identical(named, year0(rep1))
+  expect_null(names(named$cohortData))
+  expect_null(names(named$pixelGroupMap))
+  expect_identical(year0(c("1" = rep1pq)), year0(rep1pq))
+  expect_identical(year0(c("1" = rep1st), cohortFiles(rep1st, 0, "qs2")), year0(rep1st, cohortFiles(rep1st, 0, "qs2")))
 
   sel <- moduleFn(".firstRepFiles", new.env())
   sam <- file.path("out", c("rep1", "rep2", "rep10"), "standAgeMap_year0701.tif")
@@ -244,6 +252,10 @@ test_that("BC seral and animation read the first replicate folder found", {
   expect_identical(sel(file.path("rep1x", "a_year0701.tif"), file.path("out", "rep1")), character(0))
   ## LandWeb-style folders still work
   expect_identical(sel(file.path("o", c("rep01", "rep02"), "a.tif"), file.path("o", "rep01")),
+                   file.path("o", "rep01", "a.tif"))
+  ## the first replicate folder named by replicate id: the same files, unnamed
+  expect_identical(sel(c(NA, sam), c("1" = file.path("out", "rep1"))), sam[1])
+  expect_identical(sel(file.path("o", c("rep01", "rep02"), "a.tif"), c("1" = file.path("o", "rep01"))),
                    file.path("o", "rep01", "a.tif"))
 })
 
@@ -271,7 +283,7 @@ test_that(".hasOutputsDF is TRUE only for a data.frame with rows", {
 test_that("files listed out of order are paired by replicate and year", {
   ## the patch metrics pair the veg-type and stand-age maps by position
   root <- withr::local_tempdir()
-  files <- unlist(lapply(file.path(root, c("rep1", "rep2")), repFiles))
+  files <- unlist(lapply(file.path(root, c("rep1", "rep2")), expectedRepFiles))
   touchFiles(files)
   set.seed(42)
   shuffled <- sample(files)
@@ -286,42 +298,67 @@ test_that("files listed out of order are paired by replicate and year", {
   expect_identical(yearsByRep(m$cd), yearsByRep(m$pgm))
 })
 
-test_that("replicate folders stay unnamed when dirnamesFromSet() names them", {
-  ## PredictiveEcology/SpaDES.core#543 names the result by replicate id ("rep01" named "1"); the values are the same
-  real <- SpaDES.core::dirnamesFromSet
-  calls <- 0L
-  testthat::local_mocked_bindings(
-    dirnamesFromSet = function(...) {
-      calls <<- calls + 1L
-      out <- real(...)
-      stats::setNames(out, seq_along(out))
-    },
-    .package = "SpaDES.core"
-  )
+test_that("the replicate folders are named by replicate id, and the files found are not named", {
+  ## dirnamesFromSet() names its result by replicate id (PredictiveEcology/SpaDES.core#543), not by position: reps
+  ## 2 and 5 are named "2" and "5", on disk and with outputsDF
+  unnamed <- c("flm", "fvtm0", "fsam0", "ftsf0", "vtm", "sam", "tsf", "cd", "pgm", "allouts", "layerName")
   root <- withr::local_tempdir()
   out <- file.path(root, "mainSim")
-  touchFiles(unlist(lapply(file.path(out, sprintf("rep%02d", 1:2)), repFiles)))
-  m <- modOf(runInit(initMultiSim(root, reps = 1:2)))
-  expect_identical(m$allReps, c("rep01", "rep02"))
-  expect_identical(m$rep1Dir, file.path(out, "rep01"))
+  touchFiles(unlist(lapply(file.path(out, c("rep02", "rep05")), expectedRepFiles)))
+  m <- modOf(runInit(initMultiSim(root, reps = c(2L, 5L))))
+  expect_identical(m$allReps, c("2" = "rep02", "5" = "rep05"))
+  expect_identical(m$rep1Dir, c("2" = file.path(out, "rep02")))
+  expect_identical(m$flm, file.path(out, "rep02", "flammableMap_year1000.tif"))
+  for (x in unnamed) expect_null(names(m[[x]]), label = paste0("names(mod$", x, ")"))
 
   root2 <- withr::local_tempdir()
-  files <- unlist(lapply(file.path(root2, c("rep1", "rep2")), repFiles))
+  files <- unlist(lapply(file.path(root2, c("rep2", "rep5")), expectedRepFiles))
   touchFiles(files)
-  m2 <- modOf(runInit(initMultiSim(root2, reps = 1:2, outputsFiles = files)))
-  expect_identical(m2$allReps, c("rep1", "rep2"))
-  expect_identical(m2$rep1Dir, file.path(root2, "rep1"))
-  expect_identical(calls, 3L) ## the mock was used: once on disk, twice with outputsDF
+  m2 <- modOf(runInit(initMultiSim(root2, reps = c(2L, 5L), outputsFiles = files)))
+  expect_identical(m2$allReps, c("2" = "rep2", "5" = "rep5"))
+  expect_identical(m2$rep1Dir, c("2" = file.path(root2, "rep2")))
+  expect_identical(m2$flm, file.path(root2, "rep2", "flammableMap_year1000.tif"))
+  for (x in unnamed) expect_null(names(m2[[x]]), label = paste0("names(mod$", x, ")"))
+})
+
+test_that("a first replicate without its flammable map stops InitMulti, naming it, if pm or bc runs", {
+  ## the pm and bc events read it; it is taken from the files found (SpaDES.core::repFiles()), so its absence stops
+  ## init rather than the event that reads it
+  root <- withr::local_tempdir()
+  files <- unlist(lapply(file.path(root, c("rep1", "rep2")), expectedRepFiles))
+  touchFiles(files)
+  flm1 <- file.path(root, "rep1", "flammableMap_year1000.tif")
+  listed <- setdiff(files, flm1)
+  err <- expect_error(runInit(initMultiSim(root, reps = 1:2, outputsFiles = listed)))
+  expect_match(conditionMessage(err), "flammableMap_year1000.tif", fixed = TRUE)
+  expect_match(conditionMessage(err), file.path(root, "rep1"), fixed = TRUE)
+  ## a run of the other events does not need it: its path is built, as before
+  m <- modOf(runInit(initMultiSim(root, reps = 1:2, outputsFiles = listed, events = c("lm", "lw", "am"))))
+  expect_identical(m$flm, flm1)
+  err3 <- expect_error(runInit(initMultiSim(root, reps = 1:2, outputsFiles = listed, events = c("lm", "BC"))))
+  expect_match(conditionMessage(err3), "flammableMap_year1000.tif", fixed = TRUE)
+
+  ## on disk, as LandWeb's runs are read
+  root2 <- withr::local_tempdir()
+  out <- file.path(root2, "mainSim")
+  files2 <- unlist(lapply(file.path(out, c("rep01", "rep02")), expectedRepFiles))
+  touchFiles(setdiff(files2, file.path(out, "rep01", "flammableMap_year1000.tif")))
+  err2 <- expect_error(runInit(initMultiSim(root2, reps = 1:2)))
+  expect_match(conditionMessage(err2), "flammableMap_year1000.tif", fixed = TRUE)
+  expect_match(conditionMessage(err2), file.path(out, "rep01"), fixed = TRUE)
+  ## and without pm or bc, no stop: the path is built
+  m2 <- modOf(runInit(initMultiSim(root2, reps = 1:2, events = c("lm", "lw", "am"))))
+  expect_identical(m2$flm, file.path(out, "rep01", "flammableMap_year1000.tif"))
 })
 
 test_that("bare-number replicate folders (1/, 2/) are found through outputsDF", {
   root <- withr::local_tempdir()
-  files <- unlist(lapply(file.path(root, c("1", "2")), repFiles))
+  files <- unlist(lapply(file.path(root, c("1", "2")), expectedRepFiles))
   touchFiles(files)
 
   m <- modOf(runInit(initMultiSim(root, reps = 1:2, outputsFiles = files)))
-  expect_identical(m$allReps, c("1", "2"))
-  expect_identical(m$rep1Dir, file.path(root, "1"))
+  expect_identical(m$allReps, c("1" = "1", "2" = "2"))
+  expect_identical(m$rep1Dir, c("1" = file.path(root, "1")))
   expect_length(m$vtm, 2L * length(yrs))
   expect_length(m$cd, 2L * length(yrs))
 })
@@ -341,7 +378,7 @@ test_that("InitMulti accepts .qs2-only replicates (old outputs)", {
   ## LandWeb's layout: rep01 folders, nothing registered
   root <- withr::local_tempdir()
   out <- file.path(root, "mainSim")
-  touchFiles(unlist(lapply(file.path(out, sprintf("rep%02d", 1:3)), repFiles)))
+  touchFiles(unlist(lapply(file.path(out, sprintf("rep%02d", 1:3)), expectedRepFiles)))
 
   r <- initWithWarnings(initMultiSim(root, reps = 1:3))
   m <- r$m
@@ -358,7 +395,7 @@ test_that("InitMulti finds parquet cohorts on disk and in outputsDF, one per rep
   want <- c(paste(rep(names(layout), each = 2L), c("0700", "1000"), rep(c("parquet", "qs2", "parquet"), each = 2L)))
   root <- withr::local_tempdir()
   out <- file.path(root, "mainSim")
-  written <- unlist(Map(function(r, f) repFiles(file.path(out, r), cohorts = f), names(layout), layout))
+  written <- unlist(Map(function(r, f) expectedRepFiles(file.path(out, r), cohorts = f), names(layout), layout))
   touchFiles(written)
   r <- initWithWarnings(initMultiSim(root, reps = 1:3))
   m <- r$m
@@ -374,22 +411,22 @@ test_that("InitMulti finds parquet cohorts on disk and in outputsDF, one per rep
   ## the same from outputsDF, listed out of order
   layout2 <- stats::setNames(layout, c("rep1", "rep2", "rep3"))
   root2 <- withr::local_tempdir()
-  files <- unlist(Map(function(r, f) repFiles(file.path(root2, r), cohorts = f), names(layout2), layout2))
+  files <- unlist(Map(function(r, f) expectedRepFiles(file.path(root2, r), cohorts = f), names(layout2), layout2))
   touchFiles(files)
   set.seed(1)
   r2 <- initWithWarnings(initMultiSim(root2, reps = 1:3, outputsFiles = sample(files)))
   m2 <- r2$m
   expect_identical(cdOf(m2), sub("^rep0", "rep", want))
   expect_identical(sub(" [a-z0-9]+$", "", cdOf(m2)), pgmOf(m2))
-  expect_identical(m2$allReps, c("rep1", "rep2", "rep3"))
-  expect_identical(m2$rep1Dir, file.path(root2, "rep1"))
+  expect_identical(m2$allReps, c("1" = "rep1", "2" = "rep2", "3" = "rep3"))
+  expect_identical(m2$rep1Dir, c("1" = file.path(root2, "rep1")))
   expect_match(grep("both formats", r2$warnings, value = TRUE), "2 replicate-year(s)", fixed = TRUE)
 })
 
 test_that("a replicate-year with cohorts in neither format is missing, and the message names both", {
   root <- withr::local_tempdir()
   out <- file.path(root, "mainSim")
-  files <- unlist(lapply(file.path(out, sprintf("rep%02d", 1:2)), repFiles, cohorts = "parquet"))
+  files <- unlist(lapply(file.path(out, sprintf("rep%02d", 1:2)), expectedRepFiles, cohorts = "parquet"))
   gone <- cohortFiles(file.path(out, "rep02"), 1000, "parquet")
   touchFiles(setdiff(files, gone))
   rep2 <- file.path(out, "rep02")
@@ -400,7 +437,7 @@ test_that("a replicate-year with cohorts in neither format is missing, and the m
   )
   ## nor is a part file found when the outputsDF does not list it
   root2 <- withr::local_tempdir()
-  files2 <- unlist(lapply(file.path(root2, c("rep1", "rep2")), repFiles, cohorts = "parquet"))
+  files2 <- unlist(lapply(file.path(root2, c("rep1", "rep2")), expectedRepFiles, cohorts = "parquet"))
   touchFiles(files2)
   listed <- setdiff(files2, cohortFiles(file.path(root2, "rep2"), 1000, "parquet"))
   expect_error(
@@ -416,7 +453,7 @@ test_that(".discoverOutputFiles adds the cohort part files to a LandWeb-like lis
   ## what a LandWeb mainSim folder holds: replicate folders with figure and dataset subfolders, files at the top
   reps <- file.path(out, c("rep01", "rep02"))
   touchFiles(c(
-    unlist(lapply(reps, repFiles)),
+    unlist(lapply(reps, expectedRepFiles)),
     file.path(out, c("burnSummaries_fireSizes_allReps.csv", "meanAnnualCumulBurnMap.tif")),
     file.path(out, "_cc", "rep01", "vegTypeMap_year0000.tif"),
     file.path(out, "figures", "NRV_summary", "a.png"),
@@ -434,15 +471,19 @@ test_that(".discoverOutputFiles adds the cohort part files to a LandWeb-like lis
   touchFiles(c(parts, file.path(reps[1], "cohortData", c("year=0700/part-1.parquet", "year=07x0/part-0.parquet",
                                                         "part-0.parquet"))))
   expect_identical(discover(sim), c(before, parts))
+  ## and InitMulti() takes the first replicate's flammable map from that listing
+  m <- modOf(runInit(sim))
+  expect_identical(m$flm, file.path(reps[1], "flammableMap_year1000.tif"))
+  expect_identical(m$rep1Dir, c("1" = reps[1]))
 })
 
 test_that("reps = 1:2 ignores rep10-rep12 parquet cohorts on disk", {
   root <- withr::local_tempdir()
   out <- file.path(root, "mainSim")
-  touchFiles(unlist(lapply(file.path(out, sprintf("rep%02d", c(1:2, 10:12))), repFiles, cohorts = "parquet")))
+  touchFiles(unlist(lapply(file.path(out, sprintf("rep%02d", c(1:2, 10:12))), expectedRepFiles, cohorts = "parquet")))
 
   m <- modOf(runInit(initMultiSim(root, reps = 1:2)))
-  expect_identical(m$allReps, c("rep01", "rep02"))
+  expect_identical(m$allReps, c("1" = "rep01", "2" = "rep02"))
   rep12 <- file.path(out, c("rep01", "rep02"))
   expect_identical(m$cd, unlist(lapply(rep12, cohortFiles, format = "parquet")))
   expect_setequal(m$cohortFiles, unlist(lapply(rep12, cohortFiles, format = "parquet")))
@@ -450,7 +491,7 @@ test_that("reps = 1:2 ignores rep10-rep12 parquet cohorts on disk", {
 
 test_that("a pixelGroupMap with no cohort file of its folder and year stops InitMulti, naming it, if bc or st runs", {
   root <- withr::local_tempdir()
-  files <- unlist(lapply(file.path(root, c("rep1", "rep2")), repFiles, cohorts = "parquet"))
+  files <- unlist(lapply(file.path(root, c("rep1", "rep2")), expectedRepFiles, cohorts = "parquet"))
   extra <- file.path(root, "rep1", "sub", "pixelGroupMap_year0700.tif")
   touchFiles(c(files, extra))
   ## only the bc and st events read the cohort files and pixel group maps: lm and pm (the default) run as before
@@ -469,7 +510,7 @@ test_that("a folder named like the pixelGroupMap files does not make other files
   root <- withr::local_tempdir(pattern = "pixelGroupMap_")
   out <- file.path(root, "mainSim")
   reps <- file.path(out, c("rep01", "rep02"))
-  touchFiles(unlist(lapply(reps, repFiles)))
+  touchFiles(unlist(lapply(reps, expectedRepFiles)))
 
   m <- modOf(runInit(initMultiSim(root, reps = 1:2)))
   expect_identical(m$pgm, file.path(rep(reps, each = 2L), sprintf("pixelGroupMap_year%04d.tif", yrs)))
@@ -478,7 +519,7 @@ test_that("a folder named like the pixelGroupMap files does not make other files
 
 test_that("a part file the outputsDF lists but that is not on disk is not taken: the .qs2 beside it is", {
   root <- withr::local_tempdir()
-  files <- unlist(lapply(file.path(root, c("rep1", "rep2")), repFiles, cohorts = c("qs2", "parquet")))
+  files <- unlist(lapply(file.path(root, c("rep1", "rep2")), expectedRepFiles, cohorts = c("qs2", "parquet")))
   touchFiles(files)
   gone <- cohortFiles(file.path(root, "rep1"), 700, "parquet")
   file.remove(gone)
@@ -528,7 +569,7 @@ test_that("InitMulti pairs a cohort file padded differently from its pixelGroupM
   root <- withr::local_tempdir()
   out <- file.path(root, "mainSim")
   reps <- file.path(out, sprintf("rep%02d", 1:2))
-  files <- unlist(lapply(reps, repFiles))
+  files <- unlist(lapply(reps, expectedRepFiles))
   files <- sub("cohortData_year0700.qs2", "cohortData_year700.qs2", files, fixed = TRUE)
   touchFiles(files)
   m <- modOf(runInit(initMultiSim(root, reps = 1:2, events = c("lm", "pm", "bc"))))
@@ -541,7 +582,7 @@ test_that("InitMulti warns of several .qs2 cohort files of one replicate-year, a
   root <- withr::local_tempdir()
   out <- file.path(root, "mainSim")
   rep1 <- file.path(out, "rep01")
-  touchFiles(c(repFiles(rep1), file.path(rep1, "cohortData_year700.qs2")))
+  touchFiles(c(expectedRepFiles(rep1), file.path(rep1, "cohortData_year700.qs2")))
   r <- initWithWarnings(initMultiSim(root, reps = 1L))
   w <- grep("several .qs2", r$warnings, value = TRUE)
   expect_length(w, 1L)
@@ -550,6 +591,6 @@ test_that("InitMulti warns of several .qs2 cohort files of one replicate-year, a
   expect_identical(cdOf(r$m)[1], "rep01 0700 qs2")
   ## one file per replicate-year: no warning
   root2 <- withr::local_tempdir()
-  touchFiles(repFiles(file.path(root2, "mainSim", "rep01")))
+  touchFiles(expectedRepFiles(file.path(root2, "mainSim", "rep01")))
   expect_false(any(grepl("several .qs2", initWithWarnings(initMultiSim(root2, reps = 1L))$warnings)))
 })
