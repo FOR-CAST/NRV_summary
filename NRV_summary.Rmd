@@ -29,14 +29,22 @@ always_allow_html: true
 
 ```{r setup-NRV-summary, include=FALSE}
 ## Chunks are not run unless they say so. Rendering downloads and installs nothing: the citation
-## style (citations/ecology-letters.csl) and the badge (figures/markdownBadge.png) are in the
-## repository, and the tables use the base pipe, not dplyr's. The kable() tables set their format
-## per output: left to kableExtra, the HTML gets a second table label and the numbering skips,
-## and a format = "html" table is dropped from a PDF (a manual that includes this chapter).
+## style (citations/ecology-letters.csl) and the Markdown badge (figures/markdownBadge.png) are in
+## the repository, the version badge is an image URL the reader's browser fetches, and the tables
+## use the base pipe, not dplyr's. The kable() tables set their format per output: left to
+## kableExtra, the HTML gets a second table label and the numbering skips, and a
+## format = "html" table is dropped from a PDF (a manual that includes this chapter).
 knitr::opts_chunk$set(echo = TRUE, eval = FALSE, results = "hold")
 ```
 
 [![made-with-Markdown](figures/markdownBadge.png)](http://commonmark.org)
+
+```{r moduleBadge-NRV-summary, echo = FALSE, eval = !knitr::is_latex_output(), results = "asis"}
+## the module version, from the metadata; left out of a PDF, which would have to download the image
+modversion <- as.character(SpaDES.core::moduleMetadata(module = "NRV_summary", path = "..")$version)
+cat("[![module-version-Badge](https://img.shields.io/badge/NRV__summary-v.%20", modversion,
+    "-blue)](https://github.com/FOR-CAST/NRV_summary/releases)\n", sep = "")
+```
 
 <!-- if knitting to pdf remember to add the pandoc_args: ["--extract-media", "."] option to yml in order to get the badge images -->
 
