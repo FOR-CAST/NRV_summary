@@ -1261,7 +1261,8 @@ InitMulti <- function(sim) {
 
 ## The bc event's seral maps, made from the year-0 pixel-group map of the first replicate followed by mod$pgm, in that
 ## order (`pgm`): `cc`, the current condition's (the first), and `reps`, the replicates', less those of year 0, which
-## the envelope leaves out. The years are those of the pixel-group maps, as a seral map's name may end in `-sieve<N>`.
+## the envelope leaves out. The years are those of the pixel-group maps, which the seral maps pair with by position; a
+## sieved map's name, `seralStageMap-sieve<N>_year<YYYY>.tif`, carries the same year.
 .splitSeralMaps <- function(ssmFiles, pgm) {
   list(cc = ssmFiles[1L], reps = ssmFiles[-1L][!.fileYear(pgm[-1L]) %in% 0])
 }
@@ -1833,9 +1834,12 @@ makeSeralStageMapsBC <- function(sim) {
     ssmFiles <- vapply(
       ssmFiles,
       function(f) {
-        ## clumps < threshold merged with largest neighbour
-        fs <- .suffix(f, sprintf("-sieve%d", as.integer(P(sim)$sieveThresh))) ## TODO: use round() ??
-        terra::sieve(rast(f), threshold = P(sim)$sieveThresh, filename = fs, overwrite = TRUE)
+        ## clumps < threshold merged with largest neighbour. The suffix goes before the year,
+        ## `seralStageMap-sieve<N>_year<YYYY>.tif`: nrvtools parses the year from `_year<YYYY>_` in the label it
+        ## builds from the file name, and stops on `seralStageMap_year<YYYY>-sieve<N>`. TODO: use round() ??
+        sieved <- sub("_year", sprintf("-sieve%d_year", as.integer(thr)), basename(f), fixed = TRUE)
+        fs <- file.path(dirname(f), sieved)
+        terra::sieve(rast(f), threshold = thr, filename = fs, overwrite = TRUE)
         fs
       },
       character(1)

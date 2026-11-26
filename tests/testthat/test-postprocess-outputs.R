@@ -121,15 +121,15 @@ test_that("bc's current-condition seral map leaves out the urban pixels of LandT
   ccrep <- terra::rast(rtm, vals = c(1L, 17L, 17L, 5L)) ## cells 2 and 3 urban (17, LCC 2020)
   r <- bcSeralRun(ccrep)
   ssm0 <- unname(r$mod$ssm0)
-  expect_identical(ssm0, file.path(r$out, "_cc", "rep01", "seralStageMap_year0000-sieve2.tif"))
+  expect_identical(ssm0, file.path(r$out, "_cc", "rep01", "seralStageMap-sieve2_year0000.tif"))
   expect_equal(terra::values(terra::rast(ssm0), mat = FALSE), c(1, NA, NA, 2))
   ## the replicates' maps are not masked: the envelope has no urban land
-  expect_identical(unname(r$mod$ssm), file.path(r$rep1, "seralStageMap_year1000-sieve2.tif"))
+  expect_identical(unname(r$mod$ssm), file.path(r$rep1, "seralStageMap-sieve2_year1000.tif"))
   expect_false(anyNA(terra::values(terra::rast(r$mod$ssm), mat = FALSE)))
 
   ## without LandTypeCC_reporting (InitMulti() has warned): the map is not masked
   r0 <- bcSeralRun(NULL)
-  expect_identical(unname(r0$mod$ssm0), file.path(r0$rep1, "seralStageMap_year0000-sieve2.tif"))
+  expect_identical(unname(r0$mod$ssm0), file.path(r0$rep1, "seralStageMap-sieve2_year0000.tif"))
   expect_false(anyNA(terra::values(terra::rast(r0$mod$ssm0), mat = FALSE)))
 })
 
@@ -145,7 +145,49 @@ test_that("bc sieves only with a sieveThresh of 2 or more, and its default does 
     expect_identical(list.files(r$rep1, "sieve"), character(0), info = paste("sieveThresh", thr))
   }
   r2 <- bcSeralRun(NULL, sieveThresh = 2L)
-  sieved <- file.path(r2$rep1, c("seralStageMap_year0000-sieve2.tif", "seralStageMap_year1000-sieve2.tif"))
+  sieved <- file.path(r2$rep1, c("seralStageMap-sieve2_year0000.tif", "seralStageMap-sieve2_year1000.tif"))
   expect_identical(unname(c(r2$mod$ssm0, r2$mod$ssm)), sieved)
   expect_true(all(file.exists(sieved)))
+})
+
+test_that("bc's sieved seral maps get through the patch metrics, which take the year from their names", {
+  ## nrvtools labels each map's result `<rep>.<file name without .tif>_<poly>` and stops unless a `_` follows the
+  ## year's digits; `seralStageMap_year0000-sieve2` stopped patchMetricsSeralBC() ("cannot parse metric label(s)")
+  withr::local_package("SpaDES.core")
+  withr::local_package("nrvtools") ## as at run time: the event calls nrvtools unqualified
+  rtm <- terra::rast(nrows = 2, ncols = 2, xmin = 0, xmax = 500, ymin = 0, ymax = 500, crs = "EPSG:3400")
+  ccrep <- terra::rast(rtm, vals = c(1L, 17L, 17L, 5L)) ## cells 2 and 3 urban: the masked map is in `_cc/rep01/`
+  r <- bcSeralRun(ccrep, sieveThresh = 2L)
+
+  ## the event's patch metrics on those maps, for a reporting layer named NDTBEC (which also writes SeralTable.csv)
+  ndt <- sf::st_as_sf(terra::as.polygons(terra::ext(rtm), crs = "EPSG:3400"))
+  ndt$NDTBEC <- "NDT3_SBS"
+  attr(ndt, "field") <- "NDTBEC"
+  root <- dirname(r$out)
+  sim <- SpaDES.core::simInit(
+    paths = list(outputPath = r$out, cachePath = file.path(root, "cache"), inputPath = file.path(root, "in")),
+    objects = list(studyAreaReporting = terra::as.polygons(terra::ext(rtm), crs = "EPSG:3400"),
+                   reportingPolygons = list(NDTBEC = ndt))
+  )
+  r$mod$flm <- file.path(root, "flammableMap.tif")
+  terra::writeRaster(terra::rast(rtm, vals = 1L), r$mod$flm)
+  pm <- moduleFn("patchMetricsSeralBC", r$mod)
+  e <- environment(pm)
+  e$Cache <- function(FUN, ..., .cacheExtra = NULL) FUN(...)
+  build <- moduleFn(".buildRepDataset", r$mod)
+  environment(build)$.summarizeRepDataset <- moduleFn(".summarizeRepDataset", r$mod)
+  e$.buildRepDataset <- build
+  e$.writeNrvSummaryCSVs <- moduleFn(".writeNrvSummaryCSVs", r$mod)
+
+  expect_no_error(suppressMessages(pm(sim)))
+  expect_equal(unique(r$mod$sspm_NDTBEC_CC$time), 0)
+  expect_equal(unique(r$mod$sspm_NDTBEC$time), 1000)
+  seral <- utils::read.csv(file.path(r$out, "SeralTable.csv"))
+  expect_setequal(seral$class, c("early", "mid"))
+
+  ## nrvtools' own parser on the labels it builds from the maps' paths
+  ssm <- unname(c(r$mod$ssm0, r$mod$ssm))
+  lbl <- paste0(basename(dirname(ssm)), ".", tools::file_path_sans_ext(basename(ssm)), "_NDT3_SBS")
+  expect_identical(nrvtools:::.parse_metric_labels(lbl),
+                   list(rep = c(1L, 1L), time = c(0L, 1000L), poly = c("NDT3_SBS", "NDT3_SBS")))
 })

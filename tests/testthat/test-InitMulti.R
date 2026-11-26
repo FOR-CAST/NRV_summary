@@ -727,11 +727,12 @@ test_that("bc's current-condition seral map is the first; the replicates' of yea
   pgm <- file.path("o", c("rep01", "rep01", "rep02", "rep01", "rep02"),
                    c("pixelGroupMap_year000.tif", "pixelGroupMap_year000.tif", "pixelGroupMap_year000.tif",
                      "pixelGroupMap_year500.tif", "pixelGroupMap_year500.tif"))
-  ssm <- sub("pixelGroupMap(_year[0-9]+)\\.tif$", "seralStageMap\\1-sieve1.tif", pgm)
+  ssm <- sub("pixelGroupMap(_year[0-9]+)\\.tif$", "seralStageMap-sieve2\\1.tif", pgm) ## as the sieve names them
   expect_identical(split(ssm, pgm), list(cc = ssm[1], reps = ssm[4:5]))
+  expect_identical(moduleFn(".fileYear", new.env())(ssm), c(0L, 0L, 0L, 500L, 500L))
   expect_identical(split(ssm[c(1, 4, 5)], pgm[c(1, 4, 5)]), list(cc = ssm[1], reps = ssm[4:5]))
   ## named, as the sieve's vapply() names them
-  named <- stats::setNames(ssm, sub("-sieve1", "", ssm))
+  named <- stats::setNames(ssm, sub("-sieve2", "", ssm))
   expect_identical(split(named, pgm), list(cc = named[1], reps = named[4:5]))
 })
 

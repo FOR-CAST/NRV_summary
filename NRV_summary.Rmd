@@ -229,7 +229,7 @@ knitr::kable(df_params, format = "html", caption = "List of (ref:NRV-summary) pa
   `"on"` (Ontario NRV metrics) is a stub that only prints a message.
 - `patchDirections` (4): the connectivity of the large patches of the `lw` summaries: 4 joins cells that share an edge (rook), as LandWeb's v2 summaries did; 8 also joins cells that touch at a corner (queen).
   It does not apply to the `lm` and `pm` metrics, which use landscapemetrics' default of 8 (see [Methods](#methods)).
-- `sieveThresh` (`NA`): in the `bc` event, seral-stage patches of fewer pixels than this are merged into a neighbouring patch with `terra::sieve()` before the patch metrics are taken, and the sieved maps take the suffix `-sieve<N>`.
+- `sieveThresh` (`NA`): in the `bc` event, seral-stage patches of fewer pixels than this are merged into a neighbouring patch with `terra::sieve()` before the patch metrics are taken, and the sieved maps are named `seralStageMap-sieve<N>_year<YYYY>.tif`.
   `NA`, the default, or a value below 2 skips sieving: a threshold of 1 merges nothing, and terra stops on it.
 - `stabilityAlpha` (0.05), `stabilityMinChange` (0.10) and `stabilityWindow` (0.5): the significance level of the trend test, the smallest change worth flagging (as a fraction of a series' range in the window), and the last fraction of the NRV years that the `stability` event tests (see [Is the run long enough?](#is-the-run-long-enough)).
 - `autocorrMaxLag` (200): the longest lag, in years, of the `autocorr` event's autocorrelation; the lag used is the largest of this, `summaryInterval` and 50, cut to the number of NRV years less one.
@@ -367,7 +367,7 @@ The `bc` event maps seral stages for British Columbia and then takes their patch
 The seral-stage recipe was ported from a BC Government ArcPy script given to the module's author.
 From each cohort table and pixel-group map (year 0 of the first replicate, and every replicate's summary times), `nrvtools::writeSeralStageMapBC()` assigns each pixel a seral stage (early, mid, mature or old) from the biomass-weighted age of its cohorts, floored to the decade, and its Natural Disturbance Type and biogeoclimatic zone, read from the `ecoregionLayer` reporting polygons.
 In Natural Disturbance Type 4 the age limits also depend on whether a pixel is in the Fir group (Douglas-fir or ponderosa pine with at least half the biomass, or stands led by lodgepole pine or aspen with more than 15% of either) or the Pine group (every other pixel).
-The maps are written as `seralStageMap_year<YYYY>.tif` in each replicate folder, and sieved when `sieveThresh` is 2 or more (`seralStageMap_year<YYYY>-sieve<N>.tif`).
+The maps are written as `seralStageMap_year<YYYY>.tif` in each replicate folder, and sieved when `sieveThresh` is 2 or more (`seralStageMap-sieve<N>_year<YYYY>.tif`).
 For each reporting layer and unit, the event then takes the area of each seral-stage patch, masked by the flammable map, through `nrvtools::calculatePatchMetricsSeral()`; the tables are in `csv/sspm/<layer>/`.
 Its envelope pools every patch of every replicate at each summary time, so `n_reps` in those tables counts patches, not replicates, and the figures carry no caption.
 The year-0 files are always those of year 0 in the first replicate's folder (`_year0000`, or however the year is padded), whatever `simTimes` says.
@@ -553,10 +553,10 @@ Mode 'multi' writes most of its files to `postprocess/`, beside its own `outputP
 ```text
 <outputPath>/                          the replicate folders' parent
   rep01/ ... repNN/                    written by mode 'single'; read here
-    seralStageMap_year<YYYY>[-sieve<N>].tif       bc
+    seralStageMap[-sieve<N>]_year<YYYY>.tif       bc
   _cc/<rep>/{vegTypeMap,standAgeMap,rstTimeSinceFire}_year0000.tif
                                        the urban-masked current condition
-  _cc/<rep>/seralStageMap_year0000[-sieve<N>].tif bc
+  _cc/<rep>/seralStageMap[-sieve<N>]_year0000.tif bc
   NDTBEC.shp, SeralTable.csv           bc
   figures/NRV_summary/standAge_animation.gif      am (figurePath(sim))
 postprocess/                           beside <outputPath>
@@ -742,7 +742,7 @@ Each version was checked on LandWeb's outputs against the one before; `NEWS.md` 
 - **2.0.0.9047** (#16): a cohort file is paired with its pixel-group map by folder and year however its year is padded; on the `cc` figures a unit named "NA" is kept apart from a missing unit.
 - **2.0.0.9100** (#17): the version skips to 9100 to stay clear of the PredictiveEcology fork's numbers; SpaDES.core 3.2.1.9077 is required; replicate folders are named by id inside the module; with `pm` or `bc` in the run, `init` stops if the first replicate's flammable map is not among the files found.
 - **2.0.0.9101**: this manual documents every event, parameter and output, and cites its methods.
-- **2.0.0.9102**: mode 'multi' finds each file by its year however padded, so runs that end before year 1000 or after year 9999 are read; the `bc` current condition leaves out urban land; the `autocorr` event's table comes from `nrvtools::autocorr_summary()` and gains `effectiveSnapshotsFinite`; nrvtools 0.5.2 is required, whose `patchStats()` (the `pm` event) masks the vegetation-type map by the flammable map; `sieveThresh` defaults to `NA`, no sieving; the manual's formulas, methods and citations are corrected.
+- **2.0.0.9102**: mode 'multi' finds each file by its year however padded, so runs that end before year 1000 or after year 9999 are read; the `bc` current condition leaves out urban land; the `autocorr` event's table comes from `nrvtools::autocorr_summary()` and gains `effectiveSnapshotsFinite`; nrvtools 0.5.2 is required, whose `patchStats()` (the `pm` event) masks the vegetation-type map by the flammable map; `sieveThresh` defaults to `NA`, no sieving, and a sieved seral map is named `seralStageMap-sieve<N>_year<YYYY>.tif`, which the patch metrics can read; the manual's formulas, methods and citations are corrected.
 
 ## Getting help
 
