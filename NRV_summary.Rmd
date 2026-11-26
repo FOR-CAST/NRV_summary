@@ -84,7 +84,7 @@ knitr::kable(df_reqd, format = "html", row.names = FALSE,
 
 Most of these minimum versions are those of features the module calls: SpaDES.core's replicate helpers `dirnamesFromSet()` and `repFiles()`, nrvtools' readers and writers of both cohort formats, LandR's `leadingByPixelGroup()` for the annual series, and LandWebUtils' reporting groups.
 The other packages it needs, at any version, are `r paste(otherPkgs, collapse = ", ")`.
-Rendering this manual also needs knitr, bookdown and kableExtra.
+Rendering this manual also needs knitr, bookdown and kableExtra, and xmlparsedata for the event figures of the appendix.
 
 ## How the module works
 
