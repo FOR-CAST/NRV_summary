@@ -305,7 +305,7 @@ test_that("the st figures folder is cleared only when the st event runs", {
 ## with "stale" does not list the parquet ones. `reporting`: the species are reported by group (Spruce, Aspen).
 ## `summaryPeriod`: the module's parameter (the default makes year 0 a summary year, which InitMulti() then checks).
 stDiskSim <- function(events, subregion = "all", studyArea = "SA", cohorts = "qs2", outputsDF = FALSE,
-                      reporting = FALSE, summaryPeriod = c(0L, 1000L), .env = parent.frame()) {
+                      reporting = FALSE, summaryPeriod = c(0L, 1000L), pad = 4L, .env = parent.frame()) {
   root <- withr::local_tempdir(.local_envir = .env)
   crs <- "EPSG:3400"
   rtm <- terra::rast(nrows = 4, ncols = 4, xmin = 0, xmax = 1000, ymin = 0, ymax = 1000, crs = crs)
@@ -320,20 +320,21 @@ stDiskSim <- function(events, subregion = "all", studyArea = "SA", cohorts = "qs
     d <- file.path(root, "mainSim", sprintf("rep%02d", r))
     dir.create(d, recursive = TRUE)
     for (y in c(0L, 1000L)) {
+      yr <- sprintf(paste0("%0", pad, "d"), y) ## the year as the files name it
       sam <- terra::rast(rtm, vals = rep(c(50, 150), 8))
       vtm <- terra::rast(rtm, vals = rep(1:2, 8))
       levels(vtm) <- data.frame(ID = 1:2, code = c("Pice_gla", "Popu_tre"))
-      terra::writeRaster(sam, file.path(d, sprintf("standAgeMap_year%04d.tif", y)))
-      terra::writeRaster(vtm, file.path(d, sprintf("vegTypeMap_year%04d.tif", y)), datatype = "INT1U")
-      terra::writeRaster(terra::rast(rtm, vals = rep(1:2, 8)), file.path(d, sprintf("pixelGroupMap_year%04d.tif", y)))
+      terra::writeRaster(sam, file.path(d, paste0("standAgeMap_year", yr, ".tif")))
+      terra::writeRaster(vtm, file.path(d, paste0("vegTypeMap_year", yr, ".tif")), datatype = "INT1U")
+      terra::writeRaster(terra::rast(rtm, vals = rep(1:2, 8)), file.path(d, paste0("pixelGroupMap_year", yr, ".tif")))
       if (cohorts %in% c("qs2", "both", "stale")) {
-        qs2::qs_save(data.table::copy(qsCd), file.path(d, sprintf("cohortData_year%04d.qs2", y)))
+        qs2::qs_save(data.table::copy(qsCd), file.path(d, paste0("cohortData_year", yr, ".qs2")))
       }
       if (cohorts %in% c("parquet", "both", "stale")) {
         nrvtools::write_cohort_parquet(pqCd, file.path(d, "cohortData"), y)
       }
     }
-    file.create(file.path(d, "flammableMap_year1000.tif"))
+    file.create(file.path(d, paste0("flammableMap_year", sprintf(paste0("%0", pad, "d"), 1000L), ".tif")))
   }
   se <- LandR::sppEquivalencies_CA
   se <- data.table::copy(se[se[["LandR"]] %in% c("Pice_gla", "Popu_tre"), ])
@@ -628,6 +629,22 @@ test_that("st gives the same tables from .qs2 and parquet cohorts", {
   expect_true(all(lengths(qs) > 1L))
   expect_identical(tables("parquet"), qs)
   expect_identical(tables("both"), qs) ## the parquet cohorts are read, at year 0 as at the summary times
+})
+
+test_that("st gives the same tables whatever the padding of the years in the file names", {
+  ## five digits in a run ending at 1000, where simTimes pads to four
+  withr::local_package("SpaDES.core")
+  tables <- function(pad, outputsDF = FALSE) {
+    fx <- stDiskSim("st", pad = pad, outputsDF = outputsDF)
+    suppressWarnings(SpaDES.core::spades(fx$sim, debug = FALSE,
+                                         events = list(NRV_summary = c("init", "postprocess_st"))))
+    csv <- file.path(fx$root, "postprocess", "csv", "st", "SA")
+    lapply(c(st = "st.csv", cc = "st_CC.csv", cmp = "st_nrvComparison.csv"), function(f) readLines(file.path(csv, f)))
+  }
+  four <- tables(4L)
+  expect_true(all(lengths(four) > 1L))
+  expect_identical(tables(5L), four)
+  expect_identical(tables(5L, outputsDF = TRUE), four)
 })
 
 test_that("given an outputsDF, every site reads the .qs2 cohorts it lists, not stale parquet ones beside them", {

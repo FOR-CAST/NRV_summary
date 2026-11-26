@@ -1,110 +1,11 @@
-## The autocorrelation time of the landscape gives the interval at which summary snapshots are independent.
-## Ported from the PE fork (PE#14, PE#16); the checks are opt-in here (`recordAnnualSeries`, the `autocorr` event).
+## The annual landscape series that the `autocorr` event reads: the recorder and the series' labels. Ported from the
+## PE fork (PE#14, PE#16); the checks are opt-in here (`recordAnnualSeries`, the `autocorr` event). The autocorrelation
+## itself is nrvtools::autocorr_summary()'s, tested in nrvtools; the event is tested in test-annual-series.R.
 
 ## the module functions under test, looked up when called (see moduleFn())
-.acf <- function(...) moduleFn(".acf", new.env())(...)
-.autocorrTime <- function(...) moduleFn(".autocorrTime", new.env())(...)
-.firstLagBelow <- function(...) moduleFn(".firstLagBelow", new.env())(...)
-.essAR1 <- function(...) moduleFn(".essAR1", new.env())(...)
-## the module's function needs `nSnapshotsPerRep`; these tests use series that start at `period[1]`, whose count is
-## the one from `period` and `interval`
-.autocorrSummary <- function(tables, period, maxLag, interval,
-                             nSnapshotsPerRep = floor(diff(range(period)) / interval) + 1) {
-  moduleFn(".autocorrSummary", new.env())(tables, period, maxLag, interval, nSnapshotsPerRep = nSnapshotsPerRep)
-}
 .annualSeriesRow <- function(...) moduleFn(".annualSeriesRow", new.env())(...)
 .bindAnnualRows <- function(...) moduleFn(".bindAnnualRows", new.env())(...)
 .annualSeriesLabel <- function(...) moduleFn(".annualSeriesLabel", new.env())(...)
-
-ar1 <- function(phi, n = 20000, seed = 1) {
-  set.seed(seed)
-  as.numeric(stats::arima.sim(list(ar = phi), n = n))
-}
-
-test_that("tau of an AR(1) series with phi = 0.9 is (1 + phi) / (1 - phi) = 19", {
-  tau <- .autocorrTime(.acf(ar1(0.9, n = 2e5), 200))
-  expect_equal(tau, 19, tolerance = 0.1)
-})
-
-test_that("white noise has tau of about 1", {
-  set.seed(2)
-  expect_equal(.autocorrTime(.acf(stats::rnorm(2e5), 200)), 1, tolerance = 0.1)
-})
-
-test_that("the first lag with ACF below 0.1 is where it is, NA when it never is", {
-  expect_identical(.firstLagBelow(c(1, 0.5, 0.2, 0.05, 0)), 3L)
-  expect_identical(.firstLagBelow(c(1, 0.5, 0.4)), NA_integer_)
-})
-
-## reps x years of AR(1) (or other) series, as the summary reads them
-repTables <- function(f, reps = 5, years = 300, seed = 1) {
-  lapply(seq_len(reps), function(r) {
-    set.seed(seed * 100 + r)
-    data.frame(time = seq_len(years), x = f(years))
-  })
-}
-nrv <- c(1, 300)
-
-## 15 reps x 301 NRV years of AR(1) with phi 0.95 (tau 39), as LandWeb's NRV: with each rep centred on its own
-## mean, the estimated tau is about 0.75 of the truth (the sample ACF is biased toward 0 when tau is a sizeable
-## fraction of the series); around the replicates' common mean it is about 0.95. 30 fixed seeds averaged.
-test_that("15 reps x 301 years of AR(1) with phi 0.95 give a mean tau within 15% of 39", {
-  tau <- vapply(1:30, function(seed) {
-    .autocorrSummary(repTables(function(n) as.numeric(stats::arima.sim(list(ar = 0.95), n)), reps = 15,
-                               years = 301, seed = seed), c(1, 301), 200, 50)$fit$tau
-  }, numeric(1))
-  expect_gt(mean(tau) / 39, 0.85)
-  expect_lt(mean(tau) / 39, 1.15)
-})
-
-test_that(".acf centres on the series' own mean unless given a centre and a scale", {
-  set.seed(3)
-  x <- as.numeric(stats::arima.sim(list(ar = 0.7), 200))
-  expect_equal(.acf(x, 20), as.numeric(stats::acf(x, lag.max = 20, plot = FALSE)$acf))
-  ## around a given centre, with a given sum of squares: the lagged products over that sum
-  d <- x - 1
-  expect_equal(.acf(x, 5, centre = 1, scale = 2 * sum(d^2))[3], sum(d[1:198] * d[3:200]) / (2 * sum(d^2)))
-})
-
-test_that("the ACF is pooled around the replicates' common mean", {
-  ## two reps with different levels and no variation inside: around their own means there is nothing to
-  ## correlate, around the common mean each is perfectly persistent
-  tables <- list(data.frame(time = 1:60, x = 0), data.frame(time = 1:60, x = 1))
-  fit <- .autocorrSummary(tables, c(1, 60), 20, 10)$fit
-  expect_gt(fit$phi, 0.9)
-})
-
-test_that("each replicate's ACF is a correlation (1 at lag 0, within [-1, 1]); the pooled one is the pooled estimator", {
-  ## replicates of very different variance around one level: the per-rep curves are scaled by their own sum of squares
-  set.seed(11)
-  sd <- c(1, 5, 0.2)
-  tables <- lapply(sd, function(k) data.frame(time = 1:200, x = k * as.numeric(stats::arima.sim(list(ar = 0.8), 200))))
-  res <- .autocorrSummary(tables, c(1, 200), 30, 10)
-  perRep <- res$acf[res$acf$rep != "pooled", ]
-  expect_equal(perRep$acf[perRep$lag == 0], rep(1, 3))
-  expect_true(all(abs(perRep$acf) <= 1 + 1e-12))
-  ## the pooled curve: summed lagged products over the summed squares, around the common mean
-  x <- lapply(tables, `[[`, "x")
-  m <- mean(unlist(x))
-  pooledAt <- function(k) {
-    sum(vapply(x, function(v) sum((v[seq_len(200 - k)] - m) * (v[seq_len(200 - k) + k] - m)), 0)) /
-      sum(vapply(x, function(v) sum((v - m)^2), 0))
-  }
-  pooled <- res$acf[res$acf$rep == "pooled", ]
-  expect_equal(pooled$acf[pooled$lag %in% 0:5], vapply(0:5, pooledAt, 0))
-  expect_lte(res$fit$rMax, 1)
-  expect_gte(res$fit$rMin, -1)
-})
-
-test_that("a series with fewer than 3 values in a replicate is 'tooFew', not 'constant'", {
-  tables <- list(data.frame(time = 1:100, a = stats::rnorm(100), b = 1, c = stats::rnorm(100)),
-                 data.frame(time = 1:100, a = c(1, 2, rep(NA, 98)), b = 1, c = stats::rnorm(100)))
-  res <- .autocorrSummary(tables, c(1, 100), 20, 10)
-  expect_identical(res$tooFew, "a")
-  expect_identical(res$constant, "b")
-  expect_setequal(res$undefined, c("a", "b"))
-  expect_false(is.na(res$limiting))
-})
 
 test_that("a merged species code is labelled with all of its names", {
   sppEquiv <- data.frame(LandR = c("Pice_mar", "Pice_gla", "Pice_gla", "Betu_pap"),
@@ -114,47 +15,6 @@ test_that("a merged species code is labelled with all of its names", {
   ## the same name twice is said once
   dup <- data.frame(LandR = c("Pice_gla", "Pice_gla"), EN_generic_full = c("Spruce", "Spruce"))
   expect_identical(.annualSeriesLabel("lead_Pice_gla", dup), "Leading: Spruce")
-})
-
-test_that("r at the summary interval is close to phi^interval and its reps bracket it", {
-  tables <- repTables(function(n) as.numeric(stats::arima.sim(list(ar = 0.95), n)), reps = 20, years = 2000)
-  at100 <- .autocorrSummary(tables, c(1, 2000), 200, 100)$fit
-  expect_lt(abs(at100$r - 0.95^100), 0.05)
-  at20 <- .autocorrSummary(tables, c(1, 2000), 200, 20)$fit
-  expect_equal(at20$r, 0.95^20, tolerance = 0.1)
-  expect_lte(at20$rMin, at20$r)
-  expect_gte(at20$rMax, at20$r)
-})
-
-test_that("the effective snapshots follow n (1 - r) / (1 + r), with r clipped to [0, 1)", {
-  expect_equal(.essAR1(10, 0.5), 10 / 3)
-  expect_equal(.essAR1(10, -0.3), 10)
-  expect_lt(.essAR1(10, 1.2), 0.1 * 10)
-})
-
-test_that("the misfit is near 0 for AR(1) and large for an oscillating AR(2) series", {
-  ar1Fit <- .autocorrSummary(repTables(function(n) as.numeric(stats::arima.sim(list(ar = 0.9), n)), years = 2000),
-                             c(1, 2000), 100, 100)$fit
-  osc <- .autocorrSummary(repTables(function(n) as.numeric(stats::arima.sim(list(ar = c(1.4, -0.8)), n)), years = 2000),
-                          c(1, 2000), 100, 100)$fit
-  expect_lt(ar1Fit$ar1Misfit, 0.1)
-  expect_gt(osc$ar1Misfit, 0.3)
-})
-
-test_that("the recommended thin is the ceiling of the largest tau; the Geyer tau is kept; a constant series is NA", {
-  n <- 600
-  tables <- lapply(1:3, function(r) {
-    set.seed(r)
-    data.frame(time = seq_len(n), slow = ar1(0.9, n, r), fast = ar1(0.3, n, 10 + r), constant = 1)
-  })
-  res <- .autocorrSummary(tables, c(1, n), maxLag = 100, interval = 100)
-  fit <- res$fit
-  expect_identical(res$thin, ceiling(max(fit$tau, na.rm = TRUE)))
-  expect_identical(res$limiting, "slow")
-  expect_true(is.na(fit$tau[fit$series == "constant"]))
-  expect_true(all(c("phi", "tau", "ar1Misfit", "r", "rMin", "rMax", "effectiveSnapshots", "tauGeyer") %in% names(fit)))
-  expect_equal(res$nSnapshots, 3 * (floor((n - 1) / 100) + 1))
-  expect_setequal(unique(res$acf$rep), c("1", "2", "3", "pooled"))
 })
 
 test_that("the annual recorder returns one row per call, equal to the same scalars from the maps", {
@@ -231,28 +91,4 @@ test_that("lead_ labels fall back to the species code without EN_generic_full", 
   series <- c("propYoung", "lead_Pice_mar", "lead_Mixed")
   expect_identical(.annualSeriesLabel(series, noFull),
                    c("Proportion of forest young", "Leading: Pice_mar", "Leading: Mixed"))
-})
-
-test_that("tau is finite when the series is shorter than the maximum lag", {
-  ## the NRV years of nrvWindow = 0.3 can be fewer than autocorrMaxLag (200)
-  tables <- repTables(function(n) as.numeric(stats::arima.sim(list(ar = 0.8), n)), reps = 4, years = 60)
-  res <- .autocorrSummary(tables, c(1, 60), maxLag = 200, interval = 50)
-  fit <- res$fit
-  expect_true(all(is.finite(c(fit$phi, fit$tau, fit$tauGeyer, fit$ar1Misfit, fit$r, fit$effectiveSnapshots))))
-  expect_true(is.finite(res$thin))
-  ## no lag beyond the series' length is made up
-  expect_lte(max(res$acf$lag), 59L)
-  ## an interval longer than the series has no correlation to report
-  long <- .autocorrSummary(tables, c(1, 60), maxLag = 200, interval = 100)$fit
-  expect_true(is.na(long$r))
-  expect_true(is.finite(long$tau))
-})
-
-test_that(".autocorrSummary needs the number of snapshots per rep, which no default can give", {
-  ## the summary grid starts at summaryPeriod[1], not at the first NRV year, so `period` and `interval` do not say
-  set.seed(1)
-  tables <- lapply(1:3, function(i) data.frame(time = 1:100, x = stats::rnorm(100)))
-  fn <- moduleFn(".autocorrSummary", new.env())
-  expect_error(fn(tables, c(1, 100), 20, 10), "nSnapshotsPerRep")
-  expect_s3_class(fn(tables, c(1, 100), 20, 10, nSnapshotsPerRep = 10)$fit, "data.frame")
 })

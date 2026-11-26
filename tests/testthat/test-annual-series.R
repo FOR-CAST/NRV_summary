@@ -210,7 +210,7 @@ test_that("no annualSeries.csv: a message, no error, and no stale csv left", {
 
 test_that("no series with a defined autocorrelation time: a message, no thinning, no -Inf", {
   const <- lapply(1:3, function(i) data.frame(time = 1:100, x = 1))
-  expect_no_warning(res <- moduleFn(".autocorrSummary", new.env())(const, c(1, 100), 50, 10, nSnapshotsPerRep = 10))
+  expect_no_warning(res <- nrvtools::autocorr_summary(const, c(1, 100), 50, 10))
   expect_true(is.na(res$thin))
   expect_length(res$limiting, 1L)
   expect_true(is.na(res$limiting))
@@ -230,6 +230,41 @@ test_that("the snapshots counted by the event are the summary times of the NRV y
   run <- multiRun(arTables(3, 601, 0.5), interval = 250L, params = list(nrvWindow = 0.5))
   d <- utils::read.csv(list.files(run$root, "autocorrelation.csv", recursive = TRUE, full.names = TRUE))
   expect_identical(unique(d$nSnapshots), 3L)
+})
+
+test_that("the csv gives both effective snapshot counts, from nrvtools::ess_ar1(), and the snapshot count", {
+  withr::local_package("SpaDES.core")
+  ## summaryPeriod 0-600 every 100: 7 summary times in the NRV years of each of 4 replicates
+  run <- multiRun(arTables(4, 601, 0.99), interval = 100L)
+  d <- utils::read.csv(list.files(run$root, "autocorrelation.csv", recursive = TRUE, full.names = TRUE))
+  nPerRep <- length(moduleFn(".nrvYears", new.env())(c(0L, 600L), 100L, 1))
+  expect_identical(nPerRep, 7L)
+  expect_identical(unique(d$nSnapshots), nPerRep * 4L)
+  expect_equal(d$effectiveSnapshotsFinite, nrvtools::ess_ar1(nPerRep, d$r, 4))
+  expect_equal(d$effectiveSnapshots, nrvtools::ess_ar1(nPerRep, d$r, 4, method = "large_sample"))
+  ## nrvtools::autocorr_summary()'s columns, then the module's
+  expect_identical(names(d), c("series", "phi", "tau", "ar1Misfit", "r", "rMin", "rMax", "effectiveSnapshots",
+                               "effectiveSnapshotsFinite", "tauGeyer", "lagBelow0.1",
+                               "label", "recommendedThin", "summaryInterval", "nSnapshots"))
+  ## the message gives the finite-sample number too
+  expect_match(run$msgs, paste0("about ", signif(d$effectiveSnapshots, 2), " effectively independent snapshots in the ",
+                                "NRV (", signif(d$effectiveSnapshotsFinite, 2), " by the finite-sample formula)"),
+               fixed = TRUE)
+})
+
+test_that("an NRV window that starts between two summary times counts the summary times inside it", {
+  withr::local_package("SpaDES.core")
+  ## summaryPeriod 700-1000 every 50: nrvWindow 0.55 is years 835-1000 (850, 900, 950 and 1000), 0.45 is 865-1000
+  ## (900, 950 and 1000); nrvtools::autocorr_summary() stops on a snapshot outside the NRV years
+  nrvYears <- moduleFn(".nrvYears", new.env())
+  for (w in list(list(nrvWindow = 0.55, n = 4L), list(nrvWindow = 0.45, n = 3L))) {
+    expect_length(nrvYears(c(700L, 1000L), 50L, w$nrvWindow), w$n)
+    run <- multiRun(arTables(3, 1001, 0.9), end = 1000L, interval = 50L,
+                    params = list(summaryPeriod = c(700L, 1000L), nrvWindow = w$nrvWindow))
+    csv <- list.files(run$root, "autocorrelation.csv", recursive = TRUE, full.names = TRUE)
+    expect_length(csv, 1L)
+    expect_identical(unique(utils::read.csv(csv)$nSnapshots), 3L * w$n, info = w$nrvWindow)
+  }
 })
 
 test_that("the event says how many replicates it read and drops a file that does not cover the NRV years", {
@@ -268,10 +303,10 @@ test_that("the event says when the NRV is too short for the autocorrelation time
   withr::local_package("SpaDES.core")
   ## tau about 99 over 601 years: fewer than 20 taus
   slow <- multiRun(arTables(3, 601, 0.98))
-  expect_match(slow$msgs, "lower bounds")
+  expect_match(slow$msgs, "tend to be low")
   ## tau about 2 over 601 years
   fast <- multiRun(arTables(3, 601, 0.3))
-  expect_false(grepl("lower bounds", fast$msgs))
+  expect_false(grepl("tend to be low", fast$msgs))
 })
 
 test_that(".reportingCells keeps the pixels inside a reporting area smaller than the map", {

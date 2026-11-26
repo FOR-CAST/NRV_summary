@@ -34,7 +34,7 @@ touchFiles <- function(files) {
 ## `events`: postprocessEvents (NULL: the parameter's default, lm and pm)
 initMultiSim <- function(root, reps, outputsFiles = NULL, times = c(0, 1000), simTimes = c(0, 1000),
                          summaryPeriod = c(700L, 1000L), timeSeriesTimes = 701:702,
-                         outputsDF = NULL, events = NULL) {
+                         outputsDF = NULL, events = NULL, objects = NULL) {
   sim <- SpaDES.core::simInit(
     times = list(start = times[1], end = times[2]),
     params = list(NRV_summary = c(
@@ -46,7 +46,7 @@ initMultiSim <- function(root, reps, outputsFiles = NULL, times = c(0, 1000), si
     modules = moduleName,
     objects = c(list(reportingPolygons = list(ELF = "placeholder")),
                 if (!is.null(outputsFiles)) list(outputsDF = data.frame(file = outputsFiles)),
-                if (!is.null(outputsDF)) list(outputsDF = outputsDF)),
+                if (!is.null(outputsDF)) list(outputsDF = outputsDF), objects),
     paths = list(modulePath = modulePath, outputPath = file.path(root, "mainSim"),
                  cachePath = file.path(root, "cache"), inputPath = file.path(root, "in"))
   )
@@ -593,4 +593,172 @@ test_that("InitMulti warns of several .qs2 cohort files of one replicate-year, a
   root2 <- withr::local_tempdir()
   touchFiles(expectedRepFiles(file.path(root2, "mainSim", "rep01")))
   expect_false(any(grepl("several .qs2", initWithWarnings(initMultiSim(root2, reps = 1L))$warnings)))
+})
+
+## ---- years padded as mode 'single' pads them, to the digits of the run's last year ----
+
+## the files mode 'single' saves in replicate folder `d` of a run ending at `end`: the maps and .qs2 cohorts of year 0
+## and of the summary times `years`, and the flammable map of the last year, each year padded to `pad` digits (mode
+## 'single' pads to the digits of the last year). The time-since-fire maps are burnSummaries', padded alike.
+singleRepFiles <- function(d, years, end, pad = ceiling(log10(end + 1))) {
+  y <- sprintf(paste0("%0", pad, "d"), as.integer(c(0, years)))
+  c(
+    file.path(d, paste0("cohortData_year", y, ".qs2")),
+    unlist(lapply(c("pixelGroupMap", "standAgeMap", "vegTypeMap", "rstTimeSinceFire"), function(p) {
+      file.path(d, paste0(p, "_year", y, ".tif"))
+    })),
+    file.path(d, paste0("flammableMap_year", sprintf(paste0("%0", pad, "d"), as.integer(end)), ".tif"))
+  )
+}
+
+test_that("a 500-year run (years padded to 3 digits) and a 10000-year run (5 digits) are found", {
+  runs <- list(list(end = 500, years = c(200, 500), pad = 3L), list(end = 10000, years = c(9700, 10000), pad = 5L))
+  for (run in runs) {
+    root <- withr::local_tempdir()
+    reps <- file.path(root, "mainSim", c("rep01", "rep02"))
+    touchFiles(unlist(lapply(reps, singleRepFiles, years = run$years, end = run$end)))
+    y <- function(x) sprintf(paste0("%0", run$pad, "d"), as.integer(x))
+    m <- modOf(runInit(initMultiSim(root, reps = 1:2, times = c(0, run$end), simTimes = c(0, run$end),
+                                    summaryPeriod = as.integer(run$years), timeSeriesTimes = run$years[1] + 1:2)))
+    expect_identical(m$flm, file.path(reps[1], paste0("flammableMap_year", y(run$end), ".tif")), info = run$end)
+    expect_identical(m$fvtm0, file.path(reps[1], paste0("vegTypeMap_year", y(0), ".tif")), info = run$end)
+    expect_identical(m$fsam0, file.path(reps[1], paste0("standAgeMap_year", y(0), ".tif")), info = run$end)
+    expect_identical(m$ftsf0, file.path(reps[1], paste0("rstTimeSinceFire_year", y(0), ".tif")), info = run$end)
+    each <- function(prefix, ext = "tif") {
+      file.path(rep(reps, each = 2L), paste0(prefix, "_year", y(run$years), ".", ext))
+    }
+    expect_identical(m$vtm, each("vegTypeMap"), info = run$end)
+    expect_identical(m$sam, each("standAgeMap"), info = run$end)
+    expect_identical(m$pgm, each("pixelGroupMap"), info = run$end)
+    expect_identical(m$cd, each("cohortData", "qs2"), info = run$end)
+  }
+})
+
+test_that("files padded otherwise than the digits of simTimes' last year are found by their year", {
+  ## a run ending at 600 whose files have four-digit years, as the annual-series fixtures do: simTimes pads to 3
+  root <- withr::local_tempdir()
+  reps <- file.path(root, "mainSim", c("rep01", "rep02"))
+  touchFiles(unlist(lapply(reps, singleRepFiles, years = c(300, 600), end = 600, pad = 4L)))
+  m <- modOf(runInit(initMultiSim(root, reps = 1:2, times = c(0, 600), simTimes = c(0, 600),
+                                  summaryPeriod = c(300L, 600L), timeSeriesTimes = 301:302)))
+  expect_identical(m$flm, file.path(reps[1], "flammableMap_year0600.tif"))
+  expect_identical(m$fvtm0, file.path(reps[1], "vegTypeMap_year0000.tif"))
+  expect_identical(m$fsam0, file.path(reps[1], "standAgeMap_year0000.tif"))
+  expect_identical(m$ftsf0, file.path(reps[1], "rstTimeSinceFire_year0000.tif"))
+})
+
+test_that("LandWeb's four-digit years select the files they did, beside files of the same years padded otherwise", {
+  root <- withr::local_tempdir()
+  rep1 <- file.path(root, "mainSim", "rep01")
+  four <- singleRepFiles(rep1, years = yrs, end = 1000)
+  ## the same years padded to 3 and 5 digits: in any collation one of them sorts before the four-digit name, so the
+  ## first by name is not the four-digit one
+  pad35 <- function(p, y) file.path(rep1, sprintf(c("%s_year%03d.tif", "%s_year%05d.tif"), p, y))
+  other <- c(pad35("vegTypeMap", 0), pad35("standAgeMap", 0), pad35("rstTimeSinceFire", 0), pad35("flammableMap", 1000),
+             pad35("pixelGroupMap", 700))
+  touchFiles(c(four, other))
+  first <- sort(c(file.path(rep1, "vegTypeMap_year0000.tif"), pad35("vegTypeMap", 0)))[1]
+  expect_false(grepl("_year0000\\.", first))
+  m <- modOf(runInit(initMultiSim(root, reps = 1L)))
+  expect_identical(m$flm, file.path(rep1, "flammableMap_year1000.tif"))
+  expect_identical(m$fvtm0, file.path(rep1, "vegTypeMap_year0000.tif"))
+  expect_identical(m$fsam0, file.path(rep1, "standAgeMap_year0000.tif"))
+  expect_identical(m$ftsf0, file.path(rep1, "rstTimeSinceFire_year0000.tif"))
+  ## the expected files: each the four-digit one (a sole other-padded file of a year would be taken instead)
+  repYearFile <- moduleFn(".repYearFile", new.env())
+  found <- c(four, other)
+  for (p in c("pixelGroupMap", "standAgeMap", "vegTypeMap")) {
+    expect_identical(repYearFile(rep1, yrs, p, "tif", found, 4L), file.path(rep1, sprintf("%s_year%04d.tif", p, yrs)))
+  }
+  ## no four-digit file of the year: the first by name of the others
+  expect_identical(repYearFile(rep1, 700, "pixelGroupMap", "tif", other, 4L), sort(pad35("pixelGroupMap", 700))[1])
+  ## without a file of the year: the name padded to padL digits, as mode 'single' names it
+  expect_identical(repYearFile(rep1, 0, "flammableMap", "tif", found, 3L), file.path(rep1, "flammableMap_year000.tif"))
+  expect_identical(repYearFile(rep1, c(0, 1000), "x", "tif"), file.path(rep1, c("x_year0000.tif", "x_year1000.tif")))
+  ## a folder's file is not another folder's, nor a name's another name's
+  expect_identical(repYearFile(file.path(root, "mainSim", "rep02"), 1000, "flammableMap", "tif", found, 4L),
+                   file.path(root, "mainSim", "rep02", "flammableMap_year1000.tif"))
+  expect_identical(repYearFile(rep1, 700, "Map", "tif", found, 4L), file.path(rep1, "Map_year0700.tif"))
+})
+
+test_that("a missing file is reported, named as mode 'single' names it", {
+  root <- withr::local_tempdir()
+  reps <- file.path(root, "mainSim", c("rep01", "rep02"))
+  files <- unlist(lapply(reps, singleRepFiles, years = c(200, 500), end = 500))
+  gone <- file.path(reps[2], "vegTypeMap_year500.tif")
+  touchFiles(setdiff(files, gone))
+  sim <- function() {
+    initMultiSim(root, reps = 1:2, times = c(0, 500), simTimes = c(0, 500), summaryPeriod = c(200L, 500L),
+                 timeSeriesTimes = 201:202)
+  }
+  expect_error(runInit(sim()), paste0("1 simulation files appear to be missing:\n", gone, "$"))
+  ## the first replicate's flammable map, when pm runs
+  touchFiles(gone)
+  file.remove(file.path(reps[1], "flammableMap_year500.tif"))
+  expect_error(runInit(sim()), paste("expected one flammableMap_year500.tif in", reps[1]), fixed = TRUE)
+  ## LandWeb's four-digit years
+  root4 <- withr::local_tempdir()
+  reps4 <- file.path(root4, "mainSim", c("rep01", "rep02"))
+  files4 <- unlist(lapply(reps4, expectedRepFiles))
+  gone4 <- file.path(reps4[2], "vegTypeMap_year0700.tif")
+  touchFiles(setdiff(files4, gone4))
+  expect_error(runInit(initMultiSim(root4, reps = 1:2)),
+               paste0("1 simulation files appear to be missing:\n", gone4, "$"))
+})
+
+test_that("the bc year-0 files are chosen by year from the files found, however padded", {
+  year0 <- moduleFn(".repYear0Files", new.env())
+  rep1 <- file.path(withr::local_tempdir(), "rep01")
+  files <- touchFiles(singleRepFiles(rep1, years = c(200, 500), end = 500))
+  cd <- grep("cohortData", files, value = TRUE)
+  expect_identical(year0(rep1, cd, files, 3L),
+                   list(cohortData = file.path(rep1, "cohortData_year000.qs2"),
+                        pixelGroupMap = file.path(rep1, "pixelGroupMap_year000.tif")))
+  ## padded otherwise than padL
+  expect_identical(year0(rep1, cd, files, 4L), year0(rep1, cd, files, 3L))
+  ## not among the files found: the names padded to padL digits
+  expect_identical(year0(rep1, character(0), character(0), 3L),
+                   list(cohortData = file.path(rep1, "cohortData_year000.qs2"),
+                        pixelGroupMap = file.path(rep1, "pixelGroupMap_year000.tif")))
+})
+
+test_that("bc's current-condition seral map is the first; the replicates' of year 0 are left out, however padded", {
+  split <- moduleFn(".splitSeralMaps", new.env())
+  pgm <- file.path("o", c("rep01", "rep01", "rep02", "rep01", "rep02"),
+                   c("pixelGroupMap_year000.tif", "pixelGroupMap_year000.tif", "pixelGroupMap_year000.tif",
+                     "pixelGroupMap_year500.tif", "pixelGroupMap_year500.tif"))
+  ssm <- sub("pixelGroupMap(_year[0-9]+)\\.tif$", "seralStageMap-sieve2\\1.tif", pgm) ## as the sieve names them
+  expect_identical(split(ssm, pgm), list(cc = ssm[1], reps = ssm[4:5]))
+  expect_identical(moduleFn(".fileYear", new.env())(ssm), c(0L, 0L, 0L, 500L, 500L))
+  expect_identical(split(ssm[c(1, 4, 5)], pgm[c(1, 4, 5)]), list(cc = ssm[1], reps = ssm[4:5]))
+  ## named, as the sieve's vapply() names them
+  named <- stats::setNames(ssm, sub("-sieve2", "", ssm))
+  expect_identical(split(named, pgm), list(cc = named[1], reps = named[4:5]))
+})
+
+test_that("InitMulti masks urban land out of the year-0 maps with LandTypeCC_reporting, and warns without it", {
+  root <- withr::local_tempdir()
+  out <- file.path(root, "mainSim")
+  reps <- file.path(out, c("rep01", "rep02"))
+  touchFiles(unlist(lapply(reps, expectedRepFiles)))
+  rtm <- terra::rast(nrows = 2, ncols = 2, xmin = 0, xmax = 500, ymin = 0, ymax = 500, crs = "EPSG:3400")
+  terra::writeRaster(terra::rast(rtm, vals = 1:4), file.path(reps[1], "vegTypeMap_year0000.tif"), datatype = "INT1U")
+  terra::writeRaster(terra::rast(rtm, vals = c(10L, 20L, 30L, 40L)), file.path(reps[1], "standAgeMap_year0000.tif"),
+                     datatype = "INT2U")
+  ccrep <- terra::rast(rtm, vals = c(1L, 17L, 5L, 17L)) ## cells 2 and 4 urban
+
+  r <- initWithWarnings(initMultiSim(root, reps = 1:2, objects = list(LandTypeCC_reporting = ccrep)))
+  expect_identical(r$m$fvtm0, file.path(out, "_cc", "rep01", "vegTypeMap_year0000.tif"))
+  expect_identical(r$m$fsam0, file.path(out, "_cc", "rep01", "standAgeMap_year0000.tif"))
+  expect_equal(terra::values(terra::rast(r$m$fvtm0), mat = FALSE), c(1, NA, 3, NA))
+  expect_equal(terra::values(terra::rast(r$m$fsam0), mat = FALSE), c(10, NA, 30, NA))
+  ## time since fire is not among the files: its path is kept
+  expect_identical(r$m$ftsf0, file.path(reps[1], "rstTimeSinceFire_year0000.tif"))
+
+  root2 <- withr::local_tempdir()
+  touchFiles(unlist(lapply(file.path(root2, "mainSim", c("rep01", "rep02")), expectedRepFiles)))
+  expect_warning(
+    SpaDES.core::spades(initMultiSim(root2, reps = 1:2), events = list(NRV_summary = "init"), debug = FALSE),
+    "`LandTypeCC_reporting` is absent", fixed = TRUE
+  )
 })

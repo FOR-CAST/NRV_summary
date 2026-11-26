@@ -7,7 +7,7 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9101"),
+  version = list(NRV_summary = "2.0.0.9102"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -41,7 +41,9 @@ defineModule(sim, list(
     ## axes; the plot functions take captions.
     ## 0.4.0, not 0.3.4.9003: plot_nrv_envelope(type = "lines", reps_df =), for `envelopeStyle = "lines"`.
     ## 0.5.0, not 0.4.0: read_cohort_data() reads the cohortData of either format, .qs2 or parquet (#1).
-    "FOR-CAST/nrvtools (>= 0.5.0)",
+    ## 0.5.2, not 0.5.0: patchStats() (the pm event) masks the vegetation-type map by the flammable map, as it does the
+    ## stand-age map.
+    "FOR-CAST/nrvtools (>= 0.5.2)",
     "PredictiveEcology/pemisc@development (>= 0.0.4.9016)",
     ## 3.2.1.9077, not 3.2.1.9057: InitMulti keeps the names dirnamesFromSet() gives its result, the
     ## replicate ids ("rep01" is named "1"; PredictiveEcology/SpaDES.core#543), in mod$allReps and mod$rep1Dir,
@@ -90,8 +92,10 @@ defineModule(sim, list(
                           "`8` = queen / 8-connected. NOTE: v2 was fixed at 4-connectivity;",
                           "exposing 8 (queen) is a departure from v2.")),
     defineParameter("mixedType", "integer", 2L,
-                    desc = paste("How to define mixed stands: `0L` for none; `1L` for any species admixture;",
-                                 "`2L` for deciduous > conifer. See `LandR::vegTypeMapGenerator`.")),
+                    desc = paste("How to define mixed stands: `0L` for none (the largest species leads);",
+                                 "`1L` for mixed when no species holds `vegLeadingProportion` of the biomass;",
+                                 "`2L` for mixed when broadleaves hold more than `1 - vegLeadingProportion`",
+                                 "and less than `vegLeadingProportion` of it. See `LandR::vegTypeMapGenerator`.")),
     defineParameter("mode", "character", "single", NA, NA,
                     paste("use 'single' to run part of a simulation;",
                           "use 'multi' to run as part of postprocessing multiple runs.")),
@@ -178,9 +182,10 @@ defineModule(sim, list(
                     paste("(mode = 'multi') the ids of the replicates to summarise, not their number: e.g. `1:15`",
                           "for folders `rep01` to `rep15` (or `rep1` to `rep15`). `init` stops if fewer replicates",
                           "are found than it lists.")),
-    defineParameter("sieveThresh", "integer", 1L, NA_integer_, NA_integer_,
+    defineParameter("sieveThresh", "integer", NA_integer_, NA_integer_, NA_integer_,
                     paste("threshold patch size (number of pixels) to use with `terra::sieve`",
-                          "when creating seral stage maps")),
+                          "when creating seral stage maps. NA (the default) or a value below 2 skips sieving:",
+                          "a threshold of 1 merges nothing, and terra stops on it")),
     defineParameter("simTimes", "numeric", c(NA, NA), NA, NA,
                     paste("(mode = 'multi') the start and end years of the replicate runs, which name their year-0 and",
                           "last-year files. NA (the default) takes the start and end of this simulation",
@@ -206,7 +211,11 @@ defineModule(sim, list(
                     paste("simulation times for which to build time series animations; the default is",
                           "start + 601:650 when the run is that long, otherwise the last 50 years of the run.")),
     defineParameter("vegLeadingProportion", "numeric", LandR::leadingSpeciesProp(), 0.0, 1.0,
-                    paste("A number that defines whether a species is leading for a given pixel.",
+                    paste("A proportion of a pixel's biomass that decides leading species and mixed stands. With",
+                          "`mixedType = 2` (default) a pixel is mixed when broadleaves hold more than",
+                          "`1 - vegLeadingProportion` and less than `vegLeadingProportion` of its biomass, and",
+                          "otherwise is led by its largest species, whatever its share; with `mixedType = 1`",
+                          "it is the share a species needs to lead.",
                           "Default: `LandR::leadingSpeciesProp()`, i.e. option `LandR.leadingSpeciesProp`,",
                           "which takes `LandR.mixedwoodProp` (0.75) unless set. Setting it in one place",
                           "moves every module and LandR function together.")),
@@ -607,48 +616,50 @@ InitMulti <- function(sim) {
   mod$rep1Dir <- repDirs[1]
   ## simTimes unset (NA): take the run's start and end. A given simTimes is kept as is.
   P(sim)$simTimes <- SpaDES.core::resolveSimYears(P(sim)$simTimes, sim)
+  ## the year in a name built here has the digits of the last year, as mode 'single' pads it; a file found is chosen by
+  ## its folder and year, however its year is padded (see .repYearFile())
   padL <- ceiling(log10(P(sim)$simTimes[2] + 1))
-  padYearStart <- paddedFloatToChar(P(sim)$simTimes[1], padL = padL)
-  padYearEnd <- paddedFloatToChar(P(sim)$simTimes[2], padL = padL)
+  repYearFile <- function(d, year, prefix) .repYearFile(d, year, prefix, "tif", files, padL)
 
   ## all reps have same flammable map. Only the pm and bc events read it: when either will run, it is taken from the
   ## files found (repFiles() stops, naming it, when the first replicate's folder has none), else its path is built
   ## (repFiles() without files). Unnamed, as the other paths are.
   readsFlm <- any(c("pm", "bc") %in% tolower(P(sim)$postprocessEvents))
-  mod$flm <- unname(SpaDES.core::repFiles(mod$rep1Dir, paste0("flammableMap_year", padYearEnd, ".tif"),
-                                          if (readsFlm) files))
+  flmName <- basename(repYearFile(mod$rep1Dir, P(sim)$simTimes[2], "flammableMap"))
+  mod$flm <- unname(SpaDES.core::repFiles(mod$rep1Dir, flmName, if (readsFlm) files))
 
   ## current-conditions reference = the sim's saved year-0 state (the deterministic
   ## initial condition, identical across reps -- read from rep 1). Read directly so
   ## the CC snapshot needs no regeneration from speciesLayers / no "CC SAM" input,
   ## and no write-before-read ordering between the landscape + patch metric events.
-  ## These three are built, not taken from the files found as the flammable map is: the urban mask below (.maskCC())
-  ## and the per-class figures (.byClassFigTasks()) allow a missing one, and time since fire is optional (see below).
-  mod$fvtm0 <- file.path(mod$rep1Dir, paste0("vegTypeMap_year", padYearStart, ".tif"))
-  mod$fsam0 <- file.path(mod$rep1Dir, paste0("standAgeMap_year", padYearStart, ".tif"))
+  ## These three are chosen from the files found when they are among them, and are built otherwise, not required as
+  ## the flammable map is: the urban mask below (.maskCC()) and the per-class figures (.byClassFigTasks()) allow a
+  ## missing one, and time since fire is optional (see below).
+  mod$fvtm0 <- repYearFile(mod$rep1Dir, P(sim)$simTimes[1], "vegTypeMap")
+  mod$fsam0 <- repYearFile(mod$rep1Dir, P(sim)$simTimes[1], "standAgeMap")
   ## current-conditions time-since-fire (burnSummaries output, which an outputsDF need not list); age basis for the
   ## LandWeb summaries (the lw event).
-  mod$ftsf0 <- file.path(mod$rep1Dir, paste0("rstTimeSinceFire_year", padYearStart, ".tif"))
+  mod$ftsf0 <- repYearFile(mod$rep1Dir, P(sim)$simTimes[1], "rstTimeSinceFire")
 
   ## The year-0 rasters are the SIMULATION's initial state, in which urban has been imputed to its
   ## nearest forest type so the run approximates a pre-industrial landscape. Reporting current
   ## condition from them unchanged would count that imputed forest as real forest today. Re-remove
   ## urban here, using the reporting copy of the current-conditions land cover.
-  ## Urban is the ONLY class that differs between the sim and reporting layers: water/barren/
-  ## snow-ice are sent to NA by `remapDT` on both sides, so nothing else needs correcting.
+  ## Urban is the only class the sim turns into forest against both layers: LandWeb's remap
+  ## (LandWebUtils::lcc2020_remap_table()) sends every urban pixel to 99, imputed to forest; its other 99s
+  ## are pixels one of the layers calls forest. Water/barren/snow-ice are NA in the sim's layer, keep
+  ## their codes in the reporting copy and carry no cohorts, so nothing else needs correcting.
   ## The NRV envelope (built from the replicates) is deliberately NOT masked -- the envelope is the
   ## pre-industrial landscape, the marker is today's, and that difference IS the land-conversion
   ## component of the departure.
   fvtm0src <- mod$fvtm0 ## the species-level year-0 map, before the urban mask (see below)
-  urbanMask <- NULL
-  ccrep <- sim$LandTypeCC_reporting
-  if (is.null(ccrep)) {
+  urbanMask <- .urbanMask(sim$LandTypeCC_reporting)
+  if (is.null(urbanMask)) {
     ## do not fail silently: a missing layer here would look identical to "no urban present".
     warning("NRV_summary: `LandTypeCC_reporting` is absent; current-condition metrics will ",
             "report simulation year-0 state, counting urban imputed to forest as current forest.",
             call. = FALSE)
   } else {
-    urbanMask <- terra::ifel(ccrep == 17L, NA, 1L) ## 17 = urban (LCC 2020)
     ccDir <- checkPath(file.path(outputPath(sim), "_cc"), create = TRUE)
     mod$fvtm0 <- .maskCC(mod$fvtm0, urbanMask, ccDir)
     mod$fsam0 <- .maskCC(mod$fsam0, urbanMask, ccDir)
@@ -673,13 +684,14 @@ InitMulti <- function(sim) {
             "read and the .qs2 left as it is:\n", paste(utils::head(mod$cohortFiles[both], 3L), collapse = "\n"),
             if (sum(both) > 3L) "\n...", call. = FALSE)
   }
-  ## several .qs2 files of one folder and year (padded differently): .cohortFile() takes the one named
-  ## `cohortData_year<YYYY>.qs2` if there is one, else the first by name
+  ## several .qs2 files of one folder and year (padded differently): .cohortFile() takes the one padded as mode
+  ## 'single' pads it (`padL` digits) if there is one, else the first by name
   qsFiles <- mod$cohortFiles[!isPart]
   dupQs <- qsFiles[repYear(qsFiles) %in% repYear(qsFiles)[duplicated(repYear(qsFiles))]]
   if (length(dupQs)) {
     yr <- .fileYear(dupQs)
-    used <- unique(.cohortFile(.repFolder(dupQs), yr, sprintf("cohortData_year%04d.qs2", yr), files = mod$cohortFiles))
+    used <- unique(.cohortFile(.repFolder(dupQs), yr, .yearFileName("cohortData", yr, "qs2", padL),
+                               files = mod$cohortFiles))
     warning("NRV_summary: ", length(used), " replicate-year(s) with several .qs2 cohortData files:\n",
             paste(utils::head(dupQs, 6L), collapse = "\n"), if (length(dupQs) > 6L) "\n...",
             "\nused:\n", paste(utils::head(used, 3L), collapse = "\n"), if (length(used) > 3L) "\n...", call. = FALSE)
@@ -697,14 +709,16 @@ InitMulti <- function(sim) {
   filesUserHas <- c(cdpgm, mod$allouts2)
 
   dirsExpected <- repDirs
+  ## each the file found of the folder and year, however its year is padded, else (missing) the name mode 'single' gives
+  ## it (see .repYearFile())
   filesExpected <- as.character(sapply(dirsExpected, function(d) {
+    yrs <- mod$analysesOutputsTimes
     c(
       ## either format: the part file when one was found, else the .qs2 (see .cohortFile())
-      .cohortFile(d, mod$analysesOutputsTimes, sprintf("cohortData_year%04d.qs2", mod$analysesOutputsTimes),
-                  files = mod$cohortFiles),
-      file.path(d, sprintf("pixelGroupMap_year%04d.tif", mod$analysesOutputsTimes)),
-      file.path(d, sprintf("standAgeMap_year%04d.tif", mod$analysesOutputsTimes)),
-      file.path(d, sprintf("vegTypeMap_year%04d.tif", mod$analysesOutputsTimes))
+      .cohortFile(d, yrs, .yearFileName("cohortData", yrs, "qs2", padL), files = mod$cohortFiles),
+      repYearFile(d, yrs, "pixelGroupMap"),
+      repYearFile(d, yrs, "standAgeMap"),
+      repYearFile(d, yrs, "vegTypeMap")
     )
   }))
 
@@ -797,6 +811,17 @@ InitMulti <- function(sim) {
 ## `outputPath(sim)` (= outputs/<studyArea>/mainSim). `figures/` and `csv/` mirror the same
 ## `<kind>/<layer>/` sub-structure (kind = lm/pm/boxplots/histograms/...; layer = the full
 ## reporting-polygon-layer name), so a human can find a figure and its data side by side.
+
+## The urban mask of the current condition: NA where `LandTypeCC_reporting` (`ccrep`) is urban (class 17 of the 2020
+## Land Cover of Canada), 1 elsewhere; NULL without the layer, of which InitMulti() warns. InitMulti() masks the year-0
+## maps by it, and the bc event its year-0 seral map (see .maskCC()).
+.urbanMask <- function(ccrep) {
+  if (is.null(ccrep)) {
+    return(NULL)
+  }
+  terra::ifel(ccrep == 17L, NA, 1L)
+}
+
 ## Mask a year-0 current-condition raster by `urbanMask` (NA where urban) and write it under
 ## `ccDir`, returning the new path. Returns the ORIGINAL path unchanged if the source is missing or
 ## the geometries do not line up, so a grid mismatch degrades to "uncorrected" loudly rather than
@@ -1118,33 +1143,61 @@ InitMulti <- function(sim) {
 ## the .qs2 is `<repDir>/<qs2>`, named as the caller names it. With `files` (mod$cohortFiles, the cohort files
 ## InitMulti() found), the .qs2 is the one of `files` in the same replicate folder and of the same year, however the
 ## year is padded (`cohortData_year700.qs2` goes with `pixelGroupMap_year0700.tif`): the one named as the caller
-## names it if it is among them, else the first by name (InitMulti() warns when there are several). Only .qs2 files
-## are matched this way; a part file is always the exact `year=<YYYY>` path, and counts only if it is one of `files`:
-## given an outputsDF, only a part file it lists. Where `files` has no .qs2 of that folder and year,
-## the answer is `<repDir>/<qs2>`. Every caller in mode 'multi' passes `files`, so all choose the same file of a
-## replicate-year.
+## names it if it is among them, else the first by name (InitMulti() warns when there are several; see
+## .pickRepYearFile()). Only .qs2 files are matched this way; a part file is always the exact `year=<YYYY>` path, and
+## counts only if it is one of `files`: given an outputsDF, only a part file it lists. Where `files` has no .qs2 of
+## that folder and year, the answer is `<repDir>/<qs2>`. Every caller in mode 'multi' passes `files`, so all choose
+## the same file of a replicate-year.
 .cohortFile <- function(repDir, year, qs2, files = NULL) {
   pq <- .cohortPartPath(repDir, year)
   found <- file.exists(pq) & (is.null(files) | pq %in% files)
   out <- file.path(repDir, qs2)
   if (!is.null(files) && length(files)) {
-    qs2Files <- files[.isCohortQs2(files)]
-    fRep <- .repFolder(qs2Files)
-    fYear <- .fileYear(qs2Files)
-    n <- max(length(repDir), length(year), length(qs2))
-    repDir <- rep_len(repDir, n)
-    year <- rep_len(as.integer(year), n)
-    out <- rep_len(out, n)
-    for (i in seq_len(n)) {
-      hit <- qs2Files[fRep == repDir[i] & fYear %in% year[i]]
-      if (length(hit) && !out[i] %in% hit) {
-        out[i] <- sort(hit)[1]
-      }
-    }
-    found <- rep_len(found, n)
-    pq <- rep_len(pq, n)
+    out <- .pickRepYearFile(out, repDir, year, files[.isCohortQs2(files)])
+    found <- rep_len(found, length(out))
+    pq <- rep_len(pq, length(out))
   }
   as.character(ifelse(found, pq, out)) ## character(0) for no files, not logical(0)
+}
+
+## For each path `built[i]`, of replicate folder `repDir[i]` and year `year[i]`, the one of `candidates` in that
+## folder and of that year (see .repFolder() and .fileYear()), however the year is padded: `built[i]` itself if it
+## is among them, else the first by name; `built[i]` where there is none. The rule by which .cohortFile() and
+## .repYearFile() choose the file of a replicate-year.
+.pickRepYearFile <- function(built, repDir, year, candidates) {
+  n <- max(length(built), length(repDir), length(year))
+  out <- rep_len(built, n)
+  repDir <- rep_len(repDir, n)
+  year <- rep_len(as.integer(year), n)
+  cRep <- .repFolder(candidates)
+  cYear <- .fileYear(candidates)
+  for (i in seq_len(n)) {
+    hit <- candidates[cRep == repDir[i] & cYear %in% year[i]]
+    if (length(hit) && !out[i] %in% hit) {
+      out[i] <- sort(hit)[1]
+    }
+  }
+  out
+}
+
+## `<prefix>_year<YYYY>.<ext>`, the year padded to `padL` digits, as mode 'single' names its files (`padL` is the
+## number of digits of the run's last year)
+.yearFileName <- function(prefix, year, ext, padL) {
+  paste0(prefix, "_year", SpaDES.core::paddedFloatToChar(year, padL = padL), ".", ext)
+}
+
+## The file `<prefix>_year<digits>.<ext>` of replicate folder `repDir` and year `year`, chosen from `files` (the files
+## InitMulti() found) by its folder and year, however the year is padded: of several, the one padded to `padL`
+## digits, else the first by name (see .pickRepYearFile()). Where `files` has none,
+## `<repDir>/<prefix>_year<YYYY>.<ext>` with the year padded to `padL` digits (see .yearFileName()), so that a
+## message about a missing file names it as mode 'single' would have.
+.repYearFile <- function(repDir, year, prefix, ext, files = NULL, padL = 4L) {
+  built <- file.path(repDir, .yearFileName(prefix, year, ext, padL))
+  if (!length(files)) {
+    return(built)
+  }
+  isType <- grepl(paste0("^", prefix, "_year[0-9]+\\.", ext, "$"), basename(files))
+  .pickRepYearFile(built, repDir, year, files[isType])
 }
 
 ## `files`, each .qs2 cohort path followed by the part file that would also do ("<qs2> or <part file>"): what a
@@ -1198,13 +1251,22 @@ InitMulti <- function(sim) {
 }
 
 ## the year-0 cohortData and pixelGroupMap paths in the first replicate's folder. The cohort file (either format) is
-## chosen from `cohortFiles`, the cohort files InitMulti() found (see .cohortFile()). The pixelGroupMap path is built,
-## not taken from the files found: InitMulti() keeps the cohort files, not the whole listing.
-.repYear0Files <- function(rep1Dir, cohortFiles = NULL) {
+## chosen from `cohortFiles`, the cohort files InitMulti() found (see .cohortFile()), and the pixelGroupMap from
+## `files`, the files found (.discoverOutputFiles(), as InitMulti() keeps the cohort files only), each by its year
+## however padded. Names built for files not among them have the year padded to `padL` digits (see .repYearFile()).
+.repYear0Files <- function(rep1Dir, cohortFiles = NULL, files = NULL, padL = 4L) {
   list(
-    cohortData = .cohortFile(rep1Dir, 0, "cohortData_year0000.qs2", files = cohortFiles),
-    pixelGroupMap = file.path(rep1Dir, "pixelGroupMap_year0000.tif")
+    cohortData = .cohortFile(rep1Dir, 0, .yearFileName("cohortData", 0, "qs2", padL), files = cohortFiles),
+    pixelGroupMap = .repYearFile(rep1Dir, 0, "pixelGroupMap", "tif", files, padL)
   )
+}
+
+## The bc event's seral maps, made from the year-0 pixel-group map of the first replicate followed by mod$pgm, in that
+## order (`pgm`): `cc`, the current condition's (the first), and `reps`, the replicates', less those of year 0, which
+## the envelope leaves out. The years are those of the pixel-group maps, which the seral maps pair with by position; a
+## sieved map's name, `seralStageMap-sieve<N>_year<YYYY>.tif`, carries the same year.
+.splitSeralMaps <- function(ssmFiles, pgm) {
+  list(cc = ssmFiles[1L], reps = ssmFiles[-1L][!.fileYear(pgm[-1L]) %in% 0])
 }
 
 ## split a per-replicate map-file vector (`.../rep<NN>/<map>_year<YYYY>.tif`) into a named list by rep.
@@ -1751,7 +1813,8 @@ makeSeralStageMapsBC <- function(sim) {
   sf::st_write(NDTBEC, fNDTBEC, append = FALSE, quiet = TRUE)
   rm(studyAreaReporting, NDTBEC)
 
-  year0 <- .repYear0Files(mod$rep1Dir, mod$cohortFiles)
+  year0 <- .repYear0Files(mod$rep1Dir, mod$cohortFiles, .discoverOutputFiles(sim),
+                          padL = ceiling(log10(P(sim)$simTimes[2] + 1)))
   fcd0 <- .checkCohortFile(year0$cohortData, "cannot make the year-0 seral stage map")
   fpgm0 <- year0$pixelGroupMap
 
@@ -1766,23 +1829,32 @@ makeSeralStageMapsBC <- function(sim) {
 
   ssmFiles <- writeSeralStageMapBC(cd = fcd, pgm = fpgm, ndtbec = fNDTBEC)
 
-  if (!is.na(P(sim)$sieveThresh)) {
+  thr <- P(sim)$sieveThresh
+  if (!is.na(thr) && thr >= 2) {
     ## pass ssm through terra::sieve to merge singletons with neighbouring large patches?
-    ## <https://rspatial.github.io/terra/reference/sieve.html>
+    ## <https://rspatial.github.io/terra/reference/sieve.html>; a threshold below 2 merges nothing (terra stops on it)
     ssmFiles <- vapply(
       ssmFiles,
       function(f) {
-        ## clumps < threshold merged with largest neighbour
-        fs <- .suffix(f, sprintf("-sieve%d", as.integer(P(sim)$sieveThresh))) ## TODO: use round() ??
-        terra::sieve(rast(f), threshold = P(sim)$sieveThresh, filename = fs, overwrite = TRUE)
+        ## clumps < threshold merged with largest neighbour. The suffix goes before the year,
+        ## `seralStageMap-sieve<N>_year<YYYY>.tif`: nrvtools parses the year from `_year<YYYY>_` in the label it
+        ## builds from the file name, and stops on `seralStageMap_year<YYYY>-sieve<N>`. TODO: use round() ??
+        sieved <- sub("_year", sprintf("-sieve%d_year", as.integer(thr)), basename(f), fixed = TRUE)
+        fs <- file.path(dirname(f), sieved)
+        terra::sieve(rast(f), threshold = thr, filename = fs, overwrite = TRUE)
         fs
       },
       character(1)
     )
   }
 
-  mod$ssm0 <- grep("/seralStageMap_year0000.*[.]tif$", ssmFiles, value = TRUE)
-  mod$ssm <- grep("/seralStageMap_year0000.*[.]tif$", ssmFiles, invert = TRUE, value = TRUE)
+  ssm <- .splitSeralMaps(ssmFiles, fpgm)
+  ## the current condition's map without urban land, as InitMulti() masks the other year-0 maps, written beside them
+  ## in `_cc/<rep>/`; not masked without `LandTypeCC_reporting`, of which InitMulti() has warned. The replicates' maps
+  ## are not masked: the envelope has no urban land.
+  urbanMask <- .urbanMask(sim$LandTypeCC_reporting)
+  mod$ssm0 <- if (is.null(urbanMask)) ssm$cc else .maskCC(ssm$cc, urbanMask, file.path(outputPath(sim), "_cc"))
+  mod$ssm <- ssm$reps
 
   return(invisible(sim))
 }
@@ -3452,11 +3524,12 @@ standMetrics <- function(sim) {
   .clearFigDirs(sim, "st")
   sa <- .studyAreaLabel(sim)
   padL <- ceiling(log10(P(sim)$simTimes[2] + 1))
-  padStart <- paddedFloatToChar(P(sim)$simTimes[1], padL = padL)
+  ccYear <- P(sim)$simTimes[1]
   snaps <- .snapshotTable(mod$sam, mod$vtm, mod$pgm, mod$cd)
-  cc <- data.frame(rep = "CC", time = P(sim)$simTimes[1], sam = mod$fsam0, vtm = mod$fvtm0,
-                   pgm = file.path(mod$rep1Dir, paste0("pixelGroupMap_year", padStart, ".tif")),
-                   cd = .cohortFile(mod$rep1Dir, P(sim)$simTimes[1], paste0("cohortData_year", padStart, ".qs2"),
+  ## the first replicate's maps and cohort file of the first year, each by its year however padded (see .repYearFile())
+  cc <- data.frame(rep = "CC", time = ccYear, sam = mod$fsam0, vtm = mod$fvtm0,
+                   pgm = .repYearFile(mod$rep1Dir, ccYear, "pixelGroupMap", "tif", .discoverOutputFiles(sim), padL),
+                   cd = .cohortFile(mod$rep1Dir, ccYear, .yearFileName("cohortData", ccYear, "qs2", padL),
                                     files = mod$cohortFiles))
   .checkCohortFile(cc$cd, "cannot take the stand-level measures of the current condition")
   cells <- NULL
@@ -3690,135 +3763,6 @@ saveAnnualSeries <- function(sim) {
   registerOutputs(f, sim)
 }
 
-## The autocorrelation function of `x` (an annual series) at lags 0 to `maxLag` (NA beyond the series' length):
-## the lagged products of the deviations from `centre` (default: the series' own mean) over `scale` (default: the
-## series' own sum of squared deviations). All NA for a constant series. `.autocorrSummary()` gives the centre and
-## scale of all replicates, so that their ACFs are those of one process.
-.acf <- function(x, maxLag, centre = NULL, scale = NULL) {
-  x <- x[is.finite(x)]
-  if (length(x) < 3L || (is.null(centre) && stats::sd(x) == 0)) return(rep(NA_real_, maxLag + 1L))
-  d <- x - (if (is.null(centre)) mean(x) else centre)
-  if (is.null(scale)) scale <- sum(d^2)
-  if (!is.finite(scale) || scale <= 0) return(rep(NA_real_, maxLag + 1L))
-  n <- length(x)
-  k <- seq.int(0L, min(maxLag, n - 1L))
-  rho <- vapply(k, function(l) sum(d[seq_len(n - l)] * d[seq_len(n - l) + l]) / scale, numeric(1))
-  c(rho, rep(NA_real_, maxLag + 1L - length(rho)))
-}
-
-## The integrated autocorrelation time of an ACF `rho` (lag 0 first): tau = -1 + 2 * the sum of the pair sums
-## rho[2k] + rho[2k + 1] (Geyer's initial positive sequence: the sum stops before the first non-positive pair
-## sum, and the pair sums are made non-increasing). White noise gives 1, an AR(1) series with coefficient
-## phi gives (1 + phi) / (1 - phi).
-.autocorrTime <- function(rho) {
-  if (anyNA(rho)) return(NA_real_)
-  if (length(rho) %% 2L) rho <- c(rho, 0)
-  pairs <- cummin(rho[c(TRUE, FALSE)] + rho[c(FALSE, TRUE)])
-  n <- which(pairs <= 0)[1L] - 1L
-  if (is.na(n)) n <- length(pairs)
-  max(1, -1 + 2 * sum(pairs[seq_len(n)]))
-}
-
-## The first lag at which the ACF is below `level`; NA if it never is.
-.firstLagBelow <- function(rho, level = 0.1) {
-  k <- which(rho < level)[1L]
-  if (anyNA(rho) || is.na(k)) NA_integer_ else k - 1L
-}
-
-## Effective number of independent samples among `n` samples with lag correlation `r` (AR(1)): n (1 - r) / (1 + r),
-## r clipped to [0, 1).
-.essAR1 <- function(n, r) {
-  r <- min(max(r, 0), 0.999)
-  n * (1 - r) / (1 + r)
-}
-
-## `tables`: per-rep data.frames of the annual series (a `time` column, one column per series); `period`: the NRV
-## years c(from, to); `interval`: `summaryInterval`. The replicates are realisations of one process, so each
-## series' ACF is taken around the mean of all replicates and NRV years, and the variance is pooled over the
-## replicates (a replicate's own mean would pull the sample ACF toward 0, the more so the longer the
-## autocorrelation time is against the series). A short series still biases it toward 0: the estimates are lower
-## bounds, and `nYears` (the shortest replicate's NRV years) says how much to trust them. If the replicates'
-## means differ, the common mean counts that difference as autocorrelation, which errs toward more thinning.
-## Per series:
-## - `phi`: the pooled lag-1 autocorrelation over the NRV years (clipped to [0, 0.999]),
-##   and the autocorrelation time of the AR(1) decay it implies, `tau` = (1 + phi) / (1 - phi) (no curve is fitted);
-## - `ar1Misfit`: the largest absolute difference between the pooled empirical ACF at lags 1 to 50 and phi^lag
-##   (near 0 when the decay is exponential, large for e.g. oscillating series);
-## - `r`, `rMin`, `rMax`: the ACF at lag `interval`, pooled and the lowest and highest rep (each rep's own
-##   correlation, around the common mean);
-## - `effectiveSnapshots`: the snapshots `interval` apart over all reps, times (1 - r) / (1 + r);
-## - `tauGeyer`: Geyer's initial positive sequence estimate, for comparison only (noisy for short series);
-## - `lagBelow0.1`: first lag of the pooled ACF below 0.1.
-## `nSnapshotsPerRep`: the summary times in the NRV years of each rep, `length(.nrvYears())` (required: the summary
-## grid starts at `summaryPeriod[1]`, which `period` and `interval` do not give).
-## `thin` is ceiling(max tau); `limiting` the series with that tau (both NA when no series has a tau); `absent`
-## the series not in every replicate's table (left out) and `undefined` those with no tau: `constant`, or
-## `tooFew` (fewer than 3 values in some replicate's NRV years). `acf` holds
-## the empirical ACF per series, rep and "pooled", for lags 0 to the larger of `maxLag`, `interval` and 50, and
-## `fitted` the phi^lag curves. No lag reaches beyond the shortest rep's NRV years less one (there is no
-## correlation to measure past that): with `nrvWindow` below 1 the NRV can be fewer years than `maxLag`. A lag
-## that is cut away is NA (`r` when `interval` is cut), and the other columns use the lags that remain.
-.autocorrSummary <- function(tables, period, maxLag, interval, nSnapshotsPerRep) {
-  force(nSnapshotsPerRep) ## no default: fail before the work
-  series <- setdiff(Reduce(intersect, lapply(tables, names)), "time")
-  absent <- setdiff(Reduce(union, lapply(tables, names)), c(series, "time"))
-  inPeriod <- lapply(tables, function(d) d[d$time >= period[1L] & d$time <= period[2L], , drop = FALSE])
-  nYears <- min(vapply(inPeriod, nrow, integer(1)))
-  lagMax <- max(1L, min(max(maxLag, interval, 50L), nYears - 1L))
-  nReps <- length(tables)
-  vals <- lapply(series, function(s) lapply(inPeriod, function(d) d[[s]][is.finite(d[[s]])]))
-  names(vals) <- series
-  isConstant <- vapply(vals, function(x) length(unique(unlist(x))) < 2L, logical(1))
-  tooFew <- vapply(vals, function(x) min(lengths(x)) < 3L, logical(1)) & !isConstant
-  ## per series: each rep's ACF is its lagged products over its own sum of squares around the common mean (a
-  ## correlation, 1 at lag 0); the pooled ACF is the summed lagged products over the summed squares
-  perSeries <- lapply(series, function(s) {
-    x <- vals[[s]]
-    m <- mean(unlist(x))
-    ssAll <- sum(unlist(lapply(x, function(v) (v - m)^2)))
-    undefined <- isConstant[[s]] || tooFew[[s]]
-    na <- rep(NA_real_, lagMax + 1L)
-    rhos <- lapply(x, function(v) if (undefined) na else .acf(v, lagMax, centre = m, scale = sum((v - m)^2)))
-    pooledRho <- if (undefined) na else Reduce(`+`, lapply(x, .acf, lagMax, centre = m, scale = ssAll))
-    list(
-      reps = do.call(rbind, lapply(seq_len(nReps), function(i) {
-        data.frame(series = s, rep = as.character(i), lag = seq_along(rhos[[i]]) - 1L, acf = rhos[[i]])
-      })),
-      pooled = data.frame(series = s, rep = "pooled", lag = seq_along(pooledRho) - 1L, acf = pooledRho)
-    )
-  })
-  acfs <- do.call(rbind, lapply(perSeries, `[[`, "reps"))
-  pooledAcf <- do.call(rbind, lapply(perSeries, `[[`, "pooled"))
-  acfAt <- function(d, lag) {
-    v <- d$acf[d$lag == lag]
-    if (length(v)) v else NA_real_
-  }
-  nSnapshots <- nSnapshotsPerRep
-  misfitLags <- seq_len(min(50L, lagMax))
-  fit <- do.call(rbind, lapply(series, function(s) {
-    reps <- acfs[acfs$series == s, , drop = FALSE]
-    pool <- pooledAcf[pooledAcf$series == s, , drop = FALSE]
-    phi <- min(max(acfAt(pool, 1L), 0), 0.999)
-    rInt <- vapply(split(reps, reps$rep), acfAt, numeric(1), lag = interval)
-    r <- acfAt(pool, interval)
-    data.frame(series = s, phi = phi, tau = (1 + phi) / (1 - phi),
-               ar1Misfit = max(abs(pool$acf[pool$lag %in% misfitLags] - phi^misfitLags)),
-               r = r, rMin = if (all(is.na(rInt))) NA_real_ else min(rInt, na.rm = TRUE),
-               rMax = if (all(is.na(rInt))) NA_real_ else max(rInt, na.rm = TRUE),
-               effectiveSnapshots = .essAR1(nSnapshots * length(tables), r),
-               tauGeyer = .autocorrTime(pool$acf), lagBelow0.1 = .firstLagBelow(pool$acf, 0.1))
-  }))
-  fitted <- merge(fit[c("series", "phi")], data.frame(lag = 0:lagMax))
-  fitted$acf <- fitted$phi^fitted$lag
-  hasTau <- any(!is.na(fit$tau))
-  limiting <- if (hasTau) fit$series[which.max(fit$tau)] else NA_character_
-  list(acf = rbind(acfs, pooledAcf), fitted = fitted, fit = fit,
-       thin = if (hasTau) ceiling(max(fit$tau, na.rm = TRUE)) else NA_real_,
-       limiting = limiting, interval = interval, nSnapshots = nSnapshots * length(tables), nYears = nYears,
-       absent = absent, undefined = fit$series[is.na(fit$tau)], constant = series[isConstant],
-       tooFew = series[tooFew])
-}
-
 ## The full names (`sppEquiv`'s EN_generic_full) of species `code`s, NA for a code without one or when `sppEquiv` has
 ## no such column. A code shared by several sppEquiv rows (a merged species) takes all of their names, joined by " / ".
 .sppFullNames <- function(code, sppEquiv = NULL, sppEquivCol = "LandR") {
@@ -3862,7 +3806,9 @@ saveAnnualSeries <- function(sim) {
 
 ## The `postprocess_autocorr` event: autocorrelation.csv (csv/autocorrelation/) and the figure
 ## (figures/autocorrelation/all/). It runs before the plot event, which clears the figure folders of the events
-## it draws, so it clears its own folder here.
+## it draws, so it clears its own folder here. The table is nrvtools::autocorr_summary()'s `fit` over the NRV years,
+## with the summary times in them as the snapshots (.nrvYears(), which lie in .nrvPeriod(): both take the window from
+## .lastFraction()), followed by the module's columns: `label`, `recommendedThin`, `summaryInterval`, `nSnapshots`.
 autocorrSummary <- function(sim) {
   .clearFigDirs(sim, "autocorr")
   files <- mod$annualSeriesFiles
@@ -3891,9 +3837,10 @@ autocorrSummary <- function(sim) {
     return(invisible(sim))
   }
   nReps <- max(length(mod$allReps), length(files))
-  res <- .autocorrSummary(tables, period, P(sim)$autocorrMaxLag, P(sim)$summaryInterval,
-                          nSnapshotsPerRep = length(.nrvYears(P(sim)$summaryPeriod, P(sim)$summaryInterval,
-                                                              P(sim)$nrvWindow)))
+  res <- nrvtools::autocorr_summary(tables, period, max_lag = P(sim)$autocorrMaxLag,
+                                    interval = P(sim)$summaryInterval,
+                                    snapshot_times = .nrvYears(P(sim)$summaryPeriod, P(sim)$summaryInterval,
+                                                               P(sim)$nrvWindow))
   labelOf <- function(x) .annualSeriesLabel(x, sim$sppEquiv, P(sim)$sppEquivCol)
   if (length(res$absent)) {
     message("NRV_summary autocorrelation: left out, not in every replicate's annualSeries.csv: ",
@@ -3930,14 +3877,15 @@ autocorrSummary <- function(sim) {
   } else {
     message("NRV_summary autocorrelation: snapshots ", res$interval, " years apart: correlation r = ",
             signif(lim$r, 2), " (reps ", signif(lim$rMin, 2), "-", signif(lim$rMax, 2), "); about ",
-            signif(lim$effectiveSnapshots, 2), " effectively independent snapshots in the NRV")
+            signif(lim$effectiveSnapshots, 2), " effectively independent snapshots in the NRV (",
+            signif(lim$effectiveSnapshotsFinite, 2), " by the finite-sample formula)")
   }
   message("NRV_summary autocorrelation: autocorrelation time tau = ", signif(lim$tau, 3), " years (series: ",
           lim$label, "); recommended thinning ", res$thin, " years")
   if (res$nYears < 20 * res$thin) {
     message("NRV_summary autocorrelation: the NRV has ", res$nYears, " years, fewer than 20 times the recommended ",
-            "thinning (", res$thin, "); a short series biases the estimates toward no correlation, so they are lower ",
-            "bounds and the thinning may need to be longer")
+            "thinning (", res$thin, "); a short series biases the estimates toward no correlation, so they tend ",
+            "to be low and the thinning may need to be longer")
   }
 
   f_png <- file.path(.ppFigDir(sim, "autocorrelation", "all"), "autocorrelation.png")
