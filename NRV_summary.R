@@ -642,15 +642,13 @@ InitMulti <- function(sim) {
   ## pre-industrial landscape, the marker is today's, and that difference IS the land-conversion
   ## component of the departure.
   fvtm0src <- mod$fvtm0 ## the species-level year-0 map, before the urban mask (see below)
-  urbanMask <- NULL
-  ccrep <- sim$LandTypeCC_reporting
-  if (is.null(ccrep)) {
+  urbanMask <- .urbanMask(sim$LandTypeCC_reporting)
+  if (is.null(urbanMask)) {
     ## do not fail silently: a missing layer here would look identical to "no urban present".
     warning("NRV_summary: `LandTypeCC_reporting` is absent; current-condition metrics will ",
             "report simulation year-0 state, counting urban imputed to forest as current forest.",
             call. = FALSE)
   } else {
-    urbanMask <- terra::ifel(ccrep == 17L, NA, 1L) ## 17 = urban (LCC 2020)
     ccDir <- checkPath(file.path(outputPath(sim), "_cc"), create = TRUE)
     mod$fvtm0 <- .maskCC(mod$fvtm0, urbanMask, ccDir)
     mod$fsam0 <- .maskCC(mod$fsam0, urbanMask, ccDir)
@@ -802,6 +800,17 @@ InitMulti <- function(sim) {
 ## `outputPath(sim)` (= outputs/<studyArea>/mainSim). `figures/` and `csv/` mirror the same
 ## `<kind>/<layer>/` sub-structure (kind = lm/pm/boxplots/histograms/...; layer = the full
 ## reporting-polygon-layer name), so a human can find a figure and its data side by side.
+
+## The urban mask of the current condition: NA where `LandTypeCC_reporting` (`ccrep`) is urban (class 17 of the 2020
+## Land Cover of Canada), 1 elsewhere; NULL without the layer, of which InitMulti() warns. InitMulti() masks the year-0
+## maps by it, and the bc event its year-0 seral map (see .maskCC()).
+.urbanMask <- function(ccrep) {
+  if (is.null(ccrep)) {
+    return(NULL)
+  }
+  terra::ifel(ccrep == 17L, NA, 1L)
+}
+
 ## Mask a year-0 current-condition raster by `urbanMask` (NA where urban) and write it under
 ## `ccDir`, returning the new path. Returns the ORIGINAL path unchanged if the source is missing or
 ## the geometries do not line up, so a grid mismatch degrades to "uncorrected" loudly rather than
@@ -1824,7 +1833,11 @@ makeSeralStageMapsBC <- function(sim) {
   }
 
   ssm <- .splitSeralMaps(ssmFiles, fpgm)
-  mod$ssm0 <- ssm$cc
+  ## the current condition's map without urban land, as InitMulti() masks the other year-0 maps, written beside them
+  ## in `_cc/<rep>/`; not masked without `LandTypeCC_reporting`, of which InitMulti() has warned. The replicates' maps
+  ## are not masked: the envelope has no urban land.
+  urbanMask <- .urbanMask(sim$LandTypeCC_reporting)
+  mod$ssm0 <- if (is.null(urbanMask)) ssm$cc else .maskCC(ssm$cc, urbanMask, file.path(outputPath(sim), "_cc"))
   mod$ssm <- ssm$reps
 
   return(invisible(sim))

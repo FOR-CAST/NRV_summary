@@ -368,7 +368,7 @@ The maps are written as `seralStageMap_year<YYYY>.tif` in each replicate folder,
 For each reporting layer and unit, the event then takes the area of each seral-stage patch, masked by the flammable map, through `nrvtools::calculatePatchMetricsSeral()`; the tables are in `csv/sspm/<layer>/`.
 Its envelope pools every patch of every replicate at each summary time, so `n_reps` in those tables counts patches, not replicates, and the figures carry no caption.
 The year-0 files are always those of year 0 in the first replicate's folder (`_year0000`, or however the year is padded), whatever `simTimes` says.
-The current condition's seral map is built from the first replicate's year-0 cohorts and pixel-group map, which the urban mask does not reach, so it still counts urban land as forest (a known limitation).
+The current condition's seral map is built from the first replicate's year-0 cohorts and pixel-group map; with `LandTypeCC_reporting`, its urban pixels are then masked out, as in the other year-0 maps (see [The current condition](#the-current-condition)).
 For a reporting layer named `NDTBEC`, it also writes `SeralTable.csv` in `outputPath(sim)`: the smallest, mean and largest percentage of each polygon's area in each seral stage over the summary times.
 The cropped polygons are written as `NDTBEC.shp` in `outputPath(sim)`.
 
@@ -470,7 +470,7 @@ Of the summaries, the year-0 stand-age map enters the current condition of the `
 The simulation imputes urban pixels to their nearest forest type, so the replicates approximate a landscape without urban land.
 Reported unchanged, year 0 would count that imputed forest as forest today.
 In mode 'multi', when `LandTypeCC_reporting` is supplied, `init` masks the urban pixels (class 17) of the 2020 Land Cover of Canada [@NRCan:2022landcover] out of the year-0 vegetation-type, stand-age and time-since-fire maps, and writes the masked copies to `<outputPath>/_cc/<rep>/`; the `lm`, `pm`, `lw` and `st` events read those.
-The `bc` event does not: its year-0 seral map is built from the first replicate's unmasked year-0 cohorts and pixel-group map, so its current condition still counts urban land as forest (a known limitation).
+The `bc` event masks its year-0 seral map the same way, after building it from the first replicate's year-0 cohorts and pixel-group map, and writes it to the same folder.
 Urban is the only class that differs between the simulation's land cover and the reporting copy: water, barren land and snow and ice are missing in both.
 The envelopes are not masked: they describe the landscape without urban land, the current condition describes today's, and the difference is the land-conversion part of the departure.
 A map whose grid differs from `LandTypeCC_reporting` is left unmasked, with a warning.
@@ -542,6 +542,7 @@ Mode 'multi' writes most of its files to `postprocess/`, beside its own `outputP
     seralStageMap_year<YYYY>[-sieve<N>].tif       bc
   _cc/<rep>/{vegTypeMap,standAgeMap,rstTimeSinceFire}_year0000.tif
                                        the urban-masked current condition
+  _cc/<rep>/seralStageMap_year0000[-sieve<N>].tif bc
   NDTBEC.shp, SeralTable.csv           bc
   figures/NRV_summary/standAge_animation.gif      am (figurePath(sim))
 postprocess/                           beside <outputPath>
@@ -726,7 +727,7 @@ Each version was checked on LandWeb's outputs against the one before; `NEWS.md` 
 - **2.0.0.9047** (#16): a cohort file is paired with its pixel-group map by folder and year however its year is padded; on the `cc` figures a unit named "NA" is kept apart from a missing unit.
 - **2.0.0.9100** (#17): the version skips to 9100 to stay clear of the PredictiveEcology fork's numbers; SpaDES.core 3.2.1.9077 is required; replicate folders are named by id inside the module; with `pm` or `bc` in the run, `init` stops if the first replicate's flammable map is not among the files found.
 - **2.0.0.9101**: this manual documents every event, parameter and output, and cites its methods.
-- **2.0.0.9102**: mode 'multi' finds each file by its year however padded, so runs that end before year 1000 or after year 9999 are read.
+- **2.0.0.9102**: mode 'multi' finds each file by its year however padded, so runs that end before year 1000 or after year 9999 are read; the `bc` current condition leaves out urban land.
 
 ## Getting help
 

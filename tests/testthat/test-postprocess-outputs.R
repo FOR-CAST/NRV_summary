@@ -68,3 +68,66 @@ test_that("the masked current-condition maps keep the <rep>/<prefix>_year<YYYY>.
   expect_warning(same <- maskCC(src, other, ccDir), "does not match")
   expect_identical(same, src)
 })
+
+## makeSeralStageMapsBC() on a first replicate with the year-0 and year-1000 files, `LandTypeCC_reporting` `ccrep`. The
+## event needs BC's inputs (ecoregionLayer polygons with Natural Disturbance Types, BC species) and a callr plan, so
+## nrvtools::writeSeralStageMapBC() is replaced by a stub that writes a seral map of four classes on the grid of each
+## pixel-group map, and P() and plan() by stubs too. Returns the module state and the root folder.
+bcSeralRun <- function(ccrep, .env = parent.frame()) {
+  root <- withr::local_tempdir(.local_envir = .env)
+  out <- file.path(root, "mainSim")
+  rep1 <- file.path(out, "rep01")
+  dir.create(rep1, recursive = TRUE)
+  crs <- "EPSG:3400"
+  rtm <- terra::rast(nrows = 2, ncols = 2, xmin = 0, xmax = 500, ymin = 0, ymax = 500, crs = crs)
+  for (y in c("0000", "1000")) {
+    terra::writeRaster(terra::rast(rtm, vals = 1:4), file.path(rep1, paste0("pixelGroupMap_year", y, ".tif")))
+    file.create(file.path(rep1, paste0("cohortData_year", y, ".qs2")))
+  }
+  poly <- terra::as.polygons(terra::ext(rtm), crs = crs)
+  ndt <- sf::st_as_sf(poly)
+  ndt$NDTBEC <- "NDT3_SBS"
+  sim <- SpaDES.core::simInit(
+    paths = list(outputPath = out, cachePath = file.path(root, "cache"), inputPath = file.path(root, "in")),
+    objects = c(list(studyAreaReporting = poly, reportingPolygons = list(ecoregionLayer = ndt)),
+                if (!is.null(ccrep)) list(LandTypeCC_reporting = ccrep))
+  )
+  mod <- new.env()
+  mod$rep1Dir <- c("1" = rep1)
+  mod$cohortFiles <- file.path(rep1, c("cohortData_year0000.qs2", "cohortData_year1000.qs2"))
+  mod$cd <- mod$cohortFiles[2]
+  mod$pgm <- file.path(rep1, "pixelGroupMap_year1000.tif")
+  bc <- moduleFn("makeSeralStageMapsBC", mod)
+  e <- environment(bc)
+  e$P <- function(sim, ...) list(simTimes = c(0, 1000), sieveThresh = 2L)
+  e$plan <- function(...) NULL
+  e$rast <- terra::rast ## attached in the module's environment
+  e$writeSeralStageMapBC <- function(cd, pgm, ndtbec, ssm = sub("pixelGroupMap", "seralStageMap", pgm)) {
+    for (i in seq_along(pgm)) {
+      r <- terra::rast(terra::rast(pgm[i]), vals = c(1L, 1L, 2L, 2L)) ## two clumps of 2, which the sieve keeps
+      levels(r) <- data.frame(id = 1:4, values = c("early", "mid", "mature", "old"))
+      terra::writeRaster(r, ssm[i], datatype = "INT1U", overwrite = TRUE)
+    }
+    ssm
+  }
+  bc(sim)
+  list(mod = mod, rep1 = rep1, out = out, rtm = rtm)
+}
+
+test_that("bc's current-condition seral map leaves out the urban pixels of LandTypeCC_reporting", {
+  withr::local_package("SpaDES.core") ## as at run time: module code calls SpaDES.core unqualified
+  rtm <- terra::rast(nrows = 2, ncols = 2, xmin = 0, xmax = 500, ymin = 0, ymax = 500, crs = "EPSG:3400")
+  ccrep <- terra::rast(rtm, vals = c(1L, 17L, 17L, 5L)) ## cells 2 and 3 urban (17, LCC 2020)
+  r <- bcSeralRun(ccrep)
+  ssm0 <- unname(r$mod$ssm0)
+  expect_identical(ssm0, file.path(r$out, "_cc", "rep01", "seralStageMap_year0000-sieve2.tif"))
+  expect_equal(terra::values(terra::rast(ssm0), mat = FALSE), c(1, NA, NA, 2))
+  ## the replicates' maps are not masked: the envelope has no urban land
+  expect_identical(unname(r$mod$ssm), file.path(r$rep1, "seralStageMap_year1000-sieve2.tif"))
+  expect_false(anyNA(terra::values(terra::rast(r$mod$ssm), mat = FALSE)))
+
+  ## without LandTypeCC_reporting (InitMulti() has warned): the map is not masked
+  r0 <- bcSeralRun(NULL)
+  expect_identical(unname(r0$mod$ssm0), file.path(r0$rep1, "seralStageMap_year0000-sieve2.tif"))
+  expect_false(anyNA(terra::values(terra::rast(r0$mod$ssm0), mat = FALSE)))
+})

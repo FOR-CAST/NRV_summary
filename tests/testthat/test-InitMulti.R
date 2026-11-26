@@ -734,3 +734,30 @@ test_that("bc's current-condition seral map is the first; the replicates' of yea
   named <- stats::setNames(ssm, sub("-sieve1", "", ssm))
   expect_identical(split(named, pgm), list(cc = named[1], reps = named[4:5]))
 })
+
+test_that("InitMulti masks urban land out of the year-0 maps with LandTypeCC_reporting, and warns without it", {
+  root <- withr::local_tempdir()
+  out <- file.path(root, "mainSim")
+  reps <- file.path(out, c("rep01", "rep02"))
+  touchFiles(unlist(lapply(reps, expectedRepFiles)))
+  rtm <- terra::rast(nrows = 2, ncols = 2, xmin = 0, xmax = 500, ymin = 0, ymax = 500, crs = "EPSG:3400")
+  terra::writeRaster(terra::rast(rtm, vals = 1:4), file.path(reps[1], "vegTypeMap_year0000.tif"), datatype = "INT1U")
+  terra::writeRaster(terra::rast(rtm, vals = c(10L, 20L, 30L, 40L)), file.path(reps[1], "standAgeMap_year0000.tif"),
+                     datatype = "INT2U")
+  ccrep <- terra::rast(rtm, vals = c(1L, 17L, 5L, 17L)) ## cells 2 and 4 urban
+
+  r <- initWithWarnings(initMultiSim(root, reps = 1:2, objects = list(LandTypeCC_reporting = ccrep)))
+  expect_identical(r$m$fvtm0, file.path(out, "_cc", "rep01", "vegTypeMap_year0000.tif"))
+  expect_identical(r$m$fsam0, file.path(out, "_cc", "rep01", "standAgeMap_year0000.tif"))
+  expect_equal(terra::values(terra::rast(r$m$fvtm0), mat = FALSE), c(1, NA, 3, NA))
+  expect_equal(terra::values(terra::rast(r$m$fsam0), mat = FALSE), c(10, NA, 30, NA))
+  ## time since fire is not among the files: its path is kept
+  expect_identical(r$m$ftsf0, file.path(reps[1], "rstTimeSinceFire_year0000.tif"))
+
+  root2 <- withr::local_tempdir()
+  touchFiles(unlist(lapply(file.path(root2, "mainSim", c("rep01", "rep02")), expectedRepFiles)))
+  expect_warning(
+    SpaDES.core::spades(initMultiSim(root2, reps = 1:2), events = list(NRV_summary = "init"), debug = FALSE),
+    "`LandTypeCC_reporting` is absent", fixed = TRUE
+  )
+})
