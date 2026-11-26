@@ -7,17 +7,18 @@ defineModule(sim, list(
     person(c("Alex", "M."), "Chubaty", email = "achubaty@for-cast.ca", role = c("aut"))
   ),
   childModules = character(0),
-  version = list(NRV_summary = "2.0.0.9036"),
+  version = list(NRV_summary = "2.1.0"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
   loadOrder = list(after = c("Biomass_core")),
   documentation = list("README.md", "NRV_summary.Rmd"), ## .md produced from .Rmd
   reqdPkgs = list(
-    "data.table", "dplyr", "fs", "future.apply", "future.callr",
+    "arrow", "crayon", "data.table", "dplyr", "fs", "future", "future.apply", "future.callr",
     "ggforce", "ggplot2", "gifski", "googledrive", "landscapemetrics", "qs2",
-    "RColorBrewer", "sf", "terra", "tidyterra",
-    "PredictiveEcology/LandR@development (>= 1.2.0.9024)", ## leadingSpeciesProp()
+    "RColorBrewer", "reproducible", "rlang", "sf", "terra", "tidyterra",
+    ## 1.2.0.9054: leadingByPixelGroup() (the annual series, `recordAnnualSeries`); 1.2.0.9024: leadingSpeciesProp()
+    "PredictiveEcology/LandR@development (>= 1.2.0.9054)",
     "PredictiveEcology/LandWebUtils@development (>= 1.0.3.9045)", ## sppEquiv_groups(), recode_cohorts()
     ## 0.2.10 floor, not 0.2.7: the LandWeb#118 tenure x sub-region crossings mint refCodes of the
     ## form <kind>_<slug> whose subregion names themselves contain "_", and nrvtools < 0.2.10 aborts
@@ -38,11 +39,26 @@ defineModule(sim, list(
     ## 0.3.4.9001, not 0.3.4.9000: summarize_nrv() takes the per-replicate values that the patch
     ## metric envelopes are built from and returns exact quartiles; nrv_metric_info() names the
     ## axes; the plot functions take captions.
-    "FOR-CAST/nrvtools (>= 0.3.4.9003)",
-    "PredictiveEcology/pemisc@development (>= 0.0.4.9011)",
-    "PredictiveEcology/SpaDES.core@development (>= 3.0.3.9000)"
+    ## 0.4.0, not 0.3.4.9003: plot_nrv_envelope(type = "lines", reps_df =), for `envelopeStyle = "lines"`.
+    ## 0.5.0, not 0.4.0: read_cohort_data() reads the cohortData of either format, .qs2 or parquet (#1).
+    ## 0.5.2, not 0.5.0: patchStats() (the pm event) masks the vegetation-type map by the flammable map, as it does the
+    ## stand-age map.
+    "FOR-CAST/nrvtools (>= 0.5.2)",
+    "PredictiveEcology/pemisc@development (>= 0.0.4.9016)",
+    ## 3.2.1.9077, not 3.2.1.9057: InitMulti keeps the names dirnamesFromSet() gives its result, the
+    ## replicate ids ("rep01" is named "1"; PredictiveEcology/SpaDES.core#543), in mod$allReps and mod$rep1Dir,
+    ## and takes the first replicate's flammable map from the files found with repFiles().
+    ## It also calls dirnamesFromSet(..., leafOnly = FALSE) and resolveSimYears() (3.2.1.9057), and relies on
+    ## dirnamesFromSet() keeping zero-padded folders (rep01) as found (from 3.2.1.9038) and on its bare-number
+    ## folder fallback (1/, 2/; PredictiveEcology/NRV_summary#20).
+    "PredictiveEcology/SpaDES.core@development (>= 3.2.1.9077)"
   ),
   parameters = bindrows(
+    defineParameter("autocorrMaxLag", "integer", 200L, 1L, NA,
+                    paste("(mode = 'multi') longest lag (years) of the autocorrelation of the annual landscape",
+                          "series (the `autocorr` event). The longest lag used is the largest of this,",
+                          "`summaryInterval` and 50, cut to the number of NRV years less one when the",
+                          "series is shorter.")),
     defineParameter("ageClasses", "character", LandWebUtils:::.ageClasses, NA, NA,
                     "descriptions/labels for age classes (seral stages)"),
     defineParameter("ageClassCutOffs", "integer", LandWebUtils:::.ageClassCutOffs, NA, NA,
@@ -59,6 +75,16 @@ defineModule(sim, list(
                           "'standAgeMap' warns and uses the cohorts when `sim$standAgeMap` is absent or",
                           "not on a grid aligned with `pixelGroupMap`. The simulated years always come",
                           "from the cohorts.")),
+    defineParameter("cohortDataFormat", "character", "qs2", NA, NA,
+                    paste("(mode = 'single') how `cohortData` is saved at the start, at each summary year",
+                          "and at the end: 'qs2' (the default), as `cohortData_year<YYYY>.qs2`, one file per",
+                          "year, as every run before 2.0.0.9046 saved it; or 'parquet', as an arrow dataset",
+                          "grouped by simulation time, `cohortData/year=<YYYY>/part-0.parquet`",
+                          "(`nrvtools::write_cohort_parquet()`). The .qs2 files are about a quarter of the size",
+                          "and faster to write and read; choose 'parquet' when other software (e.g. Python or",
+                          "DuckDB) is to read the cohorts, or to query them across years with",
+                          "`arrow::open_dataset()`. Mode = 'multi' reads both formats, and takes the parquet",
+                          "file of a replicate and year that has both.")),
     defineParameter("patchDirections", "integer", 4L, 4L, 8L,
                     paste("patch connectivity for the 'lw' (LandWeb summary) large-patch analysis,",
                           "passed to `nrvtools::largePatchCounts()` (via `landscapemetrics::get_patches`):",
@@ -66,17 +92,39 @@ defineModule(sim, list(
                           "`8` = queen / 8-connected. NOTE: v2 was fixed at 4-connectivity;",
                           "exposing 8 (queen) is a departure from v2.")),
     defineParameter("mixedType", "integer", 2L,
-                    desc = paste("How to define mixed stands: `0L` for none; `1L` for any species admixture;",
-                                 "`2L` for deciduous > conifer. See `LandR::vegTypeMapGenerator`.")),
+                    desc = paste("How to define mixed stands: `0L` for none (the largest species leads);",
+                                 "`1L` for mixed when no species holds `vegLeadingProportion` of the biomass;",
+                                 "`2L` for mixed when broadleaves hold more than `1 - vegLeadingProportion`",
+                                 "and less than `vegLeadingProportion` of it. See `LandR::vegTypeMapGenerator`.")),
     defineParameter("mode", "character", "single", NA, NA,
                     paste("use 'single' to run part of a simulation;",
                           "use 'multi' to run as part of postprocessing multiple runs.")),
+    defineParameter("nrvWindow", "numeric", 1, 0, 1,
+                    paste("the NRV is the last fraction of `summaryPeriod` (1, the default, is all of it;",
+                          "0.3 is the last 30%: with the default `summaryPeriod`, years 910-1000). Must be above 0 and",
+                          "at most 1. The LandWeb summaries (lw) and the per-class patch metric pages (pm)",
+                          "pool only the summary times in it, and the envelope figures shade it; their",
+                          "time series still show all of `summaryPeriod`.")),
+    defineParameter("recordAnnualSeries", "logical", FALSE, NA, NA,
+                    paste("(mode = 'single') record a few landscape scalars every year (proportion young and old,",
+                          "mean stand age, total biomass, proportion by leading species) in",
+                          "`annualSeries.csv`. Off by default: it adds an event per simulated year to each replicate.",
+                          "The `autocorr` event of 'multi' mode reads these files to give the autocorrelation time of",
+                          "the landscape, hence how far apart the summary snapshots must be to be independent.")),
     defineParameter("reuseAggregates", "logical", FALSE, NA, NA,
                     paste("(mode = 'multi') if TRUE, reuse a complete per-replicate `_aggregates`",
                           "parquet dataset instead of recomputing it, re-summarizing the surviving",
                           "parquets to regenerate the envelopes/CSVs/figures. Use to iterate on the",
                           "plots/CSVs without re-running the (~hours) landscape-metric aggregation;",
                           "leave FALSE for a fresh run.")),
+    defineParameter("envelopeStyle", "character", "ribbon", NA, NA,
+                    paste("(mode = 'multi') how the lm and pm envelope figures show the replicates:",
+                          "`\"ribbon\"` (default) draws the range of the replicates as a band around their mean;",
+                          "`\"lines\"` draws one thin grey line per replicate under a bold line for their",
+                          "median (`nrvtools::plot_nrv_envelope(type = \"lines\")`). The files keep their",
+                          "names (`<subregion> <metric>_ribbon.png`, `<metric>_ribbon_p<N>.png`). The replicate",
+                          "values are read once per reporting layer; a layer whose aggregates hold none gets ribbons, and a message",
+                          "says so. The boxplot figures and the per-class pages are the same in both styles.")),
     defineParameter("plotWorkers", "integer", 8L, 1L, NA,
                     paste("(mode = 'multi') hard cap on the number of local worker processes used to",
                           "render the postprocess figures in parallel (each figure is an independent",
@@ -90,18 +138,58 @@ defineModule(sim, list(
                           "'am' for the stand-age time-series animation (GIF);",
                           "'bc' for BC seral stage patch metrics;",
                           "'lm' for default landscape metrics;",
-                          "'lw' for default LandWeb summaries",
+                          "'lw' for default LandWeb summaries;",
                           "'pm' for default patch metrics;",
-                          "'on' for ON patch metrics.",
+                          "'on' for Ontario NRV metrics, a stub that does nothing yet but print a message;",
+                          "'st' for stand-level measures (age-class, leading-type and forested shares, total",
+                          "biomass) at each summary time, from the saved snapshots (`st.csv`, `st_CC.csv`,",
+                          "`st_nrvComparison.csv`) and their figures; with 'stability' in the same run they are",
+                          "tested too. With 'lm' in the same run, also the NRV comparison tables,",
+                          "`csv/lm/<layer>/lm_nrvComparison.csv`, which say where the current condition falls",
+                          "against the NRV range.",
+                          "Not in the default: it runs only when asked for.",
+                          "'cc' for one figure per reporting layer and unit with the lm and st metrics against the NRV",
+                          "(`figures/all/<layer>/<unit>.png`), with 'lm' or 'st' in the same run: it draws the",
+                          "comparisons those events record. The stand-level rows go on the figure of every unit",
+                          "named like the study area (`.studyAreaName`); with no such unit they have a figure of",
+                          "their own, `figures/all/<studyArea>/<studyArea>.png`. With 'cc' in the run, the 'lm'",
+                          "event also writes the NRV comparison tables. Not in the default: it runs only when",
+                          "asked for.",
+                          "'autocorr' for the autocorrelation time of the annual landscape series",
+                          "(`annualSeries.csv`, from `recordAnnualSeries = TRUE`), the correlation between",
+                          "snapshots `summaryInterval` years apart and a recommended thinning interval;",
+                          "`autocorrelation.csv` and its figure. Not in the default: it runs only when asked for.",
+                          "'stability' for the check that the run is long enough (is each metric still",
+                          "trending over the end of the NRV period?), `stability.csv` and its figures, and,",
+                          "with 'lm' in the same run, the current-condition overview of each lm layer.",
+                          "Not in the default: it runs only when asked for.",
                           "Any other value is an error ('fd', forest degradation indicators, is not",
                           "implemented).")),
+    defineParameter("stabilityAlpha", "numeric", 0.05, 0, 1,
+                    paste("(mode = 'multi') significance level of the Mann-Kendall trend test in the",
+                          "stability check (the `stability` event).")),
+    defineParameter("stabilityMinChange", "numeric", 0.10, 0, 1,
+                    paste("(mode = 'multi') a series is flagged 'still changing' only if its fitted change",
+                          "across the stability window exceeds this fraction of the series' range",
+                          "(its largest minus smallest value over all reps within the window), as well as",
+                          "being a significant trend.")),
+    defineParameter("stabilityWindow", "numeric", 0.5, 0, 1,
+                    paste("(mode = 'multi') the last fraction of the NRV period (`summaryPeriod` when",
+                          "`nrvWindow` is 1) over which the stability check looks for a directional",
+                          "trend (0.5 = the last half). A run whose metrics are still trending there needs",
+                          "to be longer. It does not define the NRV (see `nrvWindow`).")),
     defineParameter("reps", "integer", 1L:10L, 1L, NA_integer_,
-                    paste("number of replicates/runs per study area.")),
-    defineParameter("sieveThresh", "integer", 1L, NA_integer_, NA_integer_,
+                    paste("(mode = 'multi') the ids of the replicates to summarise, not their number: e.g. `1:15`",
+                          "for folders `rep01` to `rep15` (or `rep1` to `rep15`). `init` stops if fewer replicates",
+                          "are found than it lists.")),
+    defineParameter("sieveThresh", "integer", NA_integer_, NA_integer_, NA_integer_,
                     paste("threshold patch size (number of pixels) to use with `terra::sieve`",
-                          "when creating seral stage maps")),
+                          "when creating seral stage maps. NA (the default) or a value below 2 skips sieving:",
+                          "a threshold of 1 merges nothing, and terra stops on it")),
     defineParameter("simTimes", "numeric", c(NA, NA), NA, NA,
-                    "Simulation start and end times when running in 'multi' mode."),
+                    paste("(mode = 'multi') the start and end years of the replicate runs, which name their year-0 and",
+                          "last-year files. NA (the default) takes the start and end of this simulation",
+                          "(`SpaDES.core::resolveSimYears()`).")),
     defineParameter("sppEquivCol", "character", "LandR", NA, NA,
                     "The column in `sim$sppEquiv` data.table to use as a naming convention"),
     defineParameter("sppEquivColReporting", "character", NA_character_, NA, NA,
@@ -117,10 +205,17 @@ defineModule(sim, list(
                     "simulation time interval at which to take 'snapshots' used for summary analyses."),
     defineParameter("summaryPeriod", "integer", start(sim) + c(700L, 1000L), NA, NA,
                     "lower and upper end of the range of simulation times used for summary analyses."),
-    defineParameter("timeSeriesTimes", "numeric", start(sim) + 601:650, NA, NA,
-                    "simulation times for which to build time steries animations."),
+    defineParameter("timeSeriesTimes", "numeric",
+                    if (end(sim) >= start(sim) + 650) start(sim) + 601:650 else seq(max(start(sim), end(sim) - 49), end(sim)),
+                    NA, NA,
+                    paste("simulation times for which to build time series animations; the default is",
+                          "start + 601:650 when the run is that long, otherwise the last 50 years of the run.")),
     defineParameter("vegLeadingProportion", "numeric", LandR::leadingSpeciesProp(), 0.0, 1.0,
-                    paste("A number that defines whether a species is leading for a given pixel.",
+                    paste("A proportion of a pixel's biomass that decides leading species and mixed stands. With",
+                          "`mixedType = 2` (default) a pixel is mixed when broadleaves hold more than",
+                          "`1 - vegLeadingProportion` and less than `vegLeadingProportion` of its biomass, and",
+                          "otherwise is led by its largest species, whatever its share; with `mixedType = 1`",
+                          "it is the share a species needs to lead.",
                           "Default: `LandR::leadingSpeciesProp()`, i.e. option `LandR.leadingSpeciesProp`,",
                           "which takes `LandR.mixedwoodProp` (0.75) unless set. Setting it in one place",
                           "moves every module and LandR function together.")),
@@ -149,11 +244,15 @@ defineModule(sim, list(
                               "forest. Only urban differs between the sim and reporting layers --",
                               "water/barren/snow are already NA on both sides.")),
     expectsInput("flammableMap", "SpatRaster",
-                 desc = "binary flammability map (required with `type = 'single'`)"),
+                 desc = "binary flammability map (required with `mode = 'single'`)"),
+    expectsInput("outputsDF", "data.frame",
+                 desc = paste("(mode = 'multi', optional) the files the replicate simulations saved, with at least a",
+                              "`file` column (e.g. their `outputs(sim)` row-bound). When absent, the replicate",
+                              "folders under `outputPath(sim)` are listed.")),
     expectsInput("pixelGroupMap", "SpatRaster",
                  desc = "Required in single mode."),
     expectsInput("reportingPolygons", "list",
-                 desc = "reporting polygons for post-processing (required with `type = 'multi'`)"),
+                 desc = "reporting polygons for post-processing (required with `mode = 'multi'`)"),
     expectsInput("speciesLayers", "SpatRaster",
                  desc = "initial percent cover raster layers used for simulation."),
     expectsInput("sppColorVect", "character",
@@ -164,7 +263,7 @@ defineModule(sim, list(
                  desc = paste("(mode = 'multi', with `sppEquivColReporting`) named colours for the",
                               "reporting groups and 'Mixed'. If absent, `LandR::sppColors()` on the",
                               "reporting column.")),
-    expectsInput("sppEquiv", "data.table", NA, NA, NA,
+    expectsInput("sppEquiv", "data.table",
                  desc = "table of species equivalencies. See `LandR::sppEquivalencies_CA`."),
     expectsInput("standAgeMap", "SpatRaster",
                  desc = paste("(mode = 'single') stand age of the current forest (e.g.",
@@ -172,7 +271,9 @@ defineModule(sim, list(
                               "larger grid aligned with it. The year-0 stand-age map, with",
                               "`ccStandAgeSource = 'standAgeMap'`.")),
     expectsInput("studyAreaReporting", "SpatVector",
-                 desc = "Required in single mode.")
+                 desc = paste("the reporting area, required in both modes: in mode 'single' the stand-age maps are",
+                              "masked to it and the annual series counts its pixels; in mode 'multi' the reporting",
+                              "polygons are cut to it and the `st` event counts its pixels."))
   ),
   outputObjects = SpaDES.core:::._outputObjectsDF()
 ))
@@ -180,28 +281,53 @@ defineModule(sim, list(
 ## event types
 #   - type `init` is required for initialization
 
-doEvent.NRV_summary = function(sim, eventTime, eventType) {
+doEvent.NRV_summary <- function(sim, eventTime, eventType) {
   switch(
     eventType,
     init = {
+      ## timeSeriesTimes = NA: the parameter's default (see defineParameter above)
+      if (all(is.na(P(sim)$timeSeriesTimes))) {
+        P(sim)$timeSeriesTimes <- if (end(sim) >= start(sim) + 650) {
+          start(sim) + 601:650
+        } else {
+          seq(max(start(sim), end(sim) - 49), end(sim))
+        }
+      }
+
+      ## No tree species in this study area (sppEquiv has no rows, e.g. a non-forested study area):
+      ## there is no vegetation to summarise, so schedule nothing.
+      if (.noTreeSpecies(sim)) {
+        message(.noTreeMsg)
+        mod$noTreeSpecies <- TRUE
+        return(invisible(sim))
+      }
+
       if (min(P(sim)$summaryPeriod) < start(sim) || max(P(sim)$summaryPeriod) > end(sim)) {
         stop("summaryPeriod values are outside the range of simulation times")
       }
       if (min(P(sim)$timeSeriesTimes) < start(sim) || max(P(sim)$timeSeriesTimes) > end(sim)) {
         stop("timeSeriesTimes values are outside the range of simulation times")
       }
+      .checkNrvWindow(P(sim)$nrvWindow)
+      .checkEnvelopeStyle(P(sim)$envelopeStyle)
+      .checkCohortDataFormat(P(sim)$cohortDataFormat)
+      if (!length(.nrvYears(P(sim)$summaryPeriod, P(sim)$summaryInterval, P(sim)$nrvWindow))) {
+        stop("no summary time falls in the NRV years: with summaryPeriod ",
+             paste(P(sim)$summaryPeriod, collapse = "-"), " and summaryInterval ", P(sim)$summaryInterval,
+             ", nrvWindow ", P(sim)$nrvWindow, " is too small; raise nrvWindow or lower summaryInterval",
+             call. = FALSE)
+      }
+
+      if ("stability" %in% tolower(P(sim)$postprocessEvents)) {
+        .warnStabilityWindow(P(sim)$summaryPeriod, P(sim)$summaryInterval, P(sim)$nrvWindow,
+                             P(sim)$stabilityWindow)
+      }
 
       mod$analysesOutputsTimes <- analysesOutputsTimes(P(sim)$summaryPeriod, P(sim)$summaryInterval)
 
       if (P(sim)$mode == "single") {
-        stopifnot(
-          !is.null(sim$cohortData),
-          !is.null(sim$pixelGroupMap),
-          !is.null(sim$speciesLayers),
-          !is.null(sim$sppColorVect),
-          !is.null(sim$sppEquiv),
-          !is.null(sim$studyAreaReporting)
-        )
+        ## The vegetation inputs are checked at the first map_generators, not here: a module that
+        ## loads after this one may provide them in its own init.
         if (!P(sim)$ccStandAgeSource %in% c("standAgeMap", "cohortData")) {
           stop("ccStandAgeSource must be 'standAgeMap' or 'cohortData'.", call. = FALSE)
         }
@@ -215,13 +341,22 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
 
         ## The later years at the end of their year, also each timeSeriesTimes year so the
         ## animation has its frames (read back in mode = "multi"); those typically fall outside
-        ## summaryPeriod, so the summaryInterval reschedule does not cover them. A time equal to
-        ## start(sim) is left out: a second year-0 save would overwrite the one above.
+        ## summaryPeriod, so the summaryInterval reschedule does not cover them. The start of the
+        ## summary period, the end and the timeSeriesTimes can coincide: each distinct time is
+        ## scheduled once, and a time equal to start(sim) is left out (a second year-0 save would
+        ## overwrite the one above). The summaryInterval reschedule skips these times too.
         ## map_generators before save_single, so the maps exist when saved.
-        later <- c(P(sim)$summaryPeriod[1], end(sim), P(sim)$timeSeriesTimes)
-        for (t in later[later != start(sim)]) {
+        mod$initTimes <- unique(c(start(sim), P(sim)$summaryPeriod[1], end(sim), P(sim)$timeSeriesTimes))
+        for (t in mod$initTimes[mod$initTimes != start(sim)]) {
           sim <- scheduleEvent(sim, t, "NRV_summary", "map_generators", .last())
           sim <- scheduleEvent(sim, t, "NRV_summary", "save_single", .last())
+        }
+
+        ## opt-in: one more event per simulated year, the landscape scalars of that year
+        if (isTRUE(P(sim)$recordAnnualSeries)) {
+          mod$annualSeries <- list()
+          mod$reportingCells <- NULL
+          sim <- scheduleEvent(sim, start(sim), "NRV_summary", "annual_series", .last())
         }
       } else if (P(sim)$mode == "multi") {
         stopifnot(!is.null(sim$reportingPolygons))
@@ -257,11 +392,47 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
           sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_on", .last())
         }
 
+        ## opt-in; before the plot event, so it clears its own figure folder (see standMetrics())
+        if ("st" %in% tolower(P(sim)$postprocessEvents)) {
+          sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_st", .last())
+        }
+
+        ## opt-in; before the plot event, so it clears its own figure folder (see autocorrSummary())
+        if ("autocorr" %in% tolower(P(sim)$postprocessEvents)) {
+          sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_autocorr", .last())
+        }
+
+        ## opt-in; after the lm and st events, whose comparisons it draws, and before the plot event, so it
+        ## clears its own figure folder (see currentConditionAll())
+        if ("cc" %in% tolower(P(sim)$postprocessEvents)) {
+          sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_cc", .last())
+        }
+
+        ## opt-in; after the plot event (which clears the figure folders), and after the metric events
+        ## whose parquet datasets it reads
+        if ("stability" %in% tolower(P(sim)$postprocessEvents)) {
+          sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess_stability", .last() + 1)
+        }
+
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "postprocess", .last())
         sim <- scheduleEvent(sim, end(sim), "NRV_summary", "plot", .last())
       }
     },
     map_generators = {
+      ## no tree species: the first event's decision holds for the run (and the message is printed once)
+      if (isTRUE(mod$noTreeSpecies)) {
+        return(invisible(sim))
+      }
+      ## The year-0 event runs after every module's init (.first() + 1), so the check at the first
+      ## summary event sees inputs set by any module's init.
+      if (!isTRUE(mod$inputsChecked)) {
+        if (!isTRUE(.checkSingleInputs(sim))) {
+          ## no tree species: save_single, scheduled alongside, must do nothing as well
+          mod$noTreeSpecies <- TRUE
+          return(invisible(sim))
+        }
+        mod$inputsChecked <- TRUE
+      }
       mod$vegTypeMap <- LandR::vegTypeMapGenerator(
         sim$cohortData,
         sim$pixelGroupMap,
@@ -286,9 +457,11 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       }
       mod$standAgeMap <- terra::mask(mod$standAgeMap, sim$studyAreaReporting)
 
-      if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2]) {
-        ## fmt: skip
-        sim <- scheduleEvent(sim, time(sim) + P(sim)$summaryInterval, "NRV_summary", "map_generators", .last())
+      nextTime <- time(sim) + P(sim)$summaryInterval
+      ## times scheduled by init are not scheduled a second time here; only the summaryInterval grid
+      ## reschedules, so a timeSeriesTimes year off the grid is a one-off, not a second chain
+      if (time(sim) < P(sim)$summaryPeriod[2] && time(sim) %in% mod$analysesOutputsTimes && !nextTime %in% mod$initTimes) {
+        sim <- scheduleEvent(sim, nextTime, "NRV_summary", "map_generators", .last())
       }
     },
     postprocess = {
@@ -314,10 +487,28 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
       ## TODO finalize implementation
       message("Ontario NRV metrics are not yet fully implemented.")
     },
+    postprocess_st = {
+      sim <- standMetrics(sim)
+    },
+    postprocess_cc = {
+      sim <- currentConditionAll(sim)
+    },
+    postprocess_stability = {
+      sim <- stabilityCheck(sim)
+    },
+    postprocess_autocorr = {
+      sim <- autocorrSummary(sim)
+    },
+    annual_series = {
+      sim <- annualSeriesEvent(sim)
+    },
     animation = {
       sim <- makeAnimation(sim)
     },
     save_single = {
+      if (isTRUE(mod$noTreeSpecies)) {
+        return(invisible(sim))
+      }
       padYear <- paddedFloatToChar(time(sim), padL = ceiling(log10(end(sim) + 1)))
 
       ## objects to save at start of simulation ---------------------------------------------------
@@ -349,22 +540,32 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
         sim <- registerOutputs(f_standAgeMap, sim)
 
         f_vegTypeMap <- file.path(outputPath(sim), paste0("vegTypeMap_year", padYear, ".tif"))
-        terra::writeRaster(mod$vegTypeMap, f_vegTypeMap, datatype = "INT2U", overwrite = TRUE)
+        ## a byte raster: the colour table belongs with it (terra warns when it is written to a
+        ## wider type), and the few leading-type classes fit
+        .checkByteCodes(mod$vegTypeMap)
+        terra::writeRaster(mod$vegTypeMap, f_vegTypeMap, datatype = "INT1U", overwrite = TRUE)
         sim <- registerOutputs(f_vegTypeMap, sim)
       }
 
       if (time(sim) %in% times_during) {
-        f_cohortData <- file.path(outputPath(sim), paste0("cohortData_year", padYear, ".qs2"))
-        qs2::qs_save(sim$cohortData, f_cohortData)
+        ## this year's part of the cohortData dataset, `cohortData/year=<YYYY>/part-0.parquet`; or one .qs2 file
+        if (P(sim)$cohortDataFormat == "parquet") {
+          f_cohortData <- nrvtools::write_cohort_parquet(sim$cohortData, file.path(outputPath(sim), "cohortData"),
+                                                         time(sim))
+        } else {
+          f_cohortData <- file.path(outputPath(sim), paste0("cohortData_year", padYear, ".qs2"))
+          qs2::qs_save(sim$cohortData, f_cohortData)
+        }
         sim <- registerOutputs(f_cohortData, sim)
 
         f_pixelGroupMap <- file.path(outputPath(sim), paste0("pixelGroupMap_year", padYear, ".tif"))
         terra::writeRaster(sim$pixelGroupMap, f_pixelGroupMap, datatype = "INT4U", overwrite = TRUE)
         sim <- registerOutputs(f_pixelGroupMap, sim)
 
-        if (time(sim) >= P(sim)$summaryPeriod[1] && time(sim) < P(sim)$summaryPeriod[2]) {
-          ## fmt: skip
-          sim <- scheduleEvent(sim, time(sim) + P(sim)$summaryInterval, "NRV_summary", "save_single", .last())
+        nextTime <- time(sim) + P(sim)$summaryInterval
+        ## times scheduled by init are not scheduled a second time here
+        if (time(sim) < P(sim)$summaryPeriod[2] && time(sim) %in% mod$analysesOutputsTimes && !nextTime %in% mod$initTimes) {
+          sim <- scheduleEvent(sim, nextTime, "NRV_summary", "save_single", .last())
         }
       }
 
@@ -385,98 +586,150 @@ doEvent.NRV_summary = function(sim, eventTime, eventType) {
 
 InitMulti <- function(sim) {
   mod$ppFiles <- character(0) ## files the postprocess events write; see .registerPostprocessOutputs()
+  mod$nrvComparisons <- list() ## the NRV comparisons the lm and st events record; see .recordComparison()
   ## check for necessary output files -----------------------------------------------
   ## NOTE: don't load simLists -- slow and unreliable
-  allReps <- sprintf("rep%02d", P(sim)$reps)
+  ## the saved files: those listed in `sim$outputsDF` (runs that register them, e.g. FireSense, in
+  ## folders `rep1`, `rep2`, ...), else those found under `outputPath(sim)` (`rep01`, `rep02`, ...)
+  useOutputs <- .hasOutputsDF(sim)
+  files <- .discoverOutputFiles(sim)
+  ## dirnamesFromSet() answers `rep<reps>` for no files at all; with none, no replicate was found.
+  ## The folders are named by replicate id ("rep01" is named "1"), and so are repDirs and mod$rep1Dir. No name
+  ## reaches a file or a message: the paths built from them (file.path(), paste0()) drop it.
+  mod$allReps <- if (length(files) > 0L) dirnamesFromSet(files, P(sim)$reps) else character(0)
+  if (length(mod$allReps) < length(P(sim)$reps)) {
+    stop(
+      "found the files of ", length(mod$allReps), " replicate(s) ",
+      if (useOutputs) "in `outputsDF`" else paste0("under ", outputPath(sim)),
+      " but reps asks for ", length(P(sim)$reps), ": ", paste(P(sim)$reps, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  allReps <- mod$allReps
+  ## where the replicates' folders are: wherever they were saved when listed in `outputsDF`
+  ## (in multi mode `outputPath(sim)` is the summary folder, not a replicate's), else under `outputPath(sim)`
+  repDirs <- if (useOutputs) {
+    dirnamesFromSet(files, P(sim)$reps, leafOnly = FALSE)
+  } else {
+    stats::setNames(file.path(outputPath(sim), allReps), names(allReps))
+  }
+  mod$rep1Dir <- repDirs[1]
+  ## simTimes unset (NA): take the run's start and end. A given simTimes is kept as is.
+  P(sim)$simTimes <- SpaDES.core::resolveSimYears(P(sim)$simTimes, sim)
+  ## the year in a name built here has the digits of the last year, as mode 'single' pads it; a file found is chosen by
+  ## its folder and year, however its year is padded (see .repYearFile())
   padL <- ceiling(log10(P(sim)$simTimes[2] + 1))
-  padYearStart <- paddedFloatToChar(P(sim)$simTimes[1], padL = padL)
-  padYearEnd <- paddedFloatToChar(P(sim)$simTimes[2], padL = padL)
+  repYearFile <- function(d, year, prefix) .repYearFile(d, year, prefix, "tif", files, padL)
 
-  ## all reps have same flammable map
-  mod$flm <- file.path(outputPath(sim), allReps[1], paste0("flammableMap_year", padYearEnd, ".tif"))
+  ## all reps have same flammable map. Only the pm and bc events read it: when either will run, it is taken from the
+  ## files found (repFiles() stops, naming it, when the first replicate's folder has none), else its path is built
+  ## (repFiles() without files). Unnamed, as the other paths are.
+  readsFlm <- any(c("pm", "bc") %in% tolower(P(sim)$postprocessEvents))
+  flmName <- basename(repYearFile(mod$rep1Dir, P(sim)$simTimes[2], "flammableMap"))
+  mod$flm <- unname(SpaDES.core::repFiles(mod$rep1Dir, flmName, if (readsFlm) files))
 
   ## current-conditions reference = the sim's saved year-0 state (the deterministic
   ## initial condition, identical across reps -- read from rep 1). Read directly so
   ## the CC snapshot needs no regeneration from speciesLayers / no "CC SAM" input,
   ## and no write-before-read ordering between the landscape + patch metric events.
-  mod$fvtm0 <- file.path(outputPath(sim), allReps[1], paste0("vegTypeMap_year", padYearStart, ".tif"))
-  mod$fsam0 <- file.path(outputPath(sim), allReps[1], paste0("standAgeMap_year", padYearStart, ".tif"))
-  ## current-conditions time-since-fire (burnSummaries output); age basis for the LandWeb summaries.
-  mod$ftsf0 <- file.path(outputPath(sim), allReps[1], paste0("rstTimeSinceFire_year", padYearStart, ".tif"))
+  ## These three are chosen from the files found when they are among them, and are built otherwise, not required as
+  ## the flammable map is: the urban mask below (.maskCC()) and the per-class figures (.byClassFigTasks()) allow a
+  ## missing one, and time since fire is optional (see below).
+  mod$fvtm0 <- repYearFile(mod$rep1Dir, P(sim)$simTimes[1], "vegTypeMap")
+  mod$fsam0 <- repYearFile(mod$rep1Dir, P(sim)$simTimes[1], "standAgeMap")
+  ## current-conditions time-since-fire (burnSummaries output, which an outputsDF need not list); age basis for the
+  ## LandWeb summaries (the lw event).
+  mod$ftsf0 <- repYearFile(mod$rep1Dir, P(sim)$simTimes[1], "rstTimeSinceFire")
 
   ## The year-0 rasters are the SIMULATION's initial state, in which urban has been imputed to its
   ## nearest forest type so the run approximates a pre-industrial landscape. Reporting current
   ## condition from them unchanged would count that imputed forest as real forest today. Re-remove
   ## urban here, using the reporting copy of the current-conditions land cover.
-  ## Urban is the ONLY class that differs between the sim and reporting layers: water/barren/
-  ## snow-ice are sent to NA by `remapDT` on both sides, so nothing else needs correcting.
+  ## Urban is the only class the sim turns into forest against both layers: LandWeb's remap
+  ## (LandWebUtils::lcc2020_remap_table()) sends every urban pixel to 99, imputed to forest; its other 99s
+  ## are pixels one of the layers calls forest. Water/barren/snow-ice are NA in the sim's layer, keep
+  ## their codes in the reporting copy and carry no cohorts, so nothing else needs correcting.
   ## The NRV envelope (built from the replicates) is deliberately NOT masked -- the envelope is the
   ## pre-industrial landscape, the marker is today's, and that difference IS the land-conversion
   ## component of the departure.
   fvtm0src <- mod$fvtm0 ## the species-level year-0 map, before the urban mask (see below)
-  urbanMask <- NULL
-  ccrep <- sim$LandTypeCC_reporting
-  if (is.null(ccrep)) {
+  urbanMask <- .urbanMask(sim$LandTypeCC_reporting)
+  if (is.null(urbanMask)) {
     ## do not fail silently: a missing layer here would look identical to "no urban present".
     warning("NRV_summary: `LandTypeCC_reporting` is absent; current-condition metrics will ",
             "report simulation year-0 state, counting urban imputed to forest as current forest.",
             call. = FALSE)
   } else {
-    urbanMask <- terra::ifel(ccrep == 17L, NA, 1L) ## 17 = urban (LCC 2020)
     ccDir <- checkPath(file.path(outputPath(sim), "_cc"), create = TRUE)
     mod$fvtm0 <- .maskCC(mod$fvtm0, urbanMask, ccDir)
     mod$fsam0 <- .maskCC(mod$fsam0, urbanMask, ccDir)
     mod$ftsf0 <- .maskCC(mod$ftsf0, urbanMask, ccDir)
   }
 
-  cdpgm <- fs::dir_ls(
-    outputPath(sim),
-    regexp = "cohortData|pixelGroupMap",
-    recurse = 1,
-    type = "file"
-  ) |>
-    grep(paste0("(", paste0(allReps, collapse = "|"), ")"), x = _, value = TRUE) |>
-    grep(paste(mod$analysesOutputsTimes, collapse = "|"), x = _, value = TRUE)
-  mod$allouts <- fs::dir_ls(
-    outputPath(sim),
-    regexp = "vegType|standAge",
-    recurse = 1,
-    type = "file"
-  ) |>
-    grep(paste0("(", paste0(allReps, collapse = "|"), ")"), x = _, value = TRUE) |>
-    grep("gri|png|txt|xml", x = _, value = TRUE, invert = TRUE)
-  mod$allouts2 <- paste(
-    paste0(
-      "year",
-      paddedFloatToChar(
-        setdiff(c(0, P(sim)$timeSeriesTimes), mod$analysesOutputsTimes),
-        padL = padL
-      )
-    ),
-    collapse = "|"
-  ) |>
-    grep(pattern = _, x = mod$allouts, value = TRUE, invert = TRUE)
+  ## the name and type filters read the file name, not the folders above it; a cohort part file
+  ## (`<rep>/cohortData/year=<YYYY>/part-0.parquet`) is known by its two folders as well
+  cdpgm <- files[.isCohortQs2(files) | .isCohortPart(files) | grepl("pixelGroupMap", basename(files))]
+  cdpgm <- cdpgm[.inReps(cdpgm, allReps) & .inYears(cdpgm, mod$analysesOutputsTimes)]
+
+  ## the replicates' cohort files of every year, in either format, that are on disk: each site that reads cohorts
+  ## chooses from these (see .cohortFile()), so all read the same file of a replicate-year. With outputsDF, those it
+  ## lists.
+  repYear <- function(f) paste(.repFolder(f), .fileYear(f))
+  mod$cohortFiles <- files[(.isCohortQs2(files) | .isCohortPart(files)) & .inReps(files, allReps)]
+  mod$cohortFiles <- mod$cohortFiles[file.exists(mod$cohortFiles)]
+  isPart <- .isCohortPart(mod$cohortFiles)
+  both <- isPart & repYear(mod$cohortFiles) %in% repYear(mod$cohortFiles[!isPart])
+  if (any(both)) {
+    warning("NRV_summary: ", sum(both), " replicate-year(s) with cohortData in both formats; the parquet file is ",
+            "read and the .qs2 left as it is:\n", paste(utils::head(mod$cohortFiles[both], 3L), collapse = "\n"),
+            if (sum(both) > 3L) "\n...", call. = FALSE)
+  }
+  ## several .qs2 files of one folder and year (padded differently): .cohortFile() takes the one padded as mode
+  ## 'single' pads it (`padL` digits) if there is one, else the first by name
+  qsFiles <- mod$cohortFiles[!isPart]
+  dupQs <- qsFiles[repYear(qsFiles) %in% repYear(qsFiles)[duplicated(repYear(qsFiles))]]
+  if (length(dupQs)) {
+    yr <- .fileYear(dupQs)
+    used <- unique(.cohortFile(.repFolder(dupQs), yr, .yearFileName("cohortData", yr, "qs2", padL),
+                               files = mod$cohortFiles))
+    warning("NRV_summary: ", length(used), " replicate-year(s) with several .qs2 cohortData files:\n",
+            paste(utils::head(dupQs, 6L), collapse = "\n"), if (length(dupQs) > 6L) "\n...",
+            "\nused:\n", paste(utils::head(used, 3L), collapse = "\n"), if (length(used) > 3L) "\n...", call. = FALSE)
+  }
+  allouts <- files[grepl("vegType|standAge", basename(files))]
+  allouts <- allouts[.inReps(allouts, allReps)]
+  mod$allouts <- allouts[!grepl("gri|png|txt|xml", basename(allouts))]
+  ## drop the files of the years only the time series needs (not analysed)
+  seriesOnlyYears <- setdiff(c(0, P(sim)$timeSeriesTimes), mod$analysesOutputsTimes)
+  mod$allouts2 <- mod$allouts[!.inYears(mod$allouts, seriesOnlyYears)]
+
+  ## per-rep annual landscape series (written by the `annual_series` event, if it ran)
+  mod$annualSeriesFiles <- files[basename(files) == "annualSeries.csv" & .inReps(files, allReps)]
 
   filesUserHas <- c(cdpgm, mod$allouts2)
 
-  dirsExpected <- file.path(outputPath(sim), allReps)
+  dirsExpected <- repDirs
+  ## each the file found of the folder and year, however its year is padded, else (missing) the name mode 'single' gives
+  ## it (see .repYearFile())
   filesExpected <- as.character(sapply(dirsExpected, function(d) {
+    yrs <- mod$analysesOutputsTimes
     c(
-      file.path(d, sprintf("cohortData_year%04d.qs2", mod$analysesOutputsTimes)),
-      file.path(d, sprintf("pixelGroupMap_year%04d.tif", mod$analysesOutputsTimes)),
-      file.path(d, sprintf("standAgeMap_year%04d.tif", mod$analysesOutputsTimes)),
-      file.path(d, sprintf("vegTypeMap_year%04d.tif", mod$analysesOutputsTimes))
+      ## either format: the part file when one was found, else the .qs2 (see .cohortFile())
+      .cohortFile(d, yrs, .yearFileName("cohortData", yrs, "qs2", padL), files = mod$cohortFiles),
+      repYearFile(d, yrs, "pixelGroupMap"),
+      repYearFile(d, yrs, "standAgeMap"),
+      repYearFile(d, yrs, "vegTypeMap")
     )
   }))
 
-  filesNeeded <- data.frame(file = filesExpected, exists = filesExpected %in% filesUserHas)
+  filesNeeded <- data.frame(file = filesExpected, exists = filesExpected %in% filesUserHas & file.exists(filesExpected))
 
   if (!all(filesNeeded$exists)) {
     missing <- filesNeeded[filesNeeded$exists == FALSE, ]$file
     stop(
       sum(!filesNeeded$exists),
       " simulation files appear to be missing:\n",
-      paste(missing, collapse = "\n")
+      paste(.cohortCandidates(missing), collapse = "\n") ## a cohort file in either format: both named
     )
   }
 
@@ -484,23 +737,32 @@ InitMulti <- function(sim) {
   mod$layerName <- gsub(mod$layerName, pattern = "[/\\]", replacement = "_")
   mod$layerName <- gsub(mod$layerName, pattern = "^_", replacement = "")
 
-  mod$sam <- gsub(".*vegTypeMap.*", NA, mod$allouts2) |>
-    grep(paste(mod$analysesOutputsTimes, collapse = "|"), x = _, value = TRUE)
-  mod$vtm <- gsub(".*standAgeMap.*", NA, mod$allouts2) |>
-    grep(paste(mod$analysesOutputsTimes, collapse = "|"), x = _, value = TRUE)
+  mod$sam <- gsub(".*vegTypeMap.*", NA, mod$allouts2)
+  mod$sam <- mod$sam[.inYears(mod$sam, mod$analysesOutputsTimes)]
+  mod$vtm <- gsub(".*standAgeMap.*", NA, mod$allouts2)
+  mod$vtm <- mod$vtm[.inYears(mod$vtm, mod$analysesOutputsTimes)]
 
   ## time-since-fire per year (burnSummaries output), aligned with mod$vtm by rep/year path (see
   ## landWebMetrics(): the LandWeb summaries bin time-since-fire into age classes, matching v2).
   mod$tsf <- gsub("vegTypeMap", "rstTimeSinceFire", mod$vtm)
 
-  mod$samTimeSeries <- gsub(".*vegTypeMap.*", NA, mod$allouts) |>
-    grep(paste(P(sim)$timeSeriesTimes, collapse = "|"), x = _, value = TRUE)
-  mod$vtmTimeSeries <- gsub(".*standAgeMap.*", NA, mod$allouts) |>
-    grep(paste(P(sim)$timeSeriesTimes, collapse = "|"), x = _, value = TRUE)
+  mod$samTimeSeries <- gsub(".*vegTypeMap.*", NA, mod$allouts)
+  mod$samTimeSeries <- mod$samTimeSeries[.inYears(mod$samTimeSeries, P(sim)$timeSeriesTimes)]
+  mod$vtmTimeSeries <- gsub(".*standAgeMap.*", NA, mod$allouts)
+  mod$vtmTimeSeries <- mod$vtmTimeSeries[.inYears(mod$vtmTimeSeries, P(sim)$timeSeriesTimes)]
 
-  ## cohortData and pixelGroupMap files
-  mod$cd <- grep("cohortData", cdpgm, value = TRUE)
-  mod$pgm <- grep("pixelGroupMap", cdpgm, value = TRUE)
+  ## cohortData and pixelGroupMap files: for each pixelGroupMap, in its place, the cohort file of the same folder and
+  ## year (the BC seral maps pair them by position), chosen by .cohortFile() as everywhere else; NA where there is none
+  mod$pgm <- cdpgm[grepl("pixelGroupMap", basename(cdpgm))]
+  mod$cd <- .cohortFile(dirname(mod$pgm), .fileYear(mod$pgm),
+                        sub("^pixelGroupMap(_year[0-9]+)\\.tif$", "cohortData\\1.qs2", basename(mod$pgm)),
+                        files = mod$cohortFiles)
+  mod$cd[!mod$cd %in% mod$cohortFiles] <- NA_character_
+  ## only the bc and st events read these pairs
+  if (anyNA(mod$cd) && any(c("bc", "st") %in% tolower(P(sim)$postprocessEvents))) {
+    stop("NRV_summary: no cohortData file in the folder and of the year of these pixelGroupMap files:\n",
+         paste(mod$pgm[is.na(mod$cd)], collapse = "\n"), call. = FALSE)
+  }
 
   ## Reporting groups: the lm/lw/pm analyses read maps of the groups rather than of the simulated
   ## species, rebuilt from the saved cohorts (see .buildReportingVegTypeMaps()). Only the maps they
@@ -514,7 +776,8 @@ InitMulti <- function(sim) {
       grp = grp,
       colors = .reportingColors(sim$sppColorVectReporting, grp),
       vegLeadingProportion = P(sim)$vegLeadingProportion,
-      mixedType = P(sim)$mixedType
+      mixedType = P(sim)$mixedType,
+      cohortFiles = mod$cohortFiles
     )
     mod$vtm <- maps[-1L]
     mod$fvtm0 <- maps[[1L]]
@@ -548,6 +811,17 @@ InitMulti <- function(sim) {
 ## `outputPath(sim)` (= outputs/<studyArea>/mainSim). `figures/` and `csv/` mirror the same
 ## `<kind>/<layer>/` sub-structure (kind = lm/pm/boxplots/histograms/...; layer = the full
 ## reporting-polygon-layer name), so a human can find a figure and its data side by side.
+
+## The urban mask of the current condition: NA where `LandTypeCC_reporting` (`ccrep`) is urban (class 17 of the 2020
+## Land Cover of Canada), 1 elsewhere; NULL without the layer, of which InitMulti() warns. InitMulti() masks the year-0
+## maps by it, and the bc event its year-0 seral map (see .maskCC()).
+.urbanMask <- function(ccrep) {
+  if (is.null(ccrep)) {
+    return(NULL)
+  }
+  terra::ifel(ccrep == 17L, NA, 1L)
+}
+
 ## Mask a year-0 current-condition raster by `urbanMask` (NA where urban) and write it under
 ## `ccDir`, returning the new path. Returns the ORIGINAL path unchanged if the source is missing or
 ## the geometries do not line up, so a grid mismatch degrades to "uncorrected" loudly rather than
@@ -628,6 +902,38 @@ InitMulti <- function(sim) {
   colors[want]
 }
 
+## Helpers for a study area with no tree species (see init and `.checkSingleInputs()`).
+.noTreeMsg <- "NRV_summary: no tree species in sppEquiv; nothing to summarise"
+
+## TRUE when `sppEquiv` is present but has no rows: there are no tree species to summarise.
+.noTreeSpecies <- function(sim) {
+  eq <- sim$sppEquiv
+  if (!is.data.frame(eq)) {
+    return(FALSE)
+  }
+  nrow(eq) == 0L
+}
+
+## Stops, naming the inputs, when single mode lacks any of the objects the vegetation modules supply.
+## Returns FALSE, with a message, when `sppEquiv` has no tree species: there is nothing to summarise.
+.checkSingleInputs <- function(sim) {
+  needed <- c("cohortData", "pixelGroupMap", "speciesLayers", "sppColorVect", "sppEquiv", "studyAreaReporting")
+  missing <- needed[vapply(needed, function(nm) is.null(sim[[nm]]), logical(1))]
+  if (!"sppEquiv" %in% missing && .noTreeSpecies(sim)) {
+    message(.noTreeMsg)
+    return(FALSE)
+  }
+  if (length(missing)) {
+    stop(
+      "NRV_summary (mode = 'single') needs ", paste(missing, collapse = ", "),
+      " in the simList by the first summary event, but not found; ",
+      "they come from the vegetation modules (e.g. Biomass_core).",
+      call. = FALSE
+    )
+  }
+  invisible(TRUE)
+}
+
 ## One vegetation-type map by reporting group: a copy of `cohortData` with each species recoded to
 ## its group (`grp` from LandWebUtils::sppEquiv_groups()), so that LandR::vegTypeMapGenerator(),
 ## which sums B within a species code, sums it within a group before deciding the leading type.
@@ -646,22 +952,25 @@ InitMulti <- function(sim) {
 }
 
 ## Rebuild species-level vegetation-type maps (`<dir>/<rep>/vegTypeMap_year<YYYY>.tif`) by reporting
-## group, from the cohortData and pixelGroupMap saved beside each. Written to
+## group, from the cohortData (either format; see .cohortFile()) and pixelGroupMap saved beside each. Written to
 ## `<outRoot>/<rep>/vegTypeMap_year<YYYY>.tif`, keeping the `<rep>/<prefix>_year<YYYY>` tail nrvtools
 ## labels its results from; `outRoot` is cleared first. Returns the new paths in the order of `vtm`.
-.buildReportingVegTypeMaps <- function(vtm, outRoot, grp, colors, vegLeadingProportion, mixedType) {
+## `cohortFiles`: the cohort files to choose from (InitMulti()'s mod$cohortFiles; see .cohortFile()).
+.buildReportingVegTypeMaps <- function(vtm, outRoot, grp, colors, vegLeadingProportion, mixedType,
+                                       cohortFiles = NULL) {
   stopifnot(all(grepl("^vegTypeMap_year[0-9]+\\.tif$", basename(vtm))))
-  cd <- file.path(dirname(vtm), sub("^vegTypeMap(_year[0-9]+)\\.tif$", "cohortData\\1.qs2", basename(vtm)))
+  cd <- .cohortFile(dirname(vtm), .fileYear(vtm),
+                    sub("^vegTypeMap(_year[0-9]+)\\.tif$", "cohortData\\1.qs2", basename(vtm)), files = cohortFiles)
   pgm <- file.path(dirname(vtm), sub("^vegTypeMap", "pixelGroupMap", basename(vtm)))
   miss <- c(cd, pgm)[!file.exists(c(cd, pgm))]
   if (length(miss)) {
-    stop("NRV_summary: cannot build the reporting-group maps; missing:\n", paste(miss, collapse = "\n"),
-         call. = FALSE)
+    stop("NRV_summary: cannot build the reporting-group maps; missing:\n",
+         paste(.cohortCandidates(miss), collapse = "\n"), call. = FALSE)
   }
   out <- file.path(outRoot, basename(dirname(vtm)), basename(vtm))
   unlink(outRoot, recursive = TRUE)
   for (i in seq_along(vtm)) {
-    m <- .reportingVegTypeMap(qs2::qs_read(cd[i]), terra::rast(pgm[i]), grp, colors,
+    m <- .reportingVegTypeMap(nrvtools::read_cohort_data(cd[i]), terra::rast(pgm[i]), grp, colors,
                               vegLeadingProportion, mixedType)
     dir.create(dirname(out[i]), recursive = TRUE, showWarnings = FALSE)
     terra::writeRaster(m, out[i], datatype = "INT1U", overwrite = TRUE) ## a few classes; keeps the colour table
@@ -697,7 +1006,7 @@ InitMulti <- function(sim) {
 ## an unknown value would otherwise be skipped without a word, and 'fd' (forest degradation) was
 ## scheduled as a stub that stopped in browser() after the other summaries had run.
 .checkPostprocessEvents <- function(events) {
-  known <- c("am", "bc", "lm", "lw", "on", "pm")
+  known <- c("am", "autocorr", "bc", "cc", "lm", "lw", "on", "pm", "st", "stability")
   bad <- setdiff(tolower(events), known)
   if (length(bad)) {
     stop(
@@ -740,7 +1049,8 @@ InitMulti <- function(sim) {
 ## left 5,749 of them). The folders of events not run this time keep their figures.
 .clearFigDirs <- function(sim, events) {
   ## the figures/<kind> folders each postprocess event draws into
-  kindsByEvent <- list(lm = "lm", pm = "pm", lw = c("boxplots", "histograms"), bc = "sspm")
+  kindsByEvent <- list(lm = "lm", pm = "pm", lw = c("boxplots", "histograms"), bc = "sspm",
+                       stability = "stability", autocorr = "autocorrelation", st = "st", cc = "all")
   kinds <- unlist(kindsByEvent[intersect(events, names(kindsByEvent))], use.names = FALSE)
   for (d in file.path(.ppRoot(sim), "figures", kinds)) {
     unlink(list.files(d, full.names = TRUE, all.files = TRUE, no.. = TRUE), recursive = TRUE)
@@ -752,18 +1062,301 @@ InitMulti <- function(sim) {
   reproducible::checkPath(file.path(.ppRoot(sim), "csv", kind, layer, ...), create = TRUE)
 }
 
+## TRUE when `sim$outputsDF` was given: a data.frame with rows. The one test for it, so the files are
+## read from the same place the messages say.
+.hasOutputsDF <- function(sim) {
+  is.data.frame(sim$outputsDF) && NROW(sim$outputsDF) > 0L
+}
+
+## The saved files of the replicates: those in `sim$outputsDF$file` (each once, in a fixed order, as
+## a file saved twice is listed twice), or, when there is none, those one folder down under
+## `outputPath(sim)`, followed by the cohort part files of its folders (see .cohortPartFiles()).
+.discoverOutputFiles <- function(sim) {
+  if (.hasOutputsDF(sim)) {
+    if (!"file" %in% names(sim$outputsDF)) {
+      stop("NRV_summary: `outputsDF` has no `file` column", call. = FALSE)
+    }
+    sort(unique(as.character(sim$outputsDF$file)))
+  } else {
+    c(as.character(fs::dir_ls(outputPath(sim), recurse = 1, type = "file")), .cohortPartFiles(outputPath(sim)))
+  }
+}
+
+## The cohort part files `<root>/<rep>/cohortData/year=<YYYY>/part-0.parquet` of each folder `<rep>` in `root`.
+## Only those cohortData folders are listed further down: a replicate's other folders (figures, the datasets of
+## other modules) can hold files of the same names.
+.cohortPartFiles <- function(root) {
+  cdDirs <- file.path(fs::dir_ls(root, type = "directory"), "cohortData")
+  cdDirs <- cdDirs[dir.exists(cdDirs)]
+  if (!length(cdDirs)) {
+    return(character(0))
+  }
+  parts <- as.character(fs::dir_ls(cdDirs, recurse = 1, type = "file"))
+  parts[.isCohortPart(parts)]
+}
+
+## The year of each saved file, from the `_year<digits>.<ext>` of its name (NA for a name without one), or,
+## for a file named `part-0.parquet` in a folder named `year=<digits>` (a cohort part file), from that folder.
+## No other folder is read, so digits in a folder name are never taken for a year.
+.fileYear <- function(files) {
+  files <- as.character(files)
+  b <- basename(files)
+  pat <- "^.*_year([0-9]+)\\.[^.]*$"
+  yr <- as.integer(ifelse(grepl(pat, b), sub(pat, "\\1", b), NA))
+  part <- b %in% "part-0.parquet" & grepl("^year=[0-9]+$", basename(dirname(files)))
+  yr[part] <- as.integer(sub("^year=", "", basename(dirname(files[part]))))
+  yr
+}
+
+## TRUE for each cohortData file of the .qs2 layout, `cohortData_year<digits>.qs2` (runs before 2.0.0.9046,
+## and `cohortDataFormat = "qs2"`)
+.isCohortQs2 <- function(files) {
+  grepl("^cohortData_year[0-9]+\\.qs2$", basename(as.character(files)))
+}
+
+## TRUE for each cohortData part file of the parquet layout, `cohortData/year=<digits>/part-0.parquet`
+## (nrvtools::write_cohort_parquet()), by its name and its two folders
+.isCohortPart <- function(files) {
+  files <- as.character(files)
+  basename(files) %in% "part-0.parquet" & grepl("^year=[0-9]+$", basename(dirname(files))) &
+    basename(dirname(dirname(files))) %in% "cohortData"
+}
+
+## The replicate folder of each saved file: the folder it is in, or, for a cohort part file, the folder that
+## holds its cohortData folder
+.repFolder <- function(files) {
+  files <- as.character(files)
+  out <- dirname(files)
+  part <- .isCohortPart(files)
+  out[part] <- dirname(dirname(out[part]))
+  out
+}
+
+## The cohortData part file of replicate folder `repDir` and year `year`:
+## `<repDir>/cohortData/year=<YYYY>/part-0.parquet`, as nrvtools::write_cohort_parquet() names it
+.cohortPartPath <- function(repDir, year) {
+  file.path(repDir, "cohortData", sprintf("year=%04d", as.integer(year)), "part-0.parquet")
+}
+
+## The cohortData file of replicate folder `repDir` and year `year`, in either format: the part file (see
+## .cohortPartPath()) when there is one, else the .qs2 file of that year. With both, the part file. Without `files`,
+## the .qs2 is `<repDir>/<qs2>`, named as the caller names it. With `files` (mod$cohortFiles, the cohort files
+## InitMulti() found), the .qs2 is the one of `files` in the same replicate folder and of the same year, however the
+## year is padded (`cohortData_year700.qs2` goes with `pixelGroupMap_year0700.tif`): the one named as the caller
+## names it if it is among them, else the first by name (InitMulti() warns when there are several; see
+## .pickRepYearFile()). Only .qs2 files are matched this way; a part file is always the exact `year=<YYYY>` path, and
+## counts only if it is one of `files`: given an outputsDF, only a part file it lists. Where `files` has no .qs2 of
+## that folder and year, the answer is `<repDir>/<qs2>`. Every caller in mode 'multi' passes `files`, so all choose
+## the same file of a replicate-year.
+.cohortFile <- function(repDir, year, qs2, files = NULL) {
+  pq <- .cohortPartPath(repDir, year)
+  found <- file.exists(pq) & (is.null(files) | pq %in% files)
+  out <- file.path(repDir, qs2)
+  if (!is.null(files) && length(files)) {
+    out <- .pickRepYearFile(out, repDir, year, files[.isCohortQs2(files)])
+    found <- rep_len(found, length(out))
+    pq <- rep_len(pq, length(out))
+  }
+  as.character(ifelse(found, pq, out)) ## character(0) for no files, not logical(0)
+}
+
+## For each path `built[i]`, of replicate folder `repDir[i]` and year `year[i]`, the one of `candidates` in that
+## folder and of that year (see .repFolder() and .fileYear()), however the year is padded: `built[i]` itself if it
+## is among them, else the first by name; `built[i]` where there is none. The rule by which .cohortFile() and
+## .repYearFile() choose the file of a replicate-year.
+.pickRepYearFile <- function(built, repDir, year, candidates) {
+  n <- max(length(built), length(repDir), length(year))
+  out <- rep_len(built, n)
+  repDir <- rep_len(repDir, n)
+  year <- rep_len(as.integer(year), n)
+  cRep <- .repFolder(candidates)
+  cYear <- .fileYear(candidates)
+  for (i in seq_len(n)) {
+    hit <- candidates[cRep == repDir[i] & cYear %in% year[i]]
+    if (length(hit) && !out[i] %in% hit) {
+      out[i] <- sort(hit)[1]
+    }
+  }
+  out
+}
+
+## `<prefix>_year<YYYY>.<ext>`, the year padded to `padL` digits, as mode 'single' names its files (`padL` is the
+## number of digits of the run's last year)
+.yearFileName <- function(prefix, year, ext, padL) {
+  paste0(prefix, "_year", SpaDES.core::paddedFloatToChar(year, padL = padL), ".", ext)
+}
+
+## The file `<prefix>_year<digits>.<ext>` of replicate folder `repDir` and year `year`, chosen from `files` (the files
+## InitMulti() found) by its folder and year, however the year is padded: of several, the one padded to `padL`
+## digits, else the first by name (see .pickRepYearFile()). Where `files` has none,
+## `<repDir>/<prefix>_year<YYYY>.<ext>` with the year padded to `padL` digits (see .yearFileName()), so that a
+## message about a missing file names it as mode 'single' would have.
+.repYearFile <- function(repDir, year, prefix, ext, files = NULL, padL = 4L) {
+  built <- file.path(repDir, .yearFileName(prefix, year, ext, padL))
+  if (!length(files)) {
+    return(built)
+  }
+  isType <- grepl(paste0("^", prefix, "_year[0-9]+\\.", ext, "$"), basename(files))
+  .pickRepYearFile(built, repDir, year, files[isType])
+}
+
+## `files`, each .qs2 cohort path followed by the part file that would also do ("<qs2> or <part file>"): what a
+## message about missing files names
+.cohortCandidates <- function(files) {
+  isCd <- .isCohortQs2(files)
+  files[isCd] <- paste(files[isCd], "or", .cohortPartPath(dirname(files[isCd]), .fileYear(files[isCd])))
+  files
+}
+
+## Stops when the cohort file `f` (from .cohortFile()) of a year InitMulti() does not check, e.g. year 0, is missing,
+## naming both formats' paths
+.checkCohortFile <- function(f, what) {
+  if (!all(file.exists(f))) {
+    stop("NRV_summary: ", what, "; missing:\n", paste(.cohortCandidates(f[!file.exists(f)]), collapse = "\n"),
+         call. = FALSE)
+  }
+  invisible(f)
+}
+
+## Stops when a map holds a code of 255 or more: it could not be saved as INT1U, whose NA value is 255.
+.checkByteCodes <- function(r) {
+  top <- max(terra::minmax(r, compute = TRUE)["max", ], na.rm = TRUE)
+  if (is.finite(top) && top >= 255) {
+    stop("NRV_summary: vegTypeMap codes must be below 255 to be saved as INT1U; 255 is its NA value",
+         " (the largest code is ", top, ").", call. = FALSE)
+  }
+  invisible(r)
+}
+
+## TRUE for each file whose year (see .fileYear()) is one of `years`; FALSE for a file with no year.
+.inYears <- function(files, years) {
+  .fileYear(files) %in% years
+}
+
+## TRUE for each file with a path component equal to one of `reps` (e.g. "rep01"), so "rep1" does not
+## match the files of rep10 to rep12.
+.inReps <- function(files, reps) {
+  vapply(
+    strsplit(as.character(files), "[/\\\\]"),
+    function(p) any(p %in% reps),
+    logical(1L)
+  )
+}
+
+## the files of `files` in the first replicate's folder (`rep1Dir`): those under its full path, so a
+## folder of the same name under another parent, or `rep10` for `rep1`, is not matched.
+.firstRepFiles <- function(files, rep1Dir) {
+  files <- files[!is.na(files)]
+  files[startsWith(files, paste0(sub("/+$", "", rep1Dir), "/"))]
+}
+
+## the year-0 cohortData and pixelGroupMap paths in the first replicate's folder. The cohort file (either format) is
+## chosen from `cohortFiles`, the cohort files InitMulti() found (see .cohortFile()), and the pixelGroupMap from
+## `files`, the files found (.discoverOutputFiles(), as InitMulti() keeps the cohort files only), each by its year
+## however padded. Names built for files not among them have the year padded to `padL` digits (see .repYearFile()).
+.repYear0Files <- function(rep1Dir, cohortFiles = NULL, files = NULL, padL = 4L) {
+  list(
+    cohortData = .cohortFile(rep1Dir, 0, .yearFileName("cohortData", 0, "qs2", padL), files = cohortFiles),
+    pixelGroupMap = .repYearFile(rep1Dir, 0, "pixelGroupMap", "tif", files, padL)
+  )
+}
+
+## The bc event's seral maps, made from the year-0 pixel-group map of the first replicate followed by mod$pgm, in that
+## order (`pgm`): `cc`, the current condition's (the first), and `reps`, the replicates', less those of year 0, which
+## the envelope leaves out. The years are those of the pixel-group maps, which the seral maps pair with by position; a
+## sieved map's name, `seralStageMap-sieve<N>_year<YYYY>.tif`, carries the same year.
+.splitSeralMaps <- function(ssmFiles, pgm) {
+  list(cc = ssmFiles[1L], reps = ssmFiles[-1L][!.fileYear(pgm[-1L]) %in% 0])
+}
+
 ## split a per-replicate map-file vector (`.../rep<NN>/<map>_year<YYYY>.tif`) into a named list by rep.
 .filesByRep <- function(files) {
   split(files, basename(dirname(files)))
 }
 
+## The files of `files` (named `..._year<YYYY>.<ext>`) whose year is within `period`. Used for the pooled
+## (over time) NRV distributions, which cover the NRV years only.
+.filesInPeriod <- function(files, period) {
+  yr <- .fileYear(files)
+  files[!is.na(yr) & yr >= min(period) & yr <= max(period)]
+}
+
+## Stops unless `nrvWindow` is a single number above 0 and at most 1 (NA and a vector get the same message)
+.checkNrvWindow <- function(nrvWindow) {
+  if (!isTRUE(length(nrvWindow) == 1L && nrvWindow > 0 && nrvWindow <= 1)) {
+    stop("nrvWindow must be above 0 and at most 1", call. = FALSE)
+  }
+  invisible(nrvWindow)
+}
+
+## The last `fraction` of `period` (the summary period), as c(from, to)
+.lastFraction <- function(period, fraction) {
+  sp <- range(period)
+  c(sp[2L] - fraction * diff(sp), sp[2L])
+}
+
+## Stops unless `envelopeStyle` is "ribbon" or "lines"
+.checkEnvelopeStyle <- function(envelopeStyle) {
+  if (!isTRUE(length(envelopeStyle) == 1L && envelopeStyle %in% c("ribbon", "lines"))) {
+    stop("envelopeStyle must be \"ribbon\" or \"lines\"", call. = FALSE)
+  }
+  invisible(envelopeStyle)
+}
+
+## Stops unless `cohortDataFormat` is "parquet" or "qs2"
+.checkCohortDataFormat <- function(cohortDataFormat) {
+  if (!isTRUE(length(cohortDataFormat) == 1L && cohortDataFormat %in% c("parquet", "qs2"))) {
+    stop("cohortDataFormat must be \"parquet\" or \"qs2\"", call. = FALSE)
+  }
+  invisible(cohortDataFormat)
+}
+
+## The NRV years: the last `nrvWindow` of the summary period (a subset of it by construction), as c(from, to)
+.nrvPeriod <- function(sim) .lastFraction(P(sim)$summaryPeriod, P(sim)$nrvWindow)
+
+## The summary times (every `interval` from the start of `summaryPeriod`) that are NRV years
+.nrvYears <- function(summaryPeriod, interval, nrvWindow) {
+  sp <- range(summaryPeriod)
+  times <- seq(sp[1L], sp[2L], by = interval)
+  win <- .lastFraction(sp, nrvWindow)
+  as.integer(round(times[times >= win[1L] - 1e-8 & times <= win[2L] + 1e-8]))
+}
+
+## The summary times in the stability window (the last `stabilityWindow` of the NRV period)
+.stabilityTimes <- function(summaryPeriod, interval, nrvWindow, stabilityWindow) {
+  win <- .lastFraction(.lastFraction(summaryPeriod, nrvWindow), stabilityWindow)
+  nrv <- .nrvYears(summaryPeriod, interval, nrvWindow)
+  nrv[nrv >= win[1L] - 1e-8 & nrv <= win[2L] + 1e-8]
+}
+
+## Warns when the stability window holds fewer than the 3 summary times the check needs: it would then test
+## no series. A warning, not an error: the other events still run.
+.warnStabilityWindow <- function(summaryPeriod, interval, nrvWindow, stabilityWindow) {
+  if (length(.stabilityTimes(summaryPeriod, interval, nrvWindow, stabilityWindow)) < 3L) {
+    win <- .lastFraction(.lastFraction(summaryPeriod, nrvWindow), stabilityWindow)
+    warning("the stability window ", win[1L], "-", win[2L], " holds fewer than 3 summary times, so the stability ",
+            "event will test no series; lower summaryInterval or raise stabilityWindow", call. = FALSE)
+  }
+  invisible(NULL)
+}
+
+## What a dataset pooled over the NRV years records, in `<root>/nrvYears.txt`, of the years it holds
+.nrvStamp <- function(root) file.path(root, "nrvYears.txt")
+
 ## TRUE iff `root` already holds a `replicate=<id>/*.parquet` partition for EVERY requested repID,
-## i.e. the parquet dataset is complete and can be reused instead of recomputed.
-.aggComplete <- function(root, repIDs) {
-  dir.exists(root) &&
+## i.e. the parquet dataset is complete and can be reused instead of recomputed. A dataset pooled
+## over the NRV years (`nrvYears` given) must also have been built for these years: the years it
+## was built for are in its `nrvYears.txt`, and a dataset without one (an earlier run's) is rebuilt.
+.aggComplete <- function(root, repIDs, nrvYears = NULL) {
+  complete <- dir.exists(root) &&
     all(vapply(repIDs, function(r) {
       length(list.files(file.path(root, paste0("replicate=", r)), pattern = "\\.parquet$")) > 0L
     }, logical(1L)))
+  if (!complete || is.null(nrvYears)) {
+    return(complete)
+  }
+  file.exists(.nrvStamp(root)) &&
+    identical(readLines(.nrvStamp(root), warn = FALSE), paste(nrvYears, collapse = ","))
 }
 
 ## Build the parquet dataset for one refCode: one partition per replicate. `compute_fn(repID)`
@@ -771,13 +1364,19 @@ InitMulti <- function(sim) {
 ## the (expensive) recompute + rewrite when the dataset is already complete for `repIDs` (see
 ## `.aggComplete()`) -- useful for iterating on the plots/CSVs without re-running the
 ## landscape-metric aggregation.
+## A dataset pooled over the NRV years passes them as `nrvYears`, stamped beside it, so that changing
+## `nrvWindow` rebuilds it rather than reusing the years of the earlier run.
 .writeRepDataset <- function(root, repIDs, compute_fn, studyArea = NULL, scenario = NULL,
-                             reuse = getOption("NRV_summary.reuseAggregates", FALSE)) {
-  if (!(reuse && .aggComplete(root, repIDs))) {
+                             reuse = getOption("NRV_summary.reuseAggregates", FALSE),
+                             nrvYears = NULL) {
+  if (!(reuse && .aggComplete(root, repIDs, nrvYears))) {
     unlink(root, recursive = TRUE)
     for (repID in repIDs) {
       tidied <- tidy_nrv_metrics(compute_fn(repID), studyArea = studyArea, scenario = scenario)
       write_nrv_parquet(tidied, root, replicate = repID)
+    }
+    if (!is.null(nrvYears)) {
+      writeLines(paste(nrvYears, collapse = ","), .nrvStamp(root))
     }
   }
   invisible(root)
@@ -785,7 +1384,7 @@ InitMulti <- function(sim) {
 
 ## The across-replicate envelope of one refCode's dataset, registering its parquet files.
 ## id_cols = NULL -> summarize_nrv() default (per-time envelopes); the LandWeb summaries pass an
-## explicit set excluding `time` so the NRV distribution pools across replicates AND summary years.
+## explicit set excluding `time` so the NRV distribution pools across replicates AND NRV years.
 ## `perReplicate = TRUE` first reduces each replicate's patches to their mean
 ## (nrvtools::nrv_replicate_values()), so that a patch-level metric's envelope is, like a class- or
 ## landscape-level one's, the range of the replicates rather than of every patch of every
@@ -1008,6 +1607,7 @@ landscapeMetrics <- function(sim) {
 
       .writeNrvSummaryCSVs(sim, mod[[refCode]], refCode, p)
       .writeNrvSummaryCSVs(sim, mod[[refCodeCC]], refCodeCC, p)
+      .writeNrvComparisonCSV(sim, mod[[refCode]], mod[[refCodeCC]], "lm", p)
 
       return(invisible(NULL))
     },
@@ -1114,7 +1714,7 @@ patchMetrics <- function(sim) {
 
 ## LandWeb summaries (ported v2 LandWeb_summary): leading-veg-by-age-class + large-patch counts.
 ## Age basis = time-since-fire (mod$tsf, from burnSummaries), matching v2. No flammable masking.
-## The NRV distribution pools across replicates AND summary years, so summarize with `time` excluded
+## The NRV distribution pools across replicates AND NRV years, so summarize with `time` excluded
 ## from the id columns (idCols below); the plots (plotFun) are distributions, not time envelopes.
 landWebMetrics <- function(sim) {
   ftsf0 <- mod$ftsf0
@@ -1124,13 +1724,16 @@ landWebMetrics <- function(sim) {
 
   studyAreaReporting <- sf::st_as_sf(sim$studyAreaReporting)
   funList <- default_landweb_metrics() ## TODO: pass this further up via parameter funList_lw
-  idCols <- c("poly", "level", "class", "metric", "metric.1") ## pool across rep x summary year (no time)
+  idCols <- c("poly", "level", "class", "metric", "metric.1") ## pool across rep x NRV year (no time)
 
   oldPlan <- .planWithWorkers(pemisc::optimalClusterNum(5000, length(fvtm)))
   on.exit(future::plan(oldPlan), add = TRUE)
 
-  vtmByRep <- .filesByRep(fvtm)
-  tsfByRep <- .filesByRep(ftsf)
+  ## pooled over summary years, so these are NRV distributions: only the NRV years
+  nrvPeriod <- .nrvPeriod(sim)
+  nrvYears <- .nrvYears(P(sim)$summaryPeriod, P(sim)$summaryInterval, P(sim)$nrvWindow)
+  vtmByRep <- .filesByRep(.filesInPeriod(fvtm, nrvPeriod))
+  tsfByRep <- .filesByRep(.filesInPeriod(ftsf, nrvPeriod))
 
   lapply(
     mod$rptPolyNames,
@@ -1180,7 +1783,8 @@ landWebMetrics <- function(sim) {
       .writeRepDataset(
         simRoot,
         repIDs = names(vtmByRep),
-        compute_fn = function(repID) lwRaw(vtmByRep[[repID]], tsfByRep[[repID]])
+        compute_fn = function(repID) lwRaw(vtmByRep[[repID]], tsfByRep[[repID]]),
+        nrvYears = nrvYears
       )
       .fillLeadingZeros(c(simRoot, ccRoot))
       mod[[refCodeCC]] <- .summarizeRepDataset(ccRoot, id_cols = idCols)
@@ -1209,8 +1813,10 @@ makeSeralStageMapsBC <- function(sim) {
   sf::st_write(NDTBEC, fNDTBEC, append = FALSE, quiet = TRUE)
   rm(studyAreaReporting, NDTBEC)
 
-  fcd0 <- file.path(outputPath(sim), "rep01", "cohortData_year0000.qs2")
-  fpgm0 <- file.path(outputPath(sim), "rep01", "pixelGroupMap_year0000.tif")
+  year0 <- .repYear0Files(mod$rep1Dir, mod$cohortFiles, .discoverOutputFiles(sim),
+                          padL = ceiling(log10(P(sim)$simTimes[2] + 1)))
+  fcd0 <- .checkCohortFile(year0$cohortData, "cannot make the year-0 seral stage map")
+  fpgm0 <- year0$pixelGroupMap
 
   fcd <- c(fcd0, mod$cd)
   fpgm <- c(fpgm0, mod$pgm)
@@ -1223,23 +1829,32 @@ makeSeralStageMapsBC <- function(sim) {
 
   ssmFiles <- writeSeralStageMapBC(cd = fcd, pgm = fpgm, ndtbec = fNDTBEC)
 
-  if (!is.na(P(sim)$sieveThresh)) {
+  thr <- P(sim)$sieveThresh
+  if (!is.na(thr) && thr >= 2) {
     ## pass ssm through terra::sieve to merge singletons with neighbouring large patches?
-    ## <https://rspatial.github.io/terra/reference/sieve.html>
+    ## <https://rspatial.github.io/terra/reference/sieve.html>; a threshold below 2 merges nothing (terra stops on it)
     ssmFiles <- vapply(
       ssmFiles,
       function(f) {
-        ## clumps < threshold merged with largest neighbour
-        fs <- .suffix(f, sprintf("-sieve%d", as.integer(P(sim)$sieveThresh))) ## TODO: use round() ??
-        terra::sieve(rast(f), threshold = P(sim)$sieveThresh, filename = fs, overwrite = TRUE)
+        ## clumps < threshold merged with largest neighbour. The suffix goes before the year,
+        ## `seralStageMap-sieve<N>_year<YYYY>.tif`: nrvtools parses the year from `_year<YYYY>_` in the label it
+        ## builds from the file name, and stops on `seralStageMap_year<YYYY>-sieve<N>`. TODO: use round() ??
+        sieved <- sub("_year", sprintf("-sieve%d_year", as.integer(thr)), basename(f), fixed = TRUE)
+        fs <- file.path(dirname(f), sieved)
+        terra::sieve(rast(f), threshold = thr, filename = fs, overwrite = TRUE)
         fs
       },
       character(1)
     )
   }
 
-  mod$ssm0 <- grep("/seralStageMap_year0000.*[.]tif$", ssmFiles, value = TRUE)
-  mod$ssm <- grep("/seralStageMap_year0000.*[.]tif$", ssmFiles, invert = TRUE, value = TRUE)
+  ssm <- .splitSeralMaps(ssmFiles, fpgm)
+  ## the current condition's map without urban land, as InitMulti() masks the other year-0 maps, written beside them
+  ## in `_cc/<rep>/`; not masked without `LandTypeCC_reporting`, of which InitMulti() has warned. The replicates' maps
+  ## are not masked: the envelope has no urban land.
+  urbanMask <- .urbanMask(sim$LandTypeCC_reporting)
+  mod$ssm0 <- if (is.null(urbanMask)) ssm$cc else .maskCC(ssm$cc, urbanMask, file.path(outputPath(sim), "_cc"))
+  mod$ssm <- ssm$reps
 
   return(invisible(sim))
 }
@@ -1356,9 +1971,9 @@ patchMetricsSeralBC <- function(sim) {
 makeAnimation <- function(sim) {
   ## animate replicate 1's saved stand-age time series (the deterministic first rep,
   ## matching the CC snapshot); frames were masked to studyAreaReporting when saved.
-  samFiles <- grep("rep01", mod$samTimeSeries, value = TRUE)
+  samFiles <- .firstRepFiles(mod$samTimeSeries, mod$rep1Dir)
   if (length(samFiles) == 0L) {
-    warning("NRV_summary animation: no rep01 standAgeMap time-series files found; skipping.")
+    warning("NRV_summary animation: no ", basename(mod$rep1Dir), " standAgeMap time-series files found; skipping.")
     return(invisible(sim))
   }
   yrs <- as.integer(gsub(".*year0*([0-9]+)\\.tif$", "\\1", samFiles))
@@ -1367,8 +1982,10 @@ makeAnimation <- function(sim) {
   yrs <- yrs[ord]
 
   ## age-class reclassification + colours (RdYlGn young -> old, matching v2's brewer.pal).
-  ## `ageClassCutOffs` are the LOWER bound of each class (length == n); the final class
-  ## runs to +Inf so old stands are never dropped.
+  ## standAgeMap is rounded down to the decade (40 means 40-49 years), so here a class starts at its
+  ## cutoff (right = FALSE). The lw summaries bin integer time since fire with each cutoff in the class
+  ## below (40 is Young, 41 Immature; nrvtools:::.age_class_raster()); for decade values this is the
+  ## closest match. The final class runs to +Inf so old stands are never dropped.
   cutoffs <- P(sim)$ageClassCutOffs
   n <- length(cutoffs)
   ageClasses <- P(sim)$ageClasses[seq_len(n)]
@@ -1643,17 +2260,19 @@ makeAnimation <- function(sim) {
 }
 
 ## The caption of an NRV figure: what its marks show, with the replicate and year counts of the
-## data drawn. `type` is "ribbon" or "boxplot" for an envelope (`df` from summarize_nrv(), whose
+## data drawn. `type` is "ribbon", "lines" or "boxplot" for an envelope (`df` from summarize_nrv(), whose
 ## n_reps count the replicates with a value), "box" or "violin" for a per-class page (`df` of
 ## per-replicate values). `cc` holds the figure's current-condition rows, if any; the caption names
 ## the current condition when one of them has a value to draw. Wrapped to `width` inches.
 .figCaption <- function(type, df, cc = NULL, perPatch = FALSE, width = 16) {
   fewer <- " (fewer where a class is absent or the metric undefined)"
-  if (type %in% c("ribbon", "boxplot")) {
+  if (type %in% c("ribbon", "boxplot", "lines")) {
     n <- .countText(df$n_reps, "replicate")
     varies <- length(unique(df$n_reps)) > 1L
     parts <- if (type == "ribbon") {
       c(paste0("Grey band: range of ", n, " at each simulation year", if (varies) fewer), "line: mean")
+    } else if (type == "lines") {
+      c(paste0("Grey lines: one for each of ", n, if (varies) fewer), "bold line: median")
     } else {
       c(
         paste0("Boxes: median and quartiles of ", n, " at each simulation year", if (varies) fewer),
@@ -1706,10 +2325,12 @@ makeAnimation <- function(sim) {
 ## Only units with a value get a panel, so the panels and pages counted here are those drawn. The
 ## y title is the metric's plain name and unit unless `ylab` is given; `classLabels` maps the class
 ## codes to the names shown; `captions = FALSE` omits the captions, which describe replicate
-## envelopes. The output dirs are created here (main worker).
+## envelopes. `reps`, the dataset's replicate values (see .envelopeReps()), makes each ribbon figure
+## that has some of them a "lines" figure (one line per replicate under the median); the rest stay
+## ribbons, and the boxplots are as ever. The output dirs are created here (main worker).
 .envelopeFigTasks <- function(sim, kind, p, ylab = NULL, layout = c("subregion", "metric"),
                               subdir = NULL, titlePrefix = "", minSubregions = 1L,
-                              classLabels = NULL, captions = TRUE) {
+                              classLabels = NULL, captions = TRUE, nrvPeriod = NULL, reps = NULL) {
   layout <- match.arg(layout)
   refCode <- LandWebUtils::refCodeFor(kind, p)
   env <- mod[[refCode]]
@@ -1725,10 +2346,15 @@ makeAnimation <- function(sim) {
     }
   }
   safe <- function(s) gsub("[/\\]", "-", s) ## filename-safe metric / subregion
-  task <- function(sub, ccSub, type, facet, title, page, lay, file) {
+  task <- function(sub, ccSub, type, facet, title, page, lay, file, repsSub = NULL) {
     lev <- .levelOf(sub)
-    list(
-      plotter = "envelope", df = sub, cc = ccSub, type = type, facet = facet,
+    if (identical(type, "ribbon") && !is.null(repsSub) && nrow(repsSub)) {
+      type <- "lines"
+    } else {
+      repsSub <- NULL
+    }
+    tk <- list(
+      plotter = "envelope", df = sub, cc = ccSub, type = type, facet = facet, nrvPeriod = nrvPeriod,
       ylab = if (is.null(ylab)) .metricTitle(unique(sub$metric), lev) else ylab,
       xlab = "Simulation year", title = title,
       caption = if (captions) {
@@ -1737,6 +2363,17 @@ makeAnimation <- function(sim) {
       page = page, ncol = lay$ncol, nrow = if (is.null(page)) NULL else lay$nrow,
       file = file, width = lay$width, height = lay$height
     )
+    if (!is.null(repsSub)) tk$reps <- repsSub
+    tk
+  }
+  ## the replicates of one metric (and subregion), for the lines figure
+  repsOf <- function(met, poly = NULL) {
+    if (is.null(reps)) {
+      return(NULL)
+    }
+    keep <- reps$metric %in% met
+    if (!is.null(poly)) keep <- keep & reps$poly %in% poly
+    reps[keep, , drop = FALSE]
   }
   tasks <- list()
 
@@ -1752,7 +2389,8 @@ makeAnimation <- function(sim) {
           tasks[[length(tasks) + 1L]] <- task(
             sub, .ccFor(cc, met, poly), type, facet,
             title = paste0(poly, " — ", met), page = NULL, lay = lay,
-            file = file.path(d, paste0(safe(poly), " ", safe(met), "_", type, ".png"))
+            file = file.path(d, paste0(safe(poly), " ", safe(met), "_", type, ".png")),
+            repsSub = if (type == "ribbon") repsOf(met, poly)
           )
         }
       }
@@ -1775,7 +2413,8 @@ makeAnimation <- function(sim) {
         tasks[[length(tasks) + 1L]] <- task(
           sub, .ccFor(cc, met), type, facet,
           title = .pageTitle(paste0(titlePrefix, met), pg, nPages), page = pg, lay = lay,
-          file = file.path(d, paste0(safe(met), "_", type, "_p", pg, ".png"))
+          file = file.path(d, paste0(safe(met), "_", type, "_p", pg, ".png")),
+          repsSub = if (type == "ribbon") repsOf(met)
         )
       }
     }
@@ -1786,19 +2425,26 @@ makeAnimation <- function(sim) {
 ## Per-class distribution figure TASKS for one analysis `kind` (pm) x reporting `layer`: for each
 ## metric, box and violin plots of its values for each class, one panel per subregion, paginated
 ## (`<metric>_<box|violin>_p<pg>.png` in `subdir`), with the current-condition values as red
-## points. The values are those of each replicate and summary year, read from the raw parquet
+## points. The values are those of each replicate and NRV year, read from the raw parquet
 ## aggregates (nrvtools::nrv_replicate_values(), which averages a patch-level metric over each
 ## replicate's patches), so a box spans the variation across replicates and time. A layer this run
 ## did not summarise gets none: what is on disk may be another run's. Patch area has no pages of
 ## its own: a replicate's mean patch area is the class's mean patch area, area_mn. Only subregions
-## with a value get a panel, so the pages counted here are those drawn.
+## with a value get a panel, so the pages counted here are those drawn. `reps` is the layer's
+## replicate values when the caller has read them already (.readReplicates()), else they are read here.
 .byClassFigTasks <- function(sim, kind, p, xlab = "class", subdir = "per-metric", titlePrefix = "",
-                             classLabels = NULL) {
+                             classLabels = NULL, nrvPeriod = NULL, reps = NULL) {
   refCode <- LandWebUtils::refCodeFor(kind, p)
   if (is.null(mod[[refCode]]) || !nrow(mod[[refCode]])) {
     return(list())
   }
-  reps <- nrvtools::nrv_replicate_values(.nrvAggRoot(sim, refCode))
+  if (is.null(reps)) {
+    reps <- nrvtools::nrv_replicate_values(.nrvAggRoot(sim, refCode))
+  }
+  ## the NRV years only; the current condition is the one snapshot of year 0
+  if (!is.null(nrvPeriod)) {
+    reps <- reps[reps$time >= min(nrvPeriod) & reps$time <= max(nrvPeriod), , drop = FALSE]
+  }
   if (!nrow(reps)) {
     return(list())
   }
@@ -1843,6 +2489,44 @@ makeAnimation <- function(sim) {
     }
   }
   tasks
+}
+
+## The replicate values of the aggregate at `root` (nrvtools::nrv_replicate_values(): a patch-level
+## metric's replicate value is its mean over the patches), read once for the figures of a layer. The
+## classes are labelled from the year-0 map `vtm` when there is one, as the envelopes are, so integer
+## codes in an older aggregate match their panels. Says so when there are none.
+.readReplicates <- function(root, vtm = NULL, what = root) {
+  reps <- nrvtools::nrv_replicate_values(root)
+  if (!nrow(reps)) {
+    message("NRV_summary: no replicate values for ", what, "; its envelope figures are ribbons")
+    return(reps)
+  }
+  if (!is.null(vtm) && file.exists(vtm)) {
+    reps <- nrvtools::label_vegtype_classes(reps, terra::rast(vtm))
+  }
+  reps
+}
+
+## `reps` (.readReplicates()) as the lines of an envelope figure need them: one `rep` column naming
+## the replicate (a copy of nrv_replicate_values()'s `replicate`), finite values, the class names shown
+## on the figure (`classLabels`, as for the envelope). NULL when there are none.
+.envelopeReps <- function(reps, classLabels = NULL) {
+  if (is.null(reps) || !nrow(reps)) {
+    return(NULL)
+  }
+  reps <- reps[is.finite(reps$value), , drop = FALSE]
+  if (!nrow(reps)) {
+    return(NULL)
+  }
+  ## one line per partition (`replicate`): the `rep` that nrvtools parses from the folder name is NA
+  ## for a folder not named rep<NN>, which would draw every replicate as one line
+  if ("replicate" %in% names(reps)) {
+    reps$rep <- reps$replicate
+  }
+  if (!is.null(classLabels) && "class" %in% names(reps)) {
+    reps$class <- classLabels(reps$class)
+  }
+  reps
 }
 
 ## Number of local worker processes for parallel plot rendering: RAM-aware (optimalClusterNum) but
@@ -1895,11 +2579,14 @@ makeAnimation <- function(sim) {
       {
         gg <- switch(
           task[["plotter"]],
-          envelope = nrvtools::plot_nrv_envelope(
-            task[["df"]], type = task[["type"]], facet = task[["facet"]],
-            ylab = task[["ylab"]], title = task[["title"]], ncol = task[["ncol"]],
-            nrow = task[["nrow"]], page = task[["page"]], cc = task[["cc"]],
-            xlab = task[["xlab"]], caption = task[["caption"]]
+          envelope = .addNrvShading(
+            nrvtools::plot_nrv_envelope(
+              task[["df"]], type = task[["type"]], facet = task[["facet"]],
+              ylab = task[["ylab"]], title = task[["title"]], ncol = task[["ncol"]],
+              nrow = task[["nrow"]], page = task[["page"]], cc = task[["cc"]],
+              xlab = task[["xlab"]], caption = task[["caption"]], reps_df = task[["reps"]]
+            ),
+            task[["nrvPeriod"]]
           ),
           byclass = nrvtools::plot_by_class(
             task[["df"]], type = task[["type"]], page = task[["page"]], cc = task[["cc"]],
@@ -1952,6 +2639,10 @@ makeAnimation <- function(sim) {
   ## resolves everything; each task's data is shipped on its own as the mapped argument. (globalenv,
   ## not baseenv -- the latter trips future's "cycles in parent chains" during serialization.)
   environment(render_one) <- new.env(parent = globalenv())
+  ## the module helper render_one uses, detached the same way
+  addNrv <- .addNrvShading
+  environment(addNrv) <- new.env(parent = globalenv())
+  assign(".addNrvShading", addNrv, envir = environment(render_one))
 
   nWorkers <- .plotWorkers(sim, length(tasks))
   message("NRV_summary: rendering ", length(tasks), " figure(s) across ", nWorkers, " worker(s)")
@@ -1975,6 +2666,947 @@ makeAnimation <- function(sim) {
   files[!is.na(files) & nzchar(files)]
 }
 
+## Shade the NRV years `period` on an envelope figure from `plot_nrv_envelope()`, behind the data. The
+## boxplot figure has a discrete time axis (one box per time), the ribbon figure a continuous one. The
+## shading is added to the figure's caption.
+.addNrvShading <- function(gg, period) {
+  if (is.null(gg) || is.null(period) || !"time" %in% names(gg$data)) {
+    return(gg)
+  }
+  times <- sort(unique(gg$data$time))
+  inNrv <- times >= min(period) & times <= max(period)
+  if (!any(inNrv)) {
+    return(gg)
+  }
+  box <- any(vapply(gg$layers, function(l) inherits(l$geom, "GeomBoxplot"), logical(1L)))
+  x <- if (box) range(which(inNrv)) + c(-0.5, 0.5) else range(times[inNrv])
+  gg$layers <- c(
+    ggplot2::annotate("rect", xmin = x[1L], xmax = x[2L], ymin = -Inf, ymax = Inf,
+                      alpha = 0.15, fill = "orange"),
+    gg$layers
+  )
+  ## added to the figure's caption, which says what its lines and marks show
+  caption <- gg$labels$caption
+  gg + ggplot2::labs(caption = if (is.null(caption)) "shaded: NRV years" else
+    paste0(sub("\\.$", "", caption), "; shaded: NRV years."))
+}
+
+## ---- the stability check (the opt-in `stability` event) ----------------------------------------------
+## Is the run long enough? The summaries describe a landscape that is meant to be in equilibrium. A
+## metric still trending at the end of the run means the envelope mixes the transient with the
+## equilibrium, and the run needs to be longer. Each series (a landscape metric, a patch metric by
+## class, the area burned per block) is tested over the last `stabilityWindow` of the NRV period
+## (`summaryPeriod` when `nrvWindow` is 1), on the values of all reps pooled. The event is not in the
+## default of `postprocessEvents`: it runs only when asked for.
+## Test: Mann-Kendall (Kendall's tau of value against time) for the p-value and the Theil-Sen slope
+## (median of the pairwise slopes) for the size of the trend. Both use ranks and medians, so one odd
+## rep or a skewed metric does not decide the verdict, as it can with an OLS slope; and pooling the reps
+## keeps the spread among reps in the test, so a noisy series needs a larger trend to be significant.
+## A series is "still changing" when the trend is significant AND the fitted change over the window is
+## more than `minChange` of the series' range (largest minus smallest value over all reps in the
+## window, not the approach to it); a significant but tiny trend is not worth a longer run. Fewer than 3
+## distinct times in the window cannot be tested ("insufficient"). The window is not the NRV.
+
+## one series: Mann-Kendall p-value and Theil-Sen slope of `value` against `time`
+.senKendall <- function(time, value) {
+  if (length(unique(value)) < 2L) {
+    return(c(slope = 0, p = 1)) ## constant: no trend
+  }
+  pairs <- utils::combn(length(time), 2L)
+  dt <- time[pairs[2L, ]] - time[pairs[1L, ]]
+  dv <- value[pairs[2L, ]] - value[pairs[1L, ]]
+  p <- suppressWarnings(stats::cor.test(time, value, method = "kendall", exact = FALSE)$p.value)
+  c(slope = stats::median(dv[dt != 0] / dt[dt != 0]), p = p)
+}
+
+## `series`: one row per rep x time x series, with the `keys` columns identifying the series, plus
+## `rep`, `time` and `value`. `window` = c(from, to) in simulation time. Returns one row per series:
+## the keys, nTimes (distinct times in the window), slope (per time unit), p, changePctRange (the fitted
+## change over the window as % of the window's range), flag ("still changing", "stable" or "insufficient").
+.trendStability <- function(series, keys, window, alpha = 0.05, minChange = 0.10) {
+  id <- do.call(paste, c(lapply(series[keys], as.character), sep = "\r"))
+  rows <- lapply(split(seq_len(nrow(series)), factor(id, levels = unique(id))), function(i) {
+    s <- series[i, , drop = FALSE]
+    s <- s[is.finite(s$value), , drop = FALSE]
+    w <- s[s$time >= window[1L] & s$time <= window[2L], , drop = FALSE]
+    out <- cbind(series[i[1L], keys, drop = FALSE], nTimes = length(unique(w$time)), slope = NA_real_,
+                 p = NA_real_, changePctRange = NA_real_, flag = "insufficient")
+    if (out$nTimes >= 3L) {
+      tr <- .senKendall(w$time, w$value)
+      windowRange <- diff(range(w$value)) ## the window's values, not the transient before it
+      out$slope <- tr[["slope"]]
+      out$p <- tr[["p"]]
+      out$changePctRange <- if (windowRange > 0) 100 * out$slope * diff(range(w$time)) / windowRange else 0
+      out$flag <- if (out$p < alpha && abs(out$changePctRange) > 100 * minChange) "still changing" else "stable"
+    }
+    out
+  })
+  res <- do.call(rbind, rows)
+  rownames(res) <- NULL
+  res
+}
+
+
+## The per-block fire table burnSummaries writes (burnSummaries_fireBlocks.csv: rep, block, nFires,
+## areaBurnedHa; blocks with no fire are 0): the registered output `files` first, else `dir` (the output
+## path); NULL when neither has it. It is built from the fire sizes every fire model writes, so the area
+## burned is there for LandMine and scfm as well as fireSense (their fire-size table has no area column).
+.burnBlocksFile <- function(files, dir) {
+  name <- "burnSummaries_fireBlocks.csv"
+  files <- as.character(files)
+  f <- files[which(basename(files) == name)] ## which(): a registered NA is not a match
+  if (length(f)) {
+    return(f[length(f)])
+  }
+  f <- file.path(dir, name)
+  if (file.exists(f)) f
+}
+
+## The area burned per block, from that table: rep, time, value. burnSummaries stamps a block with the
+## year before its first year: block `b` covers (b, b + width]. With a `window`, only the blocks wholly
+## inside it are kept (b >= window[1] and b + width <= window[2]), the width being the spacing of the
+## blocks (0 for a single block).
+.burnSeries <- function(file, window = NULL) {
+  b <- data.table::fread(file)
+  if (!is.null(window)) {
+    width <- if (length(unique(b$block)) > 1L) min(diff(sort(unique(b$block)))) else 0
+    b <- b[b$block >= window[1L] & b$block + width <= window[2L], ]
+  }
+  data.frame(rep = b$rep, time = b$block, value = b$areaBurnedHa)
+}
+
+## The burn series in the form of the other stability series (see .stabilitySeries); NULL, with a message
+## naming the file, when burnSummaries has not written it.
+.stabilityBurn <- function(sim) {
+  f <- .burnBlocksFile(outputs(sim)$file, outputPath(sim))
+  if (is.null(f)) {
+    message(
+      "NRV_summary stability: burnSummaries_fireBlocks.csv is neither among the registered outputs nor in ",
+      outputPath(sim), "; no burn series"
+    )
+    return(NULL)
+  }
+  b <- .burnSeries(f, .stabilityWindow(sim))
+  if (!nrow(b)) {
+    message("NRV_summary stability: no burn block lies inside the stability window; no burn series")
+    return(NULL)
+  }
+  data.frame(
+    kind = "burn", layer = P(sim)$.studyAreaName, poly = P(sim)$.studyAreaName, level = "landscape",
+    class = NA_character_, metric = "areaBurnedHa per block", rep = b$rep, time = b$time, value = b$value
+  )
+}
+
+## The series the stability check looks at: landscape and patch metrics per rep (from the _aggregates
+## parquet), and the area burned per block when burnSummaries wrote it. Columns:
+## kind, layer, poly, level, class, metric, rep, time, value. One value per rep x time per series, so
+## only the landscape and class levels (patch-level rows are one per patch); filtered in arrow, before
+## the rows are read into memory.
+.stabilitySeries <- function(sim) {
+  events <- tolower(P(sim)$postprocessEvents)
+  if (!any(c("lm", "pm") %in% events)) {
+    message("NRV_summary stability: no lm or pm event in this run, so no lm/pm series are tested")
+  }
+  ## the stand-level series of the st event (kept in `mod`), when it ran in the same run
+  st <- if ("st" %in% events && !is.null(mod$standSeries)) {
+    d <- mod$standSeries
+    data.frame(kind = "st", layer = .studyAreaLabel(sim), poly = .studyAreaLabel(sim), level = "landscape",
+               class = NA_character_, metric = d$metric, rep = d$rep, time = d$time, value = d$value)
+  }
+  vtmRAT <- if ("pm" %in% events) terra::rast(mod$fvtm0)
+  one <- lapply(intersect(c("lm", "pm"), events), function(kind) {
+    lapply(mod$rptPolyNames, function(p) {
+      raw <- open_nrv_dataset(.nrvAggRoot(sim, LandWebUtils::refCodeFor(kind, p)))
+      if (is.null(raw)) {
+        return(NULL)
+      }
+      raw <- dplyr::filter(raw, level %in% c("landscape", "class"))
+      raw <- as.data.frame(dplyr::collect(raw))
+      if (!nrow(raw)) {
+        return(NULL)
+      }
+      if (kind == "pm") {
+        raw <- nrvtools::label_vegtype_classes(raw, vtmRAT)
+      }
+      raw$class <- as.character(raw$class)
+      data.frame(kind = kind, layer = p, raw[, c("poly", "level", "class", "metric", "rep", "time", "value")])
+    })
+  })
+  do.call(rbind, c(unlist(one, recursive = FALSE), list(st, .stabilityBurn(sim))))
+}
+
+.stabilityKeys <- function() c("kind", "layer", "poly", "level", "class", "metric")
+
+## one id per series: its key columns
+.stabilityId <- function(d) do.call(paste, c(unname(as.list(d[.stabilityKeys()])), sep = "\r"))
+
+## The window the check looks at: the last `stabilityWindow` of the NRV period
+.stabilityWindow <- function(sim) .lastFraction(.nrvPeriod(sim), P(sim)$stabilityWindow)
+
+## `ids` in pages of at most `perPage`: a list of id vectors.
+.pages <- function(ids, perPage = 12L) {
+  unname(split(ids, ceiling(seq_along(ids) / perPage)))
+}
+
+## The title of each series: nrvtools' name and unit of the metric (the burn series is named already).
+## Looked up once per distinct metric.
+.stabilityTitle <- function(kind, metric, level, sppEquiv = NULL, sppEquivCol = "LandR") {
+  key <- paste(kind, metric, level, sep = "\r")
+  u <- !duplicated(key)
+  title <- vapply(which(u), function(i) {
+    if (identical(kind[i], "burn")) {
+      metric[i]
+    } else if (identical(kind[i], "st")) {
+      .standLabel(metric[i], sppEquiv, sppEquivCol)
+    } else {
+      .metricTitle(metric[i], level[i])
+    }
+  }, character(1L))
+  title[match(key, key[u])]
+}
+
+## Panels of the series in `d` over time (reps as thin lines, median in bold), the window shaded, and
+## the verdict (`flags`, named by series id) in each panel title. `d` holds only the series of one page.
+.stabilityPanels <- function(d, flags, window, ncol = 4L, sppEquiv = NULL, sppEquivCol = "LandR") {
+  id <- .stabilityId(d)
+  ## layer/poly, leaving out a name that is missing (the burn series' study area name may be NA)
+  where <- vapply(seq_len(nrow(d)), function(i) {
+    paste(c(d$layer[i], d$poly[i])[!is.na(c(d$layer[i], d$poly[i]))], collapse = "/")
+  }, character(1L))
+  ## pm classes are vegetation types, named as in the other pm figures
+  cls <- d$class
+  isPm <- d$kind == "pm" & !is.na(cls)
+  cls[isPm] <- .vegTypeLabels(cls[isPm])
+  d$panel <- paste0(
+    ifelse(is.na(cls), "", paste0(cls, " ")), .stabilityTitle(d$kind, d$metric, d$level, sppEquiv, sppEquivCol),
+    "\n", ifelse(nzchar(where), paste0(where, ": "), ""), flags[id]
+  )
+  ggplot2::ggplot(d, ggplot2::aes(time, value)) +
+    ggplot2::annotate("rect", xmin = window[1L], xmax = window[2L], ymin = -Inf, ymax = Inf,
+                      alpha = 0.15, fill = "orange") +
+    ggplot2::geom_line(ggplot2::aes(group = rep), colour = "grey60", linewidth = 0.3) +
+    ggplot2::stat_summary(fun = stats::median, geom = "line", linewidth = 0.8) +
+    ggplot2::facet_wrap(~panel, ncol = ncol, scales = "free_y") +
+    ggplot2::labs(x = "time", y = NULL, caption = "shaded: stability window; thin lines: reps; bold: median") +
+    ggplot2::theme_bw(base_size = 9)
+}
+
+## One summary of the verdicts: fitted change over the window as % of the window's range, one point per
+## series, by metric, coloured by verdict, with the `minChange` thresholds.
+.stabilitySummary <- function(res, minChange, sppEquiv = NULL, sppEquivCol = "LandR") {
+  res$label <- paste(res$kind, .stabilityTitle(res$kind, res$metric, res$level, sppEquiv, sppEquivCol))
+  ggplot2::ggplot(res, ggplot2::aes(changePctRange, label, colour = flag)) +
+    ggplot2::geom_vline(xintercept = c(-1, 1) * 100 * minChange, linetype = "dashed") +
+    ggplot2::geom_point(alpha = 0.7) +
+    ggplot2::scale_colour_manual(
+      values = c(stable = "steelblue", `still changing` = "firebrick", insufficient = "grey60"),
+      drop = FALSE
+    ) +
+    ggplot2::labs(x = "fitted change over the window (% of the window's range)", y = NULL, colour = NULL) +
+    ggplot2::theme_bw(base_size = 9)
+}
+
+## "N of M series still changing; consider a longer run", or, when no series could be tested, why not
+.stabilityVerdict <- function(res, window) {
+  tested <- res$flag != "insufficient"
+  if (!any(tested)) {
+    return(paste0("no series could be tested: the stability window ", window[1L], "-", window[2L],
+                  " holds fewer than 3 summary times; lower summaryInterval or raise stabilityWindow"))
+  }
+  n <- sum(res$flag == "still changing")
+  paste0(
+    n, " of ", sum(tested), " series still changing",
+    if (n > 0L) "; consider a longer run" else "; the run is long enough for the series tested",
+    if (any(!tested)) paste0(" (", sum(!tested), " with too few summary times to test)")
+  )
+}
+
+## ---- the current-condition overview (drawn by the opt-in `stability` event) -------------------------
+## Where each metric's current condition (year 0) sits against its NRV range, on the metric's real scale.
+## One panel per subregion x metric of an lm reporting layer, at most 24 to a page.
+## Ported from the PE fork (PE#12); the range is that of the NRV years (`.nrvPeriod()`), as for the envelopes.
+
+## The NRV range of each poly x metric: smallest min, largest max and median of the mean, over the times of
+## `period` (the NRV years); NAs are ignored, so one all-NA year does not blank a range, and a poly x metric with
+## no value in the period has none. `env` has poly, metric, time, mean, min and max.
+.nrvRange <- function(env, period) {
+  env <- env[env$time >= min(period) & env$time <= max(period), , drop = FALSE]
+  env <- env[!(is.na(env$min) & is.na(env$max) & is.na(env$mean)), , drop = FALSE]
+  if (!nrow(env)) {
+    return(data.frame(poly = character(0), metric = character(0), lo = numeric(0), hi = numeric(0),
+                      mid = numeric(0)))
+  }
+  byMetric <- split(env, paste(env$poly, env$metric, sep = "\r"))
+  out <- do.call(rbind, lapply(byMetric, function(e) {
+    data.frame(poly = e$poly[1L], metric = e$metric[1L], lo = min(e$min, na.rm = TRUE),
+               hi = max(e$max, na.rm = TRUE), mid = stats::median(e$mean, na.rm = TRUE))
+  }))
+  rownames(out) <- NULL
+  out
+}
+
+## The current condition against the NRV, one row per poly x metric: the NRV range (lo, hi) and middle (mid) of
+## `.nrvRange()`, the current condition (`current`, the mean of `cc`: poly, metric, mean) and where it falls:
+## "inside", "above" or "below" the range.
+.nrvComparison <- function(env, cc, period) {
+  nrv <- .nrvRange(env, period)
+  cc <- cc[is.finite(cc$mean), c("poly", "metric", "mean"), drop = FALSE]
+  nrv <- merge(nrv, stats::setNames(cc, c("poly", "metric", "current")), by = c("poly", "metric"))
+  tol <- 1e-9 * pmax(1, abs(nrv$lo), abs(nrv$hi)) ## a value equal to an end is inside
+  nrv$position <- ifelse(nrv$current < nrv$lo - tol, "below", ifelse(nrv$current > nrv$hi + tol, "above", "inside"))
+  nrv
+}
+
+## TRUE when the NRV comparison tables are wanted: when the `st` or the `cc` event is. One place, so another event
+## that asks for them is added here. Without them the lm event writes the files it always did.
+.wantNrvComparison <- function(sim) any(c("st", "cc") %in% tolower(P(sim)$postprocessEvents))
+
+## Write `.nrvComparison()` of one analysis `kind` and reporting `layer` to csv/<kind>/<layer>/<kind>_nrvComparison.csv,
+## when `.wantNrvComparison()`. `env` and `cc` are those the event kept in `mod`; of their rows, the landscape
+## level's only, as a class-level metric repeats over classes. Registered with the other postprocess files.
+.writeNrvComparisonCSV <- function(sim, env, cc, kind, layer) {
+  f <- file.path(.ppRoot(sim), "csv", kind, layer, paste0(kind, "_nrvComparison.csv"))
+  if (!.wantNrvComparison(sim)) {
+    unlink(f) ## a table of an earlier run with st is not left beside this run's csvs (no folder is made)
+    return(invisible())
+  }
+  if (!is.null(env) && "level" %in% names(env)) env <- env[env$level %in% "landscape", , drop = FALSE]
+  if (!is.null(cc) && "level" %in% names(cc)) cc <- cc[cc$level %in% "landscape", , drop = FALSE]
+  if (is.null(env) || !nrow(env) || is.null(cc) || !nrow(cc)) {
+    unlink(f) ## nothing to write: an earlier run's table is not left either
+    return(invisible())
+  }
+  .ppCsvDir(sim, kind, layer) ## creates the folder
+  cmp <- .nrvComparison(env, cc, .nrvPeriod(sim))
+  utils::write.csv(cmp, f, row.names = FALSE)
+  .recordComparison(kind, cmp, layer)
+  mod$ppFiles <- c(mod$ppFiles, f)
+  invisible()
+}
+
+## where the current condition falls against the NRV range (`.nrvComparison()`'s `position`): its colour and legend
+## label, on every figure that colours the current condition
+.positionColour <- function() c(inside = "#1b9e77", below = "#2166ac", above = "#7b3294")
+.positionLabels <- function() {
+  c(inside = "inside the NRV range", below = "below the NRV range", above = "above the NRV range")
+}
+
+## The rows of the overview, one per panel: `.nrvComparison()` plus the panel's label, the subregion (when
+## there is more than one) and nrvtools' title of the metric, in subregion then metric order.
+.ccOverviewData <- function(env, cc, period, level = "landscape") {
+  d <- .nrvComparison(env, cc, period)
+  d <- d[order(d$poly, d$metric), , drop = FALSE]
+  if (!nrow(d)) {
+    d$panel <- character(0)
+    return(d)
+  }
+  mets <- unique(d$metric)
+  title <- stats::setNames(vapply(mets, .metricTitle, character(1), level = level), mets)
+  d$panel <- paste0(if (length(unique(d$poly)) > 1L) paste0(d$poly, ": ") else "", title[d$metric])
+  rownames(d) <- NULL
+  d
+}
+
+## `.ccOverviewData()` in pages of at most `perPage` panels: a list of data frames, each with only its own panels.
+.ccOverviewPages <- function(d, perPage = 24L) {
+  lapply(.pages(unique(d$panel), perPage), function(ids) d[d$panel %in% ids, , drop = FALSE])
+}
+
+## Panel grid and canvas (inches) of a page of `nPanels` panels, four to a row. Unlike `.figLayout()`, rows are
+## not capped at three: a page holds up to 24 panels, and the height follows its rows.
+.ccOverviewLayout <- function(nPanels) {
+  ncol <- max(1L, min(4L, as.integer(nPanels)))
+  nrow <- max(1L, as.integer(ceiling(nPanels / ncol)))
+  list(ncol = ncol, nrow = nrow, width = max(8, 4 * ncol), height = 2 + 1.1 * nrow)
+}
+
+## One page of the overview (`d`: rows of `.ccOverviewData()`), one facet per subregion x metric on its own x
+## scale. The grey bar is the NRV range (smallest min to largest max over the NRV years), the tick the median
+## of the NRV-year means, the dot the current condition, coloured by its position against the range.
+.currentConditionOverview <- function(d, title = "Current condition relative to the NRV") {
+  positionColour <- .positionColour()
+  positionLabels <- .positionLabels()
+  midLabel <- .nrvMidLabel()
+  d$panel <- factor(d$panel, levels = unique(d$panel))
+  lay <- .ccOverviewLayout(nlevels(d$panel))
+  ggplot2::ggplot(d) +
+    ggplot2::geom_segment(ggplot2::aes(x = lo, xend = hi, y = 0, yend = 0), colour = "grey75", linewidth = 4) +
+    ggplot2::geom_point(ggplot2::aes(x = mid, y = 0, shape = midLabel), size = 3) +
+    ggplot2::geom_point(ggplot2::aes(x = current, y = 0, colour = position), size = 3) +
+    ggplot2::scale_colour_manual(values = positionColour, breaks = names(positionColour),
+                                 labels = unname(positionLabels), drop = FALSE, name = "current condition") +
+    ggplot2::scale_shape_manual(values = stats::setNames(124, midLabel), name = NULL) +
+    ggplot2::facet_wrap(~panel, scales = "free_x", ncol = lay$ncol, labeller = ggplot2::label_wrap_gen(30)) +
+    ggplot2::labs(x = "metric value (grey bar: NRV range over the NRV years)", y = NULL, title = title) +
+    ggplot2::theme_bw(base_size = 9) +
+    ggplot2::theme(legend.position = "bottom", axis.text.y = ggplot2::element_blank(),
+                   axis.ticks.y = ggplot2::element_blank(), panel.grid.major.y = ggplot2::element_blank(),
+                   panel.grid.minor.y = ggplot2::element_blank())
+}
+
+## ---- every metric of every group on one figure (the opt-in `cc` event) --------------------------------------
+## The groups that write an nrvComparison table, by analysis kind: lm (landscape metrics) and st (stand-level
+## measures). pm and the other kinds have none, so they are not on the figure.
+.ccAllGroups <- function() c(lm = "landscape", st = "stand")
+.ccAllTitles <- function() c(landscape = "Landscape metrics", stand = "Stand-level measures")
+.ccAllXlab <- function() "position relative to the natural range (0 = lowest, 1 = highest simulated value)"
+.ccAllLimits <- function() c(-1, 2) ## a point further out than one range width beyond an end is drawn at the limit
+
+## The legend name of the tick at the NRV middle, on the overview and on the combined figure
+.nrvMidLabel <- function() "median of NRV-year means"
+
+## `x` on the scale where the NRV range [lo, hi] is 0 to 1. A range of one value (hi == lo) is given a width of
+## 1% of the value (at least 0.01) centred on it.
+.nrvScale <- function(x, lo, hi) {
+  width <- hi - lo
+  point <- width == 0
+  width <- ifelse(point, 0.01 * pmax(abs(hi), 1), width)
+  lo <- ifelse(point, lo - width / 2, lo)
+  (x - lo) / width
+}
+
+## The age classes from young to old: the run's (`ageClasses`), else the default ones; any other class comes after
+## them, by name.
+.ccAllAgeOrder <- function(ageClasses = NULL) {
+  if (length(ageClasses)) as.character(ageClasses) else c("Young", "Immature", "Mature", "Old")
+}
+
+## Order of the stand-level rows: biomass, the age classes young to old (`.ccAllAgeOrder()`; others after, by
+## name; `ageClasses` as for `.ccAllAgeOrder()`), the forested share, then the leading types. Landscape rows have
+## one rank, so they keep their order.
+.standRank <- function(metric, group, ageClasses = NULL) {
+  ord <- .ccAllAgeOrder(ageClasses)
+  age <- match(sub("^age_", "", metric), ord, nomatch = length(ord) + 1L)
+  ifelse(group != "stand", 0, ifelse(metric == "biomassTg", 1,
+         ifelse(grepl("^age_", metric), 2 + age / (length(ord) + 2),
+         ifelse(metric == "forested", 3, 4))))
+}
+
+## The comparison of one analysis `kind` and reporting `layer` (`.nrvComparison()` rows), kept for the figure of
+## every group (`currentConditionAll()`) with its layer, its group and the metric's label (a `label` column, else
+## nrvtools' name of the metric).
+.recordComparison <- function(kind, cmp, layer = "") {
+  if (!nrow(cmp)) {
+    return(invisible()) ## nothing to draw; a zero-row data frame cannot take the columns below
+  }
+  cmp$layer <- layer
+  cmp$group <- unname(.ccAllGroups()[kind])
+  if (is.null(cmp$label)) {
+    mets <- unique(cmp$metric)
+    lab <- stats::setNames(vapply(mets, .metricTitle, character(1), level = "landscape"), mets)
+    cmp$label <- unname(lab[cmp$metric])
+  }
+  mod$nrvComparisons[[paste(kind, layer)]] <- cmp
+  invisible()
+}
+
+## The rows of the figure from the recorded comparisons (`poly`, `metric`, `group`, `label`, `lo`, `hi`, `mid`,
+## `current`, `position`): a leading type that is 0 in the current condition and in the NRV is dropped; the NRV
+## mid and the current condition are rescaled (xMid, xCurrent); the current condition is drawn at xPlot, clipped
+## to `.ccAllLimits()` (clipped = TRUE); y is the row, from the top, with a row above each group for its title.
+.currentConditionAllData <- function(cmp, ageClasses = NULL) {
+  titles <- .ccAllTitles()
+  lim <- .ccAllLimits()
+  cmp <- cmp[!(grepl("^lead_", cmp$metric) & cmp$current == 0 & cmp$hi == 0), , drop = FALSE]
+  cmp$group <- factor(cmp$group, names(titles))
+  cmp <- cmp[order(cmp$group, .standRank(cmp$metric, cmp$group, ageClasses),
+                   ifelse(cmp$group == "stand", cmp$label, "")), , drop = FALSE]
+  cmp$xMid <- .nrvScale(cmp$mid, cmp$lo, cmp$hi)
+  cmp$xCurrent <- .nrvScale(cmp$current, cmp$lo, cmp$hi)
+  cmp$xPlot <- pmin(pmax(cmp$xCurrent, lim[1]), lim[2])
+  cmp$clipped <- cmp$xPlot != cmp$xCurrent
+  cmp$group <- as.character(cmp$group)
+  newGroup <- !duplicated(cmp$group)
+  cmp$y <- -(seq_len(nrow(cmp)) + cumsum(newGroup))
+  attr(cmp, "titles") <- data.frame(group = cmp$group[newGroup], y = cmp$y[newGroup] + 1,
+                                    title = unname(titles[cmp$group[newGroup]]))
+  cmp
+}
+
+## One panel, a row per metric: the grey bar is the NRV range (0 to 1), the black tick the NRV median, the dot the
+## current condition, coloured by its position. A current condition clipped at the limit has an arrow and its
+## value written beside it.
+.currentConditionAll <- function(data, title = "Current condition relative to the NRV") {
+  titles <- attr(data, "titles")
+  lim <- .ccAllLimits()
+  positionColour <- .positionColour()
+  midLabel <- .nrvMidLabel()
+  clip <- data[data$clipped, , drop = FALSE]
+  dir <- sign(clip$xCurrent)
+  ggplot2::ggplot(data) +
+    ggplot2::geom_segment(ggplot2::aes(x = 0, xend = 1, y = y, yend = y), colour = "grey75", linewidth = 3) +
+    ggplot2::geom_point(ggplot2::aes(x = xMid, y = y, shape = midLabel), size = 3) +
+    ggplot2::geom_point(ggplot2::aes(x = xPlot, y = y, colour = position), size = 2.5) +
+    ggplot2::geom_segment(data = clip,
+                          ggplot2::aes(x = xPlot - dir * 0.12, xend = xPlot, y = y, yend = y, colour = position),
+                          arrow = ggplot2::arrow(length = ggplot2::unit(0.08, "in")), show.legend = FALSE) +
+    ggplot2::geom_text(data = clip,
+                       ggplot2::aes(x = xPlot - dir * 0.16, y = y, label = signif(current, 3), colour = position),
+                       hjust = ifelse(dir > 0, 1, 0), size = 2.6, show.legend = FALSE) +
+    ggplot2::geom_text(data = titles, ggplot2::aes(x = lim[1], y = y, label = title), hjust = 0,
+                       fontface = "bold", size = 3.2) +
+    ggplot2::geom_vline(xintercept = c(0, 1), linetype = "dotted", colour = "grey60") +
+    ggplot2::scale_y_continuous(breaks = data$y, labels = data$label, expand = ggplot2::expansion(add = 0.8)) +
+    ggplot2::scale_x_continuous(breaks = seq(lim[1], lim[2], 0.5), limits = lim + c(-0.1, 0.1)) +
+    ggplot2::scale_colour_manual(values = positionColour, breaks = names(positionColour),
+                                 labels = unname(.positionLabels()), drop = FALSE, name = "current condition") +
+    ggplot2::scale_shape_manual(values = stats::setNames(124, midLabel), name = NULL) +
+    ggplot2::labs(x = .ccAllXlab(), y = NULL, title = title) +
+    ggplot2::theme_bw(base_size = 9) +
+    ggplot2::theme(legend.position = "bottom", panel.grid.major.y = ggplot2::element_blank(),
+                   panel.grid.minor = ggplot2::element_blank())
+}
+
+## `stem`, the file name proposed for each of the (distinct) names `x`, made distinct also by case (for a
+## case-insensitive disk). A name that is its own stem keeps it; each other name, in sorted order, gets its stem,
+## or the stem with -2, -3, ... when that is taken. So 'A_B' keeps A_B, 'A B' becomes A_B-2, and a name 'A_B-2'
+## keeps its own. The same set of names always gets the same file names. Returns them in the order of `x`, named by it.
+.distinctFileNames <- function(x, stem) {
+  out <- character(length(x))
+  used <- character(0)
+  own <- !is.na(x) & x == stem
+  ord <- order(x, method = "radix")
+  for (i in c(ord[own[ord]], ord[!own[ord]])) {
+    cand <- stem[i]
+    k <- 1L
+    while (tolower(cand) %in% used) {
+      k <- k + 1L
+      cand <- paste0(stem[i], "-", k)
+    }
+    used <- c(used, tolower(cand))
+    out[i] <- cand
+  }
+  stats::setNames(out, x)
+}
+
+## File names (without extension) of the units `x` of one layer: characters that are not letters, digits, . or - become
+## _, which alone would give 'A B' and 'A_B' one name; an NA or empty name is "unit". See `.distinctFileNames()`.
+.ccAllNames <- function(x) {
+  x <- as.character(x)
+  stem <- gsub("[^A-Za-z0-9.-]+", "_", x)
+  stem[is.na(x) | !nzchar(stem)] <- "unit"
+  .distinctFileNames(x, stem)
+}
+
+## Folder names of the layers `x` under figures/all/: the layer name as the other output folders (figures/lm/<layer>)
+## have it, with only the characters a path cannot hold replaced, and "." and ".." (which would leave the folder)
+## prefixed with _. An NA or empty name is "unit". See `.distinctFileNames()`.
+.ccAllDirs <- function(x) {
+  x <- as.character(x)
+  stem <- gsub("[/\\\\[:cntrl:]]", "_", x)
+  stem[stem %in% c(".", "..")] <- paste0("_", stem[stem %in% c(".", "..")])
+  stem[is.na(x) | !nzchar(stem)] <- "unit"
+  .distinctFileNames(x, stem)
+}
+
+## One key per row of the vectors in `...`, to compare rows or group them: a missing value is "!", any other value is
+## "=" and the value, so a missing unit is not the unit named "NA" (`paste()` writes both as "NA"). The keys are only
+## compared, never written.
+.naSafeKey <- function(...) {
+  parts <- lapply(list(...), function(x) ifelse(is.na(x), "!", paste0("=", x)))
+  do.call(paste, c(parts, sep = "\r"))
+}
+
+## The figures from the recorded comparisons (`.recordComparison()` rows): a list of figures, each list(layer, unit,
+## data, standOnly), one per lm layer and unit. The stand-level rows (st) are added to the figure of every unit named
+## like them (the study area), in any layer; stand rows no unit is named like have a figure of their own
+## (standOnly = TRUE), in their own layer.
+.ccAllFigures <- function(cmp) {
+  stand <- cmp$group %in% "stand"
+  rest <- cmp[!stand, , drop = FALSE]
+  st <- cmp[stand, , drop = FALSE]
+  figs <- list()
+  key <- .naSafeKey(rest$layer, rest$poly)
+  for (k in unique(key)) {
+    r <- rest[key == k, , drop = FALSE]
+    own <- st[!is.na(st$poly) & st$poly %in% r$poly[1L], , drop = FALSE]
+    figs[[length(figs) + 1L]] <- list(layer = r$layer[1L], unit = r$poly[1L], data = rbind(r, own), standOnly = FALSE)
+  }
+  alone <- st[is.na(st$poly) | !st$poly %in% rest$poly, , drop = FALSE]
+  key <- .naSafeKey(alone$layer, alone$poly)
+  for (k in unique(key)) {
+    r <- alone[key == k, , drop = FALSE]
+    figs[[length(figs) + 1L]] <- list(layer = r$layer[1L], unit = r$poly[1L], data = r, standOnly = TRUE)
+  }
+  figs
+}
+
+## The `postprocess_cc` event: one figure per reporting layer and unit with every group's NRV comparison recorded by
+## the lm and st events (`.recordComparison()`), figures/all/<layer>/<unit>.png (`.ccAllFigures()`), registered as
+## outputs. It runs before the plot event, which leaves this folder alone, so it clears it here.
+currentConditionAll <- function(sim) {
+  .clearFigDirs(sim, "cc")
+  cmp <- do.call(rbind, mod$nrvComparisons)
+  if (is.null(cmp) || !nrow(cmp)) {
+    message("NRV_summary: no NRV comparisons for the combined current-condition figure")
+    return(invisible(sim))
+  }
+  figs <- .ccAllFigures(cmp)
+  layers <- vapply(figs, function(f) as.character(f$layer), "")
+  layerNames <- unique(layers) ## by index below: a name may be NA or empty
+  dirs <- .ccAllDirs(layerNames)
+  files <- character(0) ## drawn with ggsave() as the st figures are, whatever `.plots` says
+  for (i in seq_along(layerNames)) {
+    inLayer <- figs[layers %in% layerNames[i]]
+    dir <- reproducible::checkPath(file.path(.ppRoot(sim), "figures", "all", dirs[[i]]), create = TRUE)
+    stems <- .ccAllNames(vapply(inLayer, function(f) as.character(f$unit), ""))
+    for (j in seq_along(inLayer)) {
+      f <- file.path(dir, paste0(stems[[j]], ".png"))
+      d <- .currentConditionAllData(inLayer[[j]]$data, P(sim)$ageClasses)
+      title <- if (inLayer[[j]]$standOnly) {
+        paste0(inLayer[[j]]$unit, " (stand-level measures) - current condition relative to the NRV")
+      } else {
+        paste0(layerNames[i], ": ", inLayer[[j]]$unit, " - current condition relative to the NRV")
+      }
+      ggplot2::ggsave(f, .currentConditionAll(d, title), width = 11, height = 2 + 0.25 * nrow(d), units = "in")
+      files <- c(files, f)
+    }
+  }
+  invisible(registerOutputs(files, sim))
+}
+
+## The overview figures of the `stability` event, for each lm reporting layer: pages of at most 24 panels in
+## figures/stability/all/current_condition/. The envelope and current condition are those the lm event kept in
+## `mod`. Returns the files; none when the lm event did not run or a layer has no envelope or current condition.
+.ccOverviewFigs <- function(sim) {
+  if (!"lm" %in% tolower(P(sim)$postprocessEvents)) {
+    message("NRV_summary stability: no current-condition overview; it needs the lm event in the same run")
+    return(character(0))
+  }
+  period <- .nrvPeriod(sim)
+  safe <- function(s) gsub("[/\\\\]", "-", s)
+  files <- character(0)
+  for (p in mod$rptPolyNames) {
+    refCode <- LandWebUtils::refCodeFor("lm", p)
+    env <- mod[[refCode]]
+    cc <- mod[[paste0(refCode, "_CC")]]
+    if (is.null(env) || !nrow(env) || is.null(cc) || !nrow(cc)) {
+      next
+    }
+    d <- .ccOverviewData(env, cc, period)
+    if (!nrow(d)) {
+      next
+    }
+    pages <- .ccOverviewPages(d)
+    dir <- .ppFigDir(sim, "stability", "all", "current_condition")
+    for (pg in seq_along(pages)) {
+      lay <- .ccOverviewLayout(length(unique(pages[[pg]]$panel)))
+      g <- .currentConditionOverview(
+        pages[[pg]], title = .pageTitle(paste0("Current condition relative to the NRV: ", p), pg, length(pages))
+      )
+      f <- file.path(dir, paste0("current_condition_", safe(p), "_p", pg, ".png"))
+      ggplot2::ggsave(f, g, width = lay$width, height = lay$height)
+      files <- c(files, f)
+    }
+  }
+  files
+}
+
+## The `postprocess_stability` event: stability.csv (csv/stability/all/) and the figures
+## (figures/stability/all/): one set of pages per kind of series, each page drawn from its own
+## series only, and a summary of the verdicts. Runs after the plot event, which clears the figures
+## folder of the events it draws (see .clearFigDirs).
+stabilityCheck <- function(sim) {
+  ccFiles <- .ccOverviewFigs(sim) ## the current-condition overview, figures/stability/all/current_condition/
+  series <- .stabilitySeries(sim)
+  if (is.null(series) || !nrow(series)) {
+    message("NRV_summary stability: no series to test")
+    unlink(file.path(.ppCsvDir(sim, "stability", "all"), "stability.csv")) ## an earlier run's
+    return(invisible(if (length(ccFiles)) registerOutputs(ccFiles, sim) else sim))
+  }
+  window <- .stabilityWindow(sim)
+  res <- .trendStability(series, .stabilityKeys(), window, P(sim)$stabilityAlpha, P(sim)$stabilityMinChange)
+
+  f_csv <- file.path(.ppCsvDir(sim, "stability", "all"), "stability.csv")
+  utils::write.csv(res, f_csv, row.names = FALSE)
+  files <- c(f_csv, ccFiles)
+
+  message("NRV_summary stability (", window[1L], "-", window[2L], "): ", .stabilityVerdict(res, window))
+
+  figDir <- .ppFigDir(sim, "stability", "all")
+  res$id <- .stabilityId(res)
+  series$id <- .stabilityId(series)
+  flags <- stats::setNames(res$flag, res$id)
+  for (k in unique(series$kind)) {
+    pages <- .pages(res$id[res$kind == k])
+    for (pg in seq_along(pages)) {
+      lay <- .figLayout(length(pages[[pg]]), paginate = TRUE)
+      g <- .stabilityPanels(series[series$id %in% pages[[pg]], , drop = FALSE], flags, window, ncol = lay$ncol,
+                           sim$sppEquiv, P(sim)$sppEquivCol)
+      f <- file.path(figDir, paste0("stability_", k, "_p", pg, ".png"))
+      ggplot2::ggsave(f, g, width = lay$width, height = lay$height)
+      files <- c(files, f)
+    }
+  }
+  f <- file.path(figDir, "stability_summary.png")
+  ggplot2::ggsave(f, .stabilitySummary(res, P(sim)$stabilityMinChange, sim$sppEquiv, P(sim)$sppEquivCol), width = 10,
+                  height = max(4, 0.25 * length(unique(res$metric))))
+  invisible(registerOutputs(c(files, f), sim))
+}
+
+## ---- stand-level measures (the opt-in `st` event) ----------------------------------------------------
+## At each summary time of each rep, and for the current condition, over the reporting area
+## (`studyAreaReporting`): the share of the forested area in each age class (`ageClasses`, `ageClassCutOffs`;
+## the saved standAgeMap), the forested share of the area, the share of the area led by each vegetation
+## type (the saved vegTypeMap) and the total tree biomass (Tg; the saved cohortData and pixelGroupMap).
+## A pixel is forested when it has a stand age and a pixel group above 0. Read from the snapshots the
+## lm/pm events read, so the current condition is the same year-0 state (urban removed when
+## `LandTypeCC_reporting` is supplied). The event is not in the default of `postprocessEvents`: it runs only
+## when asked for. Ported from the PE fork (PE#19).
+
+## One snapshot, from the values of the reporting-area pixels: `sam` stand age, `vtmCode` vegetation type code,
+## `pgm` pixel group; `cohortData` (B in g/m2) and the pixel area in ha. Returns metric, value: age_<class>
+## (% of forested), forested (% of the area), biomassTg, lead_<code> (% of the area).
+## Biomass is that of the forested pixels only: the current condition's pixel group map is not masked where
+## urban, its stand age is, so a masked cell would otherwise add the cohorts of the simulated forest.
+## (The lead_ shares count every pixel with a type, not the forested ones; deferred, #26.)
+.standRow <- function(sam, vtmCode, pgm, cohortData, pixelHa, ageClassCutOffs, ageClasses) {
+  forest <- !is.na(sam) & !is.na(pgm) & pgm > 0
+  ac <- cut(sam[forest], c(ageClassCutOffs, Inf), right = FALSE, labels = ageClasses)
+  bPG <- rowsum(as.numeric(cohortData$B), cohortData$pixelGroup)
+  B <- bPG[match(pgm, as.integer(rownames(bPG)))]
+  lead <- table(vtmCode[!is.na(vtmCode)])
+  data.frame(
+    metric = c(paste0("age_", ageClasses), "forested", "biomassTg", paste0("lead_", names(lead))),
+    value = c(100 * as.numeric(table(ac)) / max(1, sum(forest)), 100 * mean(forest),
+              sum(B[forest], na.rm = TRUE) * 0.01 * pixelHa / 1e6, ## as .annualSeriesRow()
+              100 * as.numeric(lead) / length(pgm))
+  )
+}
+
+## The vegetation type code of each pixel of a saved vegTypeMap (its levels: ID, code)
+.vtmCodes <- function(vtm) {
+  lv <- terra::levels(vtm)[[1]]
+  lv[[2]][match(terra::values(vtm, mat = FALSE), lv[[1]])]
+}
+
+## The snapshot files of each rep and time, one row each: rep (the rep folder), time, sam, vtm, pgm, cd. A cohort
+## part file is keyed by its folders (see .repFolder(), .fileYear()), every other file by its own name and folder.
+.snapshotTable <- function(sam, vtm, pgm, cd) {
+  key <- function(f, col) {
+    part <- .isCohortPart(f)
+    time <- rep(NA_real_, length(f))
+    time[part] <- .fileYear(f[part])
+    time[!part] <- as.numeric(sub("^.*_year([0-9.]+)\\.[^.]*$", "\\1", basename(f[!part])))
+    d <- data.frame(rep = basename(.repFolder(f)), time = time, f)
+    names(d)[3] <- col
+    d
+  }
+  Reduce(function(a, b) merge(a, b, by = c("rep", "time")),
+         list(key(sam, "sam"), key(vtm, "vtm"), key(pgm, "pgm"), key(cd, "cd")))
+}
+
+## A vegetation type absent from a snapshot leads 0% of it: every metric of `rows` (rep, time, metric, value)
+## at every rep x time, 0 where missing; `metrics` adds metrics found elsewhere (e.g. only in the current condition).
+.fillAbsentMetrics <- function(rows, metrics = character(0)) {
+  grid <- expand.grid(rep = unique(rows$rep), time = unique(rows$time), metric = union(unique(rows$metric), metrics),
+                      stringsAsFactors = FALSE)
+  out <- merge(grid, rows, by = c("rep", "time", "metric"), all.x = TRUE)
+  out$value[is.na(out$value)] <- 0
+  out[order(out$rep, out$time, out$metric), ]
+}
+
+.leadingYlab <- function() "Share of the area (%)" ## the y title of the leading-type figures
+
+## The class a stand-level metric is about, for a legend where the axis says what is measured: the age class,
+## the leading type (by `sppEquiv`'s EN_generic_full when it has one), or the measure itself.
+.standClass <- function(metric, sppEquiv = NULL, sppEquivCol = "LandR") {
+  code <- sub("^lead_", "", metric)
+  sp <- .sppFullNames(code, sppEquiv, sppEquivCol)
+  sp <- ifelse(is.na(sp), .vegTypeLabels(code), sp)
+  ifelse(metric == "biomassTg", "Total tree biomass",
+  ifelse(metric == "forested", "Forested",
+  ifelse(grepl("^age_", metric), sub("^age_", "", metric), sp)))
+}
+
+## Readable names of the stand-level metrics (the CSV labels, the overview panels): `.standClass()` with what is
+## measured
+.standLabel <- function(metric, sppEquiv = NULL, sppEquivCol = "LandR") {
+  cls <- .standClass(metric, sppEquiv, sppEquivCol)
+  ifelse(metric == "biomassTg", "Total tree biomass (Tg)",
+  ifelse(metric == "forested", "Forested share of the area (%)",
+  ifelse(grepl("^age_", metric), paste0(cls, " forest, share of forested area (%)"),
+         paste0(cls, " leading, share of the area (%)"))))
+}
+
+## One stand-level figure: each rep a thin line, the median over reps bold, the current condition a circle, the
+## NRV years shaded. `data` = list(series = (rep, time, class, value), cc = (time, class, value[, position]),
+## period =, title =, ylab =). Classes are coloured and named in a legend on the right (the class only, in as many
+## columns as it takes to fit); when `cc` has a `position` the figure is of one class, drawn in black, and the
+## circle is filled by its position against the NRV range (`.positionColour()`).
+.standSeriesPanels <- function(data) {
+  d <- data$series
+  cc <- data$cc
+  nClass <- length(unique(d$class))
+  byPosition <- "position" %in% names(cc)
+  med <- stats::aggregate(value ~ class + time, d, stats::median)
+  gg <- ggplot2::ggplot(d, ggplot2::aes(time, value, colour = class)) +
+    ggplot2::annotate("rect", xmin = min(data$period), xmax = max(data$period), ymin = -Inf, ymax = Inf,
+                      alpha = 0.15, fill = "orange") +
+    ggplot2::geom_line(ggplot2::aes(group = interaction(class, rep)), alpha = 0.35, linewidth = 0.3) +
+    ggplot2::geom_line(data = med, linewidth = 1)
+  gg <- if (byPosition) {
+    gg +
+      ggplot2::scale_colour_manual(values = stats::setNames(rep("black", nClass), unique(d$class)), guide = "none") +
+      ggplot2::geom_point(data = cc, ggplot2::aes(time, value, fill = position), inherit.aes = FALSE,
+                          shape = 21, colour = "black", size = 3.5, stroke = 1) +
+      ggplot2::scale_fill_manual(values = .positionColour(), labels = function(b) unname(.positionLabels()[b]),
+                                 name = "current condition")
+  } else {
+    gg + ggplot2::geom_point(data = cc, shape = 1, size = 2.5, stroke = 1) +
+      ggplot2::guides(colour = ggplot2::guide_legend(ncol = ceiling(nClass / 12)))
+  }
+  gg +
+    ggplot2::labs(x = "Simulation year", y = data$ylab, colour = NULL, title = data$title,
+                  caption = "thin lines: replicates; bold: median; circle: current condition; shaded: NRV years") +
+    ggplot2::theme_bw(base_size = 12) +
+    ggplot2::theme(legend.position = if (nClass > 1L || byPosition) "right" else "none")
+}
+
+## The largest value of each stand-level metric over the replicates' snapshots and the current condition: a type that
+## leads only today (0 in every replicate) still counts, and one above the threshold only today.
+.leadMax <- function(series, ccRows) tapply(c(series$value, ccRows$value), c(series$metric, ccRows$metric), max)
+
+## The class of each stand-level row as a factor in the order of `.standRank()` (biomass, the age classes young to
+## old, the forested share, the leading types by name), for the legend and colours of a figure.
+.standClassFactor <- function(metric, class, ageClasses = NULL) {
+  u <- !duplicated(class)
+  lev <- class[u][order(.standRank(metric[u], rep("stand", sum(u)), ageClasses), class[u])]
+  factor(class, levels = lev)
+}
+
+## The study-area name the st event files its output under and names its figures and series by: `.studyAreaName`, or
+## "unit" when there is none, as the cc event names a unit without one.
+.studyAreaLabel <- function(sim) {
+  sa <- P(sim)$.studyAreaName
+  if (length(sa) != 1L || is.na(sa) || !nzchar(sa)) "unit" else as.character(sa)
+}
+
+## The data of one figure per leading type (`lead_*` metrics that lead somewhere), for `.standSeriesPanels()`: the
+## replicates' series, the current condition with its `position` from `cmp` (.nrvComparison() rows), named by metric.
+.speciesFigData <- function(series, ccRows, cmp, period, sa, sppEquiv = NULL, sppEquivCol = "LandR") {
+  leadMax <- .leadMax(series, ccRows)
+  m <- names(leadMax)[grepl("^lead_", names(leadMax)) & leadMax > 0]
+  ccRows$position <- cmp$position[match(ccRows$metric, cmp$metric)]
+  stats::setNames(lapply(m, function(x) {
+    list(series = series[series$metric == x, , drop = FALSE], cc = ccRows[ccRows$metric == x, , drop = FALSE],
+         period = period, ylab = .leadingYlab(),
+         title = paste(sa, "-", .standClass(x, sppEquiv, sppEquivCol), "leading"))
+  }), m)
+}
+
+## The rows of `.nrvComparison()` of the stand-level metrics in pages of at most `perPage` panels (a list of data
+## frames, each with only its own panels), each panel named by `.standLabel()` and in the order of `.standRank()`;
+## for `.currentConditionOverview()`.
+.standOverviewPages <- function(cmp, sppEquiv = NULL, sppEquivCol = "LandR", perPage = 24L, ageClasses = NULL) {
+  cmp$panel <- .standLabel(cmp$metric, sppEquiv, sppEquivCol)
+  ## biomass, the age classes young to old, the forested share, the leading types
+  cmp <- cmp[order(.standRank(cmp$metric, rep("stand", nrow(cmp)), ageClasses), cmp$panel), , drop = FALSE]
+  .ccOverviewPages(cmp, perPage)
+}
+
+## The figure groups of the stand-level metrics: age classes, leading types (those leading at least 0.5% of the
+## area in some snapshot; `leadMax` is the largest value of each metric) and biomass, each with its metrics `m`, y
+## title and what it shows.
+.standGroups <- function(leadMax, ageClasses) {
+  list(
+    age = list(m = paste0("age_", ageClasses), ylab = "Share of forested area (%)", what = "forest age classes"),
+    leading = list(m = names(leadMax)[grepl("^lead_", names(leadMax)) & leadMax >= 0.5],
+                   ylab = .leadingYlab(), what = "leading tree type"),
+    biomass = list(m = "biomassTg", ylab = "Total tree biomass (Tg)", what = "tree biomass")
+  )
+}
+
+## The `postprocess_st` event: st.csv, st_CC.csv and st_nrvComparison.csv (csv/st/<studyArea>/) and the figures
+## (figures/st/<studyArea>/). It runs before the plot event, which clears the figure folders of the events it
+## draws (but not this one's), so it clears its own folder here.
+standMetrics <- function(sim) {
+  .clearFigDirs(sim, "st")
+  sa <- .studyAreaLabel(sim)
+  padL <- ceiling(log10(P(sim)$simTimes[2] + 1))
+  ccYear <- P(sim)$simTimes[1]
+  snaps <- .snapshotTable(mod$sam, mod$vtm, mod$pgm, mod$cd)
+  ## the first replicate's maps and cohort file of the first year, each by its year however padded (see .repYearFile())
+  cc <- data.frame(rep = "CC", time = ccYear, sam = mod$fsam0, vtm = mod$fvtm0,
+                   pgm = .repYearFile(mod$rep1Dir, ccYear, "pixelGroupMap", "tif", .discoverOutputFiles(sim), padL),
+                   cd = .cohortFile(mod$rep1Dir, ccYear, .yearFileName("cohortData", ccYear, "qs2", padL),
+                                    files = mod$cohortFiles))
+  .checkCohortFile(cc$cd, "cannot take the stand-level measures of the current condition")
+  cells <- NULL
+  one <- function(f) {
+    pgm <- terra::rast(f$pgm)
+    if (is.null(cells)) cells <<- which(.reportingCells(pgm, sim$studyAreaReporting))
+    row <- .standRow(terra::values(terra::rast(f$sam), mat = FALSE)[cells], .vtmCodes(terra::rast(f$vtm))[cells],
+                     terra::values(pgm, mat = FALSE)[cells], nrvtools::read_cohort_data(f$cd),
+                     prod(terra::res(pgm)) / 1e4,
+                     P(sim)$ageClassCutOffs, P(sim)$ageClasses)
+    data.frame(rep = f$rep, time = f$time, row)
+  }
+  series <- do.call(rbind, lapply(split(snaps, seq_len(nrow(snaps))), one))
+  ccRows <- one(cc)
+  series <- .fillAbsentMetrics(series, ccRows$metric)
+  series$rep <- as.integer(sub("^\\D*", "", series$rep))
+  ccRows <- .fillAbsentMetrics(ccRows, series$metric)
+  series$label <- .standLabel(series$metric, sim$sppEquiv, P(sim)$sppEquivCol)
+  ccRows$label <- .standLabel(ccRows$metric, sim$sppEquiv, P(sim)$sppEquivCol)
+  series$class <- .standClass(series$metric, sim$sppEquiv, P(sim)$sppEquivCol)
+  ccRows$class <- .standClass(ccRows$metric, sim$sppEquiv, P(sim)$sppEquivCol)
+  ## the legend lists the classes in the figure's order, not by name
+  lev <- .standClassFactor(c(series$metric, ccRows$metric), c(series$class, ccRows$class), P(sim)$ageClasses)
+  series$class <- factor(series$class, levels(lev))
+  ccRows$class <- factor(ccRows$class, levels(lev))
+
+  mod$standSeries <- series ## for the stability check, when it runs in the same run
+  env <- stats::aggregate(value ~ metric + time, series, function(v) c(mean = mean(v), min = min(v), max = max(v)))
+  env <- data.frame(poly = sa, metric = env$metric, time = env$time, env$value)
+  cmp <- .nrvComparison(env, data.frame(poly = sa, metric = ccRows$metric, mean = ccRows$value), .nrvPeriod(sim))
+  cmp$label <- .standLabel(cmp$metric, sim$sppEquiv, P(sim)$sppEquivCol)
+  .recordComparison("st", cmp, sa)
+
+  d <- .ppCsvDir(sim, "st", sa)
+  fs <- file.path(d, c("st.csv", "st_CC.csv", "st_nrvComparison.csv"))
+  utils::write.csv(series[names(series) != "class"], fs[1], row.names = FALSE)
+  utils::write.csv(ccRows[, c("metric", "label", "value")], fs[2], row.names = FALSE)
+  utils::write.csv(cmp, fs[3], row.names = FALSE)
+  mod$ppFiles <- c(mod$ppFiles, fs)
+
+  ## figures: age classes, leading types (those leading at least 0.5% of the area in some snapshot), biomass
+  figDir <- .ppFigDir(sim, "st", sa)
+  save <- function(data, f, dir = figDir) {
+    f <- file.path(dir, paste0(f, ".png"))
+    ggplot2::ggsave(f, .standSeriesPanels(data), width = 9, height = 5, units = "in")
+    f
+  }
+  groups <- .standGroups(.leadMax(series, ccRows), P(sim)$ageClasses)
+  pngs <- character(0)
+  for (g in names(groups)) {
+    m <- groups[[g]]$m
+    if (!length(m)) next ## no leading type reaches 0.5% of the area: no stand_leading.png
+    pngs <- c(pngs, save(
+      list(series = series[series$metric %in% m, ], cc = ccRows[ccRows$metric %in% m, ],
+           period = .nrvPeriod(sim), title = paste(sa, "-", groups[[g]]$what), ylab = groups[[g]]$ylab),
+      paste0("stand_", g)
+    ))
+  }
+
+  ## one figure per leading type (the mixed class too): figures/st/<studyArea>/species/lead_<code>.png
+  spp <- .speciesFigData(series, ccRows, cmp, .nrvPeriod(sim), sa, sim$sppEquiv, P(sim)$sppEquivCol)
+  for (m in names(spp)) {
+    pngs <- c(pngs, save(spp[[m]], m, .ppFigDir(sim, "st", sa, "species")))
+  }
+
+  ## where the current condition falls against the NRV, one panel per stand-level metric, in pages
+  pages <- .standOverviewPages(cmp, sim$sppEquiv, P(sim)$sppEquivCol, ageClasses = P(sim)$ageClasses)
+  for (pg in seq_along(pages)) {
+    lay <- .ccOverviewLayout(length(unique(pages[[pg]]$panel)))
+    f <- file.path(figDir, paste0("current_condition_overview_p", pg, ".png"))
+    title <- .pageTitle(paste0("Current condition relative to the NRV: ", sa), pg, length(pages))
+    ggplot2::ggsave(f, .currentConditionOverview(pages[[pg]], title = title), width = lay$width, height = lay$height)
+    pngs <- c(pngs, f)
+  }
+  invisible(registerOutputs(pngs, sim))
+}
+
 ### plotting
 plotFun <- function(sim) {
   ## Build a flat list of self-contained render tasks across all enabled kinds, then render them in
@@ -1988,27 +3620,44 @@ plotFun <- function(sim) {
   saPrefix <- if (nzchar(saName)) paste0(saName, " — ") else ""
 
   events <- tolower(P(sim)$postprocessEvents)
-  .clearFigDirs(sim, events)
+  ## not the autocorrelation, stand-level and combined figures: those events ran before this one and have drawn them
+  .clearFigDirs(sim, setdiff(events, c("autocorr", "st", "cc")))
   tasks <- list()
+  ## the NRV years; shaded on the envelopes only when they are fewer than the summary years
+  nrvPeriod <- .nrvPeriod(sim)
+  shadePeriod <- if (P(sim)$nrvWindow < 1) nrvPeriod
+  ## "lines": the replicates are read once per layer and shared by its figures
+  lines <- identical(P(sim)$envelopeStyle, "lines")
+  layerReps <- function(kind, p, vtm = NULL) {
+    refCode <- LandWebUtils::refCodeFor(kind, p)
+    if (lines && !is.null(mod[[refCode]]) && nrow(mod[[refCode]])) {
+      .readReplicates(.nrvAggRoot(sim, refCode), vtm, what = refCode)
+    }
+  }
 
   ## y titles name each metric and its unit; vegetation types are shown by their display names
   if ("lm" %in% events) {
     for (p in mod$rptPolyNames) {
+      reps <- .envelopeReps(layerReps("lm", p))
       tasks <- c(
         tasks,
-        .envelopeFigTasks(sim, "lm", p),
+        .envelopeFigTasks(sim, "lm", p, nrvPeriod = shadePeriod, reps = reps),
         .envelopeFigTasks(sim, "lm", p, layout = "metric", subdir = "per-metric",
-                          titlePrefix = paste0(p, " — "), minSubregions = 2L)
+                          titlePrefix = paste0(p, " — "), minSubregions = 2L, nrvPeriod = shadePeriod,
+                          reps = reps)
       )
     }
   }
   if ("pm" %in% events) {
     for (p in mod$rptPolyNames) {
+      reps <- layerReps("pm", p, mod$fvtm0)
       tasks <- c(
         tasks,
-        .envelopeFigTasks(sim, "pm", p, classLabels = .vegTypeLabels),
+        .envelopeFigTasks(sim, "pm", p, classLabels = .vegTypeLabels, nrvPeriod = shadePeriod,
+                          reps = .envelopeReps(reps, .vegTypeLabels)),
         .byClassFigTasks(sim, "pm", p, xlab = "Vegetation type",
-                         titlePrefix = paste0(p, " — "), classLabels = .vegTypeLabels)
+                         titlePrefix = paste0(p, " — "), classLabels = .vegTypeLabels,
+                         nrvPeriod = nrvPeriod, reps = reps)
       )
     }
   }
@@ -2023,7 +3672,7 @@ plotFun <- function(sim) {
     for (p in mod$rptPolyNames) {
       tasks <- c(tasks, .envelopeFigTasks(sim, "sspm", p, ylab = "seral patch area (ha)",
                                           layout = "metric", titlePrefix = saPrefix,
-                                          captions = FALSE))
+                                          captions = FALSE, nrvPeriod = shadePeriod))
     }
   }
 
@@ -2032,6 +3681,216 @@ plotFun <- function(sim) {
     sim <- registerOutputs(pngs, sim)
   }
   return(invisible(sim))
+}
+
+## ---- annual landscape series and their autocorrelation (opt-in) -------------------------------------
+## The summary snapshots are `summaryInterval` years apart so they are nearly independent samples, as
+## thinning does for MCMC. The interval that achieves that is the autocorrelation time of the landscape,
+## which maps saved every year would measure at the cost of far too much data. A few landscape scalars
+## recorded every year measure it instead. Ported from the PE fork (PE#14, PE#16). Both parts are opt-in:
+## `recordAnnualSeries` (mode 'single') records, 'autocorr' in `postprocessEvents` (mode 'multi') analyses.
+
+## The pixels of the reporting area, once: the annual row counts pixel groups within them every year.
+.reportingCells <- function(pixelGroupMap, studyAreaReporting) {
+  !is.na(terra::values(terra::mask(terra::rast(pixelGroupMap, vals = 1), studyAreaReporting), mat = FALSE))
+}
+
+## One row of landscape scalars from `cohortData` and `nPerGroup`, the number of reporting-area pixels in each
+## pixel group (`tabulate()` of the pixelGroupMap values; no rasters are made). The forested pixels are those of
+## the pixel groups in `cohortData`. Same definitions as the maps of `map_generators` (but at year 0, which this row takes at the
+## end of the year from the cohorts, the maps take the age layer by default): leading species from
+## `LandR::leadingByPixelGroup()` (what `vegTypeMapGenerator()` uses), stand age biomass-weighted
+## and floored to 10 years as `standAgeMapGenerator()` does. propYoung and propOld: stand age below the first
+## positive and at or above the last of the `ageClassCutOffs` (the module's first and last age classes);
+## totalBiomassTg: B (g/m2) times pixels times `pixelHa`; lead_<species>: proportion of the forested pixels
+## led by each species ("Mixed" included).
+.annualSeriesRow <- function(time, cohortData, nPerGroup, pixelHa, ageClassCutOffs,
+                             vegLeadingProportion, mixedType, sppEquiv, sppEquivCol) {
+  weightN <- function(pg) {
+    n <- nPerGroup[pg]
+    n[is.na(n)] <- 0
+    n
+  }
+  w <- rowsum(cbind(ageB = cohortData$age * cohortData$B, B = cohortData$B), cohortData$pixelGroup)
+  age <- data.frame(pixelGroup = as.integer(rownames(w)), age = floor(w[, "ageB"] / w[, "B"] / 10) * 10)
+  lead <- LandR::leadingByPixelGroup(cohortData, vegLeadingProportion, mixedType = mixedType, sppEquiv = sppEquiv,
+                                     sppEquivCol = sppEquivCol)
+  nAge <- weightN(age$pixelGroup)
+  nLead <- weightN(lead$pixelGroup)
+  nForest <- sum(nAge)
+  byLead <- tapply(nLead, as.character(lead$leading), sum) / sum(nLead)
+  cuts <- ageClassCutOffs[ageClassCutOffs > min(ageClassCutOffs)]
+  data.frame(
+    time = time, propYoung = sum(nAge[age$age < min(cuts)]) / nForest, propOld = sum(nAge[age$age >= max(cuts)]) / nForest,
+    meanStandAge = sum(age$age * nAge) / nForest,
+    totalBiomassTg = sum(as.numeric(cohortData$B) * weightN(cohortData$pixelGroup)) * 0.01 * pixelHa / 1e6,
+    as.list(stats::setNames(as.numeric(byLead), paste0("lead_", names(byLead))))
+  )
+}
+
+## all years' rows in one table: a species leading in only some years is 0 in the others
+.bindAnnualRows <- function(rows) {
+  d <- data.table::rbindlist(rows, fill = TRUE)
+  for (l in grep("^lead_", names(d), value = TRUE)) data.table::set(d, which(is.na(d[[l]])), l, 0)
+  as.data.frame(d)
+}
+
+## The `annual_series` event (mode 'single', `recordAnnualSeries`): this year's row, and the next year's
+## event, until the last year, when the table is written.
+annualSeriesEvent <- function(sim) {
+  if (isTRUE(mod$noTreeSpecies)) {
+    return(invisible(sim)) ## the first map_generators said so; no series
+  }
+  if (is.null(mod$reportingCells)) {
+    mod$reportingCells <- .reportingCells(sim$pixelGroupMap, sim$studyAreaReporting)
+  }
+  nPerGroup <- tabulate(terra::values(sim$pixelGroupMap, mat = FALSE)[mod$reportingCells])
+  mod$annualSeries[[length(mod$annualSeries) + 1L]] <-
+    .annualSeriesRow(time(sim), sim$cohortData, nPerGroup, prod(terra::res(sim$pixelGroupMap)) / 1e4,
+                     P(sim)$ageClassCutOffs, P(sim)$vegLeadingProportion, P(sim)$mixedType,
+                     sim$sppEquiv, P(sim)$sppEquivCol)
+  if (time(sim) < end(sim)) {
+    sim <- scheduleEvent(sim, time(sim) + 1, "NRV_summary", "annual_series", .last())
+  } else {
+    sim <- saveAnnualSeries(sim)
+  }
+  invisible(sim)
+}
+
+saveAnnualSeries <- function(sim) {
+  f <- file.path(outputPath(sim), "annualSeries.csv")
+  utils::write.csv(.bindAnnualRows(mod$annualSeries), f, row.names = FALSE)
+  registerOutputs(f, sim)
+}
+
+## The full names (`sppEquiv`'s EN_generic_full) of species `code`s, NA for a code without one or when `sppEquiv` has
+## no such column. A code shared by several sppEquiv rows (a merged species) takes all of their names, joined by " / ".
+.sppFullNames <- function(code, sppEquiv = NULL, sppEquivCol = "LandR") {
+  if (is.null(sppEquiv) || !"EN_generic_full" %in% names(sppEquiv)) {
+    return(rep(NA_character_, length(code)))
+  }
+  vapply(code, function(cd) {
+    nm <- unique(stats::na.omit(sppEquiv[["EN_generic_full"]][sppEquiv[[sppEquivCol]] %in% cd]))
+    if (length(nm)) paste(nm, collapse = " / ") else NA_character_
+  }, character(1), USE.NAMES = FALSE)
+}
+
+## Full names of the annual series: the landscape scalars by name, and a species' full name for lead_<code>
+## (its code when `sppEquiv` has no `EN_generic_full` column or no name for it)
+.annualSeriesLabel <- function(series, sppEquiv = NULL, sppEquivCol = "LandR") {
+  known <- c(propYoung = "Proportion of forest young", propOld = "Proportion of forest old",
+             meanStandAge = "Mean stand age", totalBiomassTg = "Total biomass (Tg)")
+  code <- sub("^lead_", "", series)
+  full <- .sppFullNames(code, sppEquiv, sppEquivCol)
+  ifelse(grepl("^lead_", series), paste("Leading:", ifelse(is.na(full), code, full)),
+         ifelse(series %in% names(known), known[series], series))
+}
+
+## Empirical ACF by lag for each series (reps faint, pooled bold), the fitted phi^lag curve dashed and a vertical
+## line at the summary interval
+.autocorrPanels <- function(data, sppEquiv = NULL, sppEquivCol = "LandR") {
+  a <- data$acf
+  a$label <- .annualSeriesLabel(a$series, sppEquiv, sppEquivCol)
+  f <- data$fitted
+  f$label <- .annualSeriesLabel(f$series, sppEquiv, sppEquivCol)
+  ggplot2::ggplot(a[a$rep != "pooled", ], ggplot2::aes(lag, acf)) +
+    ggplot2::geom_line(ggplot2::aes(group = rep), colour = "grey70", linewidth = 0.3) +
+    ggplot2::geom_line(data = a[a$rep == "pooled", ], linewidth = 0.8) +
+    ggplot2::geom_line(data = f, colour = "firebrick", linetype = "dashed") +
+    ggplot2::geom_vline(xintercept = data$interval, colour = "steelblue") +
+    ggplot2::facet_wrap(~label) +
+    ggplot2::labs(x = "lag (years)", y = "autocorrelation",
+                  caption = "faint: reps; bold: pooled; dashed: decay from the lag-1 autocorrelation; blue: summaryInterval") +
+    ggplot2::theme_bw(base_size = 9)
+}
+
+## The `postprocess_autocorr` event: autocorrelation.csv (csv/autocorrelation/) and the figure
+## (figures/autocorrelation/all/). It runs before the plot event, which clears the figure folders of the events
+## it draws, so it clears its own folder here. The table is nrvtools::autocorr_summary()'s `fit` over the NRV years,
+## with the summary times in them as the snapshots (.nrvYears(), which lie in .nrvPeriod(): both take the window from
+## .lastFraction()), followed by the module's columns: `label`, `recommendedThin`, `summaryInterval`, `nSnapshots`.
+autocorrSummary <- function(sim) {
+  .clearFigDirs(sim, "autocorr")
+  files <- mod$annualSeriesFiles
+  ## an earlier run's table is not left beside the cleared figures
+  f_old <- file.path(.ppRoot(sim), "csv", "autocorrelation", "autocorrelation.csv")
+  unlink(f_old)
+  if (!length(files)) {
+    message("NRV_summary autocorrelation: no annualSeries.csv found; run with recordAnnualSeries = TRUE")
+    return(invisible(sim))
+  }
+  period <- .nrvPeriod(sim)
+  tables <- lapply(files, utils::read.csv)
+  ## a file that does not span the NRV years would cap the lags for every replicate
+  covers <- vapply(tables, function(d) min(d$time) <= period[1L] && max(d$time) >= period[2L], logical(1))
+  if (!all(covers)) {
+    warning("NRV_summary autocorrelation: the annual series of ",
+            paste0(basename(dirname(files[!covers])), " (years ",
+                   vapply(tables[!covers], function(d) paste(range(d$time), collapse = "-"), character(1)),
+                   ")", collapse = ", "),
+            " do not cover the NRV years ", period[1L], "-", period[2L], "; left out", call. = FALSE)
+    files <- files[covers]
+    tables <- tables[covers]
+  }
+  if (!length(tables)) {
+    message("NRV_summary autocorrelation: no annualSeries.csv covers the NRV years; nothing written")
+    return(invisible(sim))
+  }
+  nReps <- max(length(mod$allReps), length(files))
+  res <- nrvtools::autocorr_summary(tables, period, max_lag = P(sim)$autocorrMaxLag,
+                                    interval = P(sim)$summaryInterval,
+                                    snapshot_times = .nrvYears(P(sim)$summaryPeriod, P(sim)$summaryInterval,
+                                                               P(sim)$nrvWindow))
+  labelOf <- function(x) .annualSeriesLabel(x, sim$sppEquiv, P(sim)$sppEquivCol)
+  if (length(res$absent)) {
+    message("NRV_summary autocorrelation: left out, not in every replicate's annualSeries.csv: ",
+            paste(res$absent, collapse = ", "))
+  }
+  if (length(res$constant)) {
+    message("NRV_summary autocorrelation: no autocorrelation time (constant over the NRV years): ",
+            paste(res$constant, collapse = ", "))
+  }
+  if (length(res$tooFew)) {
+    message("NRV_summary autocorrelation: no autocorrelation time (fewer than 3 values in a replicate's NRV years): ",
+            paste(res$tooFew, collapse = ", "))
+  }
+  if (is.na(res$thin)) {
+    message("NRV_summary autocorrelation: no series has a defined autocorrelation time (constant series, or ",
+            "fewer than 3 NRV years); nothing written")
+    return(invisible(sim))
+  }
+  fit <- res$fit
+  fit$label <- labelOf(fit$series)
+  fit$recommendedThin <- res$thin
+  fit$summaryInterval <- res$interval
+  fit$nSnapshots <- res$nSnapshots
+  d <- reproducible::checkPath(file.path(.ppRoot(sim), "csv", "autocorrelation"), create = TRUE)
+  f_csv <- file.path(d, "autocorrelation.csv")
+  utils::write.csv(fit, f_csv, row.names = FALSE)
+
+  lim <- fit[fit$series == res$limiting, ]
+  message("NRV_summary autocorrelation: annual series of ", length(files), " of ", nReps, " replicates, ",
+          res$nYears, " NRV years.")
+  if (is.na(lim$r)) {
+    message("NRV_summary autocorrelation: the NRV (", res$nYears, " years) is too short to measure the correlation ",
+            "of snapshots ", res$interval, " years apart; no r or effective number of snapshots")
+  } else {
+    message("NRV_summary autocorrelation: snapshots ", res$interval, " years apart: correlation r = ",
+            signif(lim$r, 2), " (reps ", signif(lim$rMin, 2), "-", signif(lim$rMax, 2), "); about ",
+            signif(lim$effectiveSnapshots, 2), " effectively independent snapshots in the NRV (",
+            signif(lim$effectiveSnapshotsFinite, 2), " by the finite-sample formula)")
+  }
+  message("NRV_summary autocorrelation: autocorrelation time tau = ", signif(lim$tau, 3), " years (series: ",
+          lim$label, "); recommended thinning ", res$thin, " years")
+  if (res$nYears < 20 * res$thin) {
+    message("NRV_summary autocorrelation: the NRV has ", res$nYears, " years, fewer than 20 times the recommended ",
+            "thinning (", res$thin, "); a short series biases the estimates toward no correlation, so they tend ",
+            "to be low and the thinning may need to be longer")
+  }
+
+  f_png <- file.path(.ppFigDir(sim, "autocorrelation", "all"), "autocorrelation.png")
+  ggplot2::ggsave(f_png, .autocorrPanels(res, sim$sppEquiv, P(sim)$sppEquivCol), width = 12, height = 8)
+  invisible(registerOutputs(c(f_csv, f_png), sim))
 }
 
 .inputObjects <- function(sim) {

@@ -35,49 +35,34 @@ writeGrowthStandIn <- function(dir) {
 
 test_that("year 0 is saved before any time-0 dynamics, once", {
   mods <- writeGrowthStandIn(withr::local_tempdir())
-  out <- file.path(testPaths$outputPath, "currentCondition")
-  crs <- "EPSG:3400"
-  rtm <- terra::rast(nrows = 2, ncols = 2, xmin = 0, xmax = 500, ymin = 0, ymax = 500, crs = crs)
-  spp <- c("Pice_gla", "Popu_tre")
-  sppEquiv <- LandR::sppEquivalencies_CA
-  sppEquiv <- sppEquiv[sppEquiv[["LandR"]] %in% spp, ]
-  cohortData <- data.table::data.table(
-    pixelGroup = c(1L, 1L, 2L, 3L),
-    speciesCode = factor(c("Pice_gla", "Popu_tre", "Pice_gla", "Popu_tre"), levels = spp),
-    age = c(80L, 40L, 150L, 20L),
-    B = c(6000L, 2000L, 9000L, 1500L)
-  )
-  speciesLayers <- c(terra::rast(rtm, vals = c(60L, 60L, 100L, 0L)),
-                     terra::rast(rtm, vals = c(40L, 40L, 0L, 100L)))
-  names(speciesLayers) <- spp
+  for (format in c("qs2", "parquet")) {
+    out <- file.path(testPaths$outputPath, "currentCondition", format)
+    fx <- singleRunFixture()
+    cohortData <- fx$cohortData
 
-  sim <- SpaDES.core::simInitAndSpades(
-    times = list(start = 0, end = 10),
-    params = list(NRV_summary = list(
-      mode = "single", summaryPeriod = c(5L, 10L), summaryInterval = 5L,
-      timeSeriesTimes = c(0, 1), ## year 0 among them must not add a second, later year-0 save
-      ccStandAgeSource = "cohortData" ## no age layer here; see the stand-age tests below
-    )),
-    modules = c("NRV_summary", "growthStandIn"),
-    objects = list(
-      cohortData = data.table::copy(cohortData),
-      pixelGroupMap = terra::rast(rtm, vals = c(1L, 1L, 2L, 3L)),
-      speciesLayers = speciesLayers,
-      sppEquiv = sppEquiv,
-      sppColorVect = LandR::sppColors(sppEquiv, "LandR", newVals = "Mixed", palette = "Accent"),
-      studyAreaReporting = terra::as.polygons(terra::ext(rtm), crs = crs),
-      flammableMap = terra::rast(rtm, vals = 1L)
-    ),
-    paths = utils::modifyList(testPaths, list(modulePath = c(testPaths$modulePath, mods),
-                                              outputPath = out))
-  )
+    sim <- SpaDES.core::simInitAndSpades(
+      times = list(start = 0, end = 10),
+      params = list(NRV_summary = list(
+        mode = "single", summaryPeriod = c(5L, 10L), summaryInterval = 5L,
+        timeSeriesTimes = c(0, 1), ## year 0 among them must not add a second, later year-0 save
+        ccStandAgeSource = "cohortData", ## no age layer here; see the stand-age tests below
+        cohortDataFormat = format
+      )),
+      modules = c("NRV_summary", "growthStandIn"),
+      objects = fx$objects,
+      paths = utils::modifyList(testPaths, list(modulePath = c(testPaths$modulePath, mods),
+                                                outputPath = out))
+    )
 
-  ## the stand-in ran at time 0, after the year-0 save
-  expect_identical(sim$cohortData$B, cohortData$B * 2L)
-  saved <- qs2::qs_read(file.path(out, "cohortData_year00.qs2"))
-  expect_identical(saved$B, cohortData$B)
-  cmp <- as.data.frame(SpaDES.core::completed(sim))
-  expect_identical(sum(cmp$eventType == "save_single" & as.numeric(cmp$eventTime) == 0), 1L)
+    ## the stand-in ran at time 0, after the year-0 save
+    expect_identical(sim$cohortData$B, cohortData$B * 2L, info = format)
+    saved <- switch(format,
+                    qs2 = qs2::qs_read(file.path(out, "cohortData_year00.qs2")),
+                    parquet = nrvtools::read_cohort_data(file.path(out, "cohortData", "year=0000", "part-0.parquet")))
+    expect_identical(saved$B, cohortData$B, info = format)
+    cmp <- as.data.frame(SpaDES.core::completed(sim))
+    expect_identical(sum(cmp$eventType == "save_single" & as.numeric(cmp$eventTime) == 0), 1L, info = format)
+  }
 })
 
 ## The current condition's stand ages. The cohorts' ages are binned when they are made, so through

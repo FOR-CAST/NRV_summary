@@ -98,5 +98,65 @@ test_that("the rebuilt maps keep the <rep>/vegTypeMap_year<YYYY>.tif path nrvtoo
 
   ## without the saved cohorts there is nothing to rebuild from
   file.remove(file.path(repDir, "cohortData_year0700.qs2"))
-  expect_error(buildMaps(vtm, outRoot, grp, colors, 0.75, 2L), "missing:.*cohortData_year0700.qs2")
+  ## the message names both formats' paths
+  expect_error(buildMaps(vtm, outRoot, grp, colors, 0.75, 2L),
+               "missing:\n.*/rep01/cohortData_year0700.qs2 or .*/rep01/cohortData/year=0700/part-0.parquet$")
+})
+
+test_that("reporting-group maps are identical from .qs2 and parquet cohorts", {
+  withr::local_package("data.table")
+  grp <- LandWebUtils::sppEquiv_groups(reportingEquiv(), "LandWeb", "LandWebReport")
+  colors <- moduleFn(".reportingColors", new.env())(NULL, grp)
+  buildMaps <- moduleFn(".buildReportingVegTypeMaps", new.env())
+
+  ## rep01 saved its cohorts as .qs2, rep02 as parquet (runs from 2.0.0.9046); the species as the simulation has them
+  root <- file.path(testPaths$outputPath, "reportingMapsFormats")
+  cd <- reportingCohorts()
+  cd$speciesCode <- factor(cd$speciesCode)
+  reps <- file.path(root, "mainSim", c("rep01", "rep02"))
+  for (d in reps) {
+    dir.create(d, recursive = TRUE, showWarnings = FALSE)
+    terra::writeRaster(reportingPGM(), file.path(d, "pixelGroupMap_year0700.tif"), datatype = "INT4U", overwrite = TRUE)
+  }
+  qs2::qs_save(cd, file.path(reps[1], "cohortData_year0700.qs2"))
+  nrvtools::write_cohort_parquet(cd, file.path(reps[2], "cohortData"), 700)
+  outRoot <- file.path(root, "postprocess", "_reportingMaps")
+  out <- buildMaps(file.path(reps, "vegTypeMap_year0700.tif"), outRoot, grp, colors, 0.75, 2L)
+
+  a <- terra::rast(out[1])
+  b <- terra::rast(out[2])
+  expect_identical(terra::values(b), terra::values(a))
+  expect_identical(terra::levels(b), terra::levels(a))
+  expect_identical(terra::coltab(b), terra::coltab(a))
+  expect_identical(cellLabels(b), c("Bl_Spruce", "Decid", "Pine", "Mixed"))
+
+  ## with both formats in a folder, the parquet cohorts are read: these .qs2 ones would make every pixel Decid
+  decoy <- data.table::copy(cd)
+  decoy$speciesCode <- factor(rep("Popu_tre", nrow(decoy)), levels = levels(cd$speciesCode))
+  qs2::qs_save(decoy, file.path(reps[2], "cohortData_year0700.qs2"))
+  out2 <- buildMaps(file.path(reps[2], "vegTypeMap_year0700.tif"), outRoot, grp, colors, 0.75, 2L)
+  expect_identical(cellLabels(terra::rast(out2)), c("Bl_Spruce", "Decid", "Pine", "Mixed"))
+  ## unless the cohort files InitMulti() found are given and the part file is not one of them (an outputsDF that
+  ## lists the .qs2): the .qs2 is read
+  out3 <- buildMaps(file.path(reps[2], "vegTypeMap_year0700.tif"), outRoot, grp, colors, 0.75, 2L,
+                    cohortFiles = file.path(reps[2], "cohortData_year0700.qs2"))
+  expect_identical(cellLabels(terra::rast(out3)), rep("Decid", 4L))
+})
+
+test_that("reporting-group maps read a .qs2 cohort file padded differently from the vegTypeMap's year", {
+  withr::local_package("data.table")
+  grp <- LandWebUtils::sppEquiv_groups(reportingEquiv(), "LandWeb", "LandWebReport")
+  colors <- moduleFn(".reportingColors", new.env())(NULL, grp)
+  buildMaps <- moduleFn(".buildReportingVegTypeMaps", new.env())
+  root <- file.path(testPaths$outputPath, "reportingMapsPadded")
+  cd <- reportingCohorts()
+  cd$speciesCode <- factor(cd$speciesCode)
+  d <- file.path(root, "mainSim", "rep01")
+  dir.create(d, recursive = TRUE, showWarnings = FALSE)
+  terra::writeRaster(reportingPGM(), file.path(d, "pixelGroupMap_year0700.tif"), datatype = "INT4U", overwrite = TRUE)
+  padded <- file.path(d, "cohortData_year700.qs2")
+  qs2::qs_save(cd, padded)
+  out <- buildMaps(file.path(d, "vegTypeMap_year0700.tif"), file.path(root, "postprocess", "_reportingMaps"), grp,
+                   colors, 0.75, 2L, cohortFiles = padded)
+  expect_identical(cellLabels(terra::rast(out)), c("Bl_Spruce", "Decid", "Pine", "Mixed"))
 })

@@ -23,6 +23,7 @@ test_that("inputs are the expected names and classes", {
       "cohortData"           = "data.table",
       "flammableMap"         = "SpatRaster",
       "LandTypeCC_reporting" = "SpatRaster",
+      "outputsDF"            = "data.frame",
       "pixelGroupMap"        = "SpatRaster",
       "reportingPolygons"    = "list",
       "speciesLayers"        = "SpatRaster",
@@ -50,11 +51,38 @@ test_that("parameters are the expected names", {
     sort(md$parameters$paramName),
     c(
       ".plotInitialTime", ".plotInterval", ".plots", ".seed", ".studyAreaName",
-      ".useCache", "ageClassCutOffs", "ageClasses", "ageClassMaxAge", "ccStandAgeSource", "mixedType",
-      "mode", "patchDirections", "plotWorkers", "postprocessEvents", "reps",
-      "reuseAggregates", "sieveThresh", "simTimes", "sppEquivCol", "sppEquivColReporting", "summaryInterval",
+      ".useCache", "ageClassCutOffs", "ageClasses", "ageClassMaxAge", "autocorrMaxLag", "ccStandAgeSource",
+      "cohortDataFormat", "envelopeStyle", "mixedType",
+      "mode", "nrvWindow", "patchDirections", "plotWorkers", "postprocessEvents", "recordAnnualSeries", "reps",
+      "reuseAggregates", "sieveThresh", "simTimes", "sppEquivCol", "sppEquivColReporting", "stabilityAlpha",
+      "stabilityMinChange", "stabilityWindow", "summaryInterval",
       "summaryPeriod", "timeSeriesTimes", "vegLeadingProportion"
 )
   )
 })
 
+test_that("every namespace the module calls is in reqdPkgs", {
+  src <- file.path(moduleRoot, paste0(moduleName, ".R"))
+  skip_if_not(file.exists(src), "module source not found")
+  md <- SpaDES.core::moduleMetadata(module = moduleName, path = modulePath)
+  declared <- unlist(md$reqdPkgs)
+  declared <- sub("^.*/", "", declared) ## owner/
+  declared <- sub("@.*$", "", declared) ## @ref
+  declared <- trimws(sub("\\(.*$", "", declared)) ## (>= x)
+
+  pd <- utils::getParseData(parse(src, keep.source = TRUE))
+  called <- unique(pd$text[pd$token == "SYMBOL_PACKAGE"])
+  called <- setdiff(
+    called,
+    c("base", "stats", "utils", "tools", "methods", "grDevices", "graphics")
+  )
+  expect_identical(sort(setdiff(called, declared)), character(0))
+})
+
+test_that("reqdPkgs asks for nrvtools 0.5.2, whose patchStats() masks the vegetation-type map by the flammable map", {
+  md <- SpaDES.core::moduleMetadata(module = moduleName, path = modulePath)
+  spec <- grep("/nrvtools\\b", unlist(md$reqdPkgs), value = TRUE)
+  expect_length(spec, 1L)
+  floor <- sub("^.*\\(>= *([0-9.-]+)\\).*$", "\\1", spec)
+  expect_true(package_version(floor) >= "0.5.2", label = spec)
+})
