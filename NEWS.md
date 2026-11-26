@@ -2,6 +2,8 @@ Known issues: <https://github.com/FOR-CAST/NRV_summary/issues>
 
 # NRV_summary (development version)
 
+* **The `autocorr` event takes its table from `nrvtools::autocorr_summary()`, which adds `effectiveSnapshotsFinite` (`2.0.0.9102`).** The module's own autocorrelation helpers (`.acf()`, `.autocorrTime()`, `.firstLagBelow()`, `.essAR1()`, `.autocorrSummary()`) are removed; nrvtools has the same code, renamed, and its tests. The event passes the summary times in the NRV years as the snapshots. `csv/autocorrelation/autocorrelation.csv` keeps its columns and values and gains `effectiveSnapshotsFinite`, the effective number of independent snapshots by the finite-sample formula `n / (1 + 2 * sum((1 - k / n) * r^k))` per replicate; the large-sample `effectiveSnapshots` is too low for a few snapshots per replicate (below 1 per replicate once `r` is above 0.75 at 7 snapshots). The message on the effective snapshots gives both numbers; the figure is unchanged.
+
 * **The `bc` event runs with its default parameters again: `sieveThresh` defaults to `NA`, no sieving (`2.0.0.9102`).** The default of 1 merged nothing, and terra 1.9-50 stops on a threshold below 2 ("a threshold < 2 is not meaningful"), so the event stopped at its sieve step. `NA` or a value below 2 now skips sieving, and the seral maps keep their unsuffixed names; 2 or more sieves them as before, into `-sieve<N>` maps.
 
 * **nrvtools 0.5.2 or later is required (`2.0.0.9102`).** Its `patchStats()`, which the `pm` event calls, masks the vegetation-type map by the flammable map, as it did the stand-age map. Non-flammable pixels have no cohorts and so no vegetation type, so in practice the `pm` results do not change.

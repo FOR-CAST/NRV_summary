@@ -393,12 +393,14 @@ The `autocorr` event estimates how far apart the summary snapshots must be to be
 It reads the `annualSeries.csv` files found in the replicate folders; a file left by an earlier run with `recordAnnualSeries = TRUE` is read if the folder was not cleared.
 A replicate whose file does not cover the NRV years is left out with a warning, and a series missing from a replicate's file is left out with a message.
 
-`csv/autocorrelation/autocorrelation.csv` has one row per series:
+`csv/autocorrelation/autocorrelation.csv` is computed by `nrvtools::autocorr_summary()` over the NRV years, with the summary times in them as the snapshots.
+It has one row per series:
 
 - `phi`, the pooled lag-1 autocorrelation over the NRV years (cut to between 0 and 0.999), and `tau`, the autocorrelation time it implies, `(1 + phi) / (1 - phi)`;
 - `ar1Misfit`, the largest difference between the pooled autocorrelation at lags 1 to 50 and the exponential decay `phi^lag` (near 0 when the decay is exponential);
 - `r`, `rMin`, `rMax`: the correlation at lag `summaryInterval`, pooled and the lowest and highest of the replicates' own;
-- `effectiveSnapshots`, the effective number of independent snapshots in the NRV years of all replicates;
+- `effectiveSnapshots`, the effective number of independent snapshots in the NRV years of all replicates, by the large-sample formula;
+- `effectiveSnapshotsFinite`, the same by the finite-sample formula, which holds for a few snapshots per replicate (both in [Is the run long enough?](#is-the-run-long-enough));
 - `tauGeyer`, Geyer's estimate of the autocorrelation time, kept for comparison;
 - `lagBelow0.1`, the first lag at which the pooled autocorrelation is below 0.1;
 - `label`, `recommendedThin` (the largest `tau`, rounded up), `summaryInterval` and `nSnapshots` (the summary times in the NRV years over all replicates).
@@ -503,7 +505,10 @@ A replicate's own mean would pull the sample autocorrelation toward 0, the more 
 The autocorrelation time is the integrated autocorrelation time [@Sokal:1997; @Geyer:1992], taken here as 1 plus twice the sum of the autocorrelations at all lags; that is twice Sokal's `tau_int`, which he defines as 1/2 plus the sum.
 The module computes it for an exponential decay with the pooled lag-1 autocorrelation `phi` as its rate (a first-order autoregressive series), which gives `tau = (1 + phi) / (1 - phi)`; no curve is fitted, and `ar1Misfit` says how far the measured autocorrelation departs from that decay.
 Geyer's initial monotone sequence estimate [@Geyer:1992], which sums the measured autocorrelations in pairs, made non-increasing, up to the first pair sum that is not positive, is given as `tauGeyer` for comparison; it is noisy for short series.
-The effective number of independent snapshots is the number of snapshots times `(1 - r) / (1 + r)`, where `r` is the correlation of snapshots `summaryInterval` years apart [@Bayley:1946; @Thiebaux:1984].
+The effective number of independent snapshots (`effectiveSnapshots`) is the number of snapshots times `(1 - r) / (1 + r)`, where `r` is the correlation of snapshots `summaryInterval` years apart [@Bayley:1946; @Thiebaux:1984].
+That large-sample formula is too low when a replicate has few snapshots against the autocorrelation time: for `n` snapshots per replicate it gives fewer than 1 per replicate once `r` is above `(n - 1) / (n + 1)`, which is 0.75 at 7 snapshots per replicate (LandWeb's summary times, every 50 years from 700 to 1000).
+`effectiveSnapshotsFinite` gives, per replicate, `n / (1 + 2 * sum((1 - k / n) * r^k))`, the sum over lags `k = 1, ..., n - 1`, added up over the replicates.
+It is exact for the mean of `n` consecutive values of a stationary AR(1) series, and lies between 1 and `n` per replicate.
 The recommended thinning is the largest `tau`, rounded up; set `summaryInterval` at or above it.
 If the replicates' means differ, the common mean counts that difference as autocorrelation, which errs toward more thinning.
 The estimates are lower bounds: a short series biases the sample autocorrelation toward 0.
@@ -727,7 +732,7 @@ Each version was checked on LandWeb's outputs against the one before; `NEWS.md` 
 - **2.0.0.9047** (#16): a cohort file is paired with its pixel-group map by folder and year however its year is padded; on the `cc` figures a unit named "NA" is kept apart from a missing unit.
 - **2.0.0.9100** (#17): the version skips to 9100 to stay clear of the PredictiveEcology fork's numbers; SpaDES.core 3.2.1.9077 is required; replicate folders are named by id inside the module; with `pm` or `bc` in the run, `init` stops if the first replicate's flammable map is not among the files found.
 - **2.0.0.9101**: this manual documents every event, parameter and output, and cites its methods.
-- **2.0.0.9102**: mode 'multi' finds each file by its year however padded, so runs that end before year 1000 or after year 9999 are read; the `bc` current condition leaves out urban land; nrvtools 0.5.2 is required, whose `patchStats()` (the `pm` event) masks the vegetation-type map by the flammable map; `sieveThresh` defaults to `NA`, no sieving.
+- **2.0.0.9102**: mode 'multi' finds each file by its year however padded, so runs that end before year 1000 or after year 9999 are read; the `bc` current condition leaves out urban land; the `autocorr` event's table comes from `nrvtools::autocorr_summary()` and gains `effectiveSnapshotsFinite`; nrvtools 0.5.2 is required, whose `patchStats()` (the `pm` event) masks the vegetation-type map by the flammable map; `sieveThresh` defaults to `NA`, no sieving.
 
 ## Getting help
 
